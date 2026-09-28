@@ -1,8 +1,0 @@
-{
-  "appId": "com.fadiramzy.anbabishoy",
-  "appName": "أنبا بيشوي",
-  "webDir": "www",
-  "android": {
-    "allowMixedContent": false
-  }
-}
