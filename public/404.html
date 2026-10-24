@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <title>نظام إدارة ضباط المخاطر</title>
+    <!-- التطبيق يستخدم توجيهًا بالـ hash، وهذا الملف احتياطي فقط لمسارات غير معروفة -->
+    <script>
+      (function () {
+        var segments = window.location.pathname.split('/');
+        var index = segments.lastIndexOf('404.html');
+        var base = segments.slice(0, index > -1 ? index : segments.length - 1).join('/');
+        window.location.replace((base || '') + '/' + '#/');
+      })();
+    </script>
+  </head>
+  <body>
+    <p>جارٍ إعادة التوجيه إلى التطبيق…</p>
+  </body>
+</html>
