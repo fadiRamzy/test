@@ -248,23 +248,26 @@ export function Modal({
   size?: 'sm' | 'md' | 'lg';
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // نحتفظ بمرجع محدَّث لدالة الإغلاق حتى لا يعاد تركيز أول حقل عند كل كتابة
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
     };
     document.addEventListener('keydown', onKey);
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    // تركيز أول حقل
+    // تركيز أول حقل مرة واحدة عند الفتح
     const first = ref.current?.querySelector<HTMLElement>('input, select, textarea, button');
     first?.focus();
     return () => {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = previous;
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

@@ -24,7 +24,7 @@ const NAV: NavItem[] = [
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { settings, demoMode } = useApp();
+  const { settings } = useApp();
   const route = useRoute();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
@@ -65,7 +65,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </span>
           <div>
             <strong>إدارة ضباط المخاطر</strong>
-            <span>{settings.departmentName}</span>
+            <span>{settings.teamLeaderName || 'قائد الفريق'}</span>
           </div>
         </div>
         <nav className="sidebar__nav">
@@ -108,9 +108,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <div className="topbar__end">
-            {demoMode ? (
-              <Badge tone="warning">وضع البيانات التجريبية</Badge>
-            ) : null}
             {!online ? (
               <Badge tone="neutral">
                 <Icon name="info" size={12} /> غير متصل — التطبيق يعمل محليًا

@@ -1,22 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ensureDefaults,
-  isIndexedDbAvailable,
-  readMeta,
-  readSettings,
-  useDatabase,
-  writeMeta,
-  writeSettings,
-} from '../db/database';
-import {
-  listBranches,
-  listEmployees,
-  listEvaluations,
-  listMinutes,
-  listObservations,
-  listVisits,
-} from '../db/repo';
-import { DEFAULT_SETTINGS, type AppSettings, type Branch, type DisbursementMinute, type Employee, type Evaluation, type FieldVisit, type Observation } from '../db/schema';
+import { ensureSettings, isIndexedDbAvailable, readSettings, writeSettings } from '../db/database';
+import { listEmployees, listEvaluations, listMinutes, listObservations, listVisits } from '../db/repo';
+import { DEFAULT_SETTINGS, type AppSettings, type Employee, type Evaluation, type Minute, type Observation, type Visit } from '../db/schema';
 
 export type ToastKind = 'success' | 'error' | 'info' | 'warning';
 export interface Toast {
@@ -25,29 +10,27 @@ export interface Toast {
   message: string;
 }
 
-export interface RawData {
+export interface DataSet {
   employees: Employee[];
-  branches: Branch[];
-  minutes: DisbursementMinute[];
-  visits: FieldVisit[];
+  minutes: Minute[];
+  visits: Visit[];
   observations: Observation[];
   evaluations: Evaluation[];
 }
 
-const EMPTY: RawData = { employees: [], branches: [], minutes: [], visits: [], observations: [], evaluations: [] };
+const EMPTY: DataSet = { employees: [], minutes: [], visits: [], observations: [], evaluations: [] };
 
 interface AppContextValue {
   ready: boolean;
   fatalError: string | null;
   settings: AppSettings;
-  raw: RawData;
-  demoMode: boolean;
-  setDemoMode: (value: boolean) => void;
+  data: DataSet;
   refresh: () => Promise<void>;
   saveSettings: (patch: Partial<AppSettings>) => Promise<void>;
-  toasts: Toast[];
   notify: (message: string, kind?: ToastKind) => void;
+  toasts: Toast[];
   dismissToast: (id: number) => void;
+  /** ينفّذ عملية ثم يحدّث البيانات ويعرض رسالة نجاح أو خطأ */
   runAction: <T>(action: () => Promise<T>, successMessage?: string) => Promise<T | undefined>;
 }
 
@@ -57,58 +40,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [raw, setRaw] = useState<RawData>(EMPTY);
-  const [demoMode, setDemoModeState] = useState(false);
+  const [data, setData] = useState<DataSet>(EMPTY);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
-  const demoRef = useRef(false);
 
   const notify = useCallback((message: string, kind: ToastKind = 'info') => {
     toastId.current += 1;
     const id = toastId.current;
-    setToasts((prev) => [...prev, { id, kind, message }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3800);
+    // نُبقي ثلاثة تنبيهات كحد أقصى حتى لا تحجب المحتوى
+    setToasts((prev) => [...prev.slice(-2), { id, kind, message }]);
+    setTimeout(() => setToasts((prev) => prev.filter((toast) => toast.id !== id)), 4000);
   }, []);
 
-  const dismissToast = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
+  const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((toast) => toast.id !== id)), []);
 
-  const loadAll = useCallback(async (includeDemo: boolean) => {
-    const options = { includeDeleted: true, includeDemo };
-    const [employees, branches, minutes, visits, observations, evaluations, loadedSettings] = await Promise.all([
-      listEmployees(options),
-      listBranches(options),
-      listMinutes(options),
-      listVisits(options),
-      listObservations(options),
-      listEvaluations(options),
+  const load = useCallback(async () => {
+    const [employees, minutes, visits, observations, evaluations, loadedSettings] = await Promise.all([
+      listEmployees(true),
+      listMinutes(),
+      listVisits(),
+      listObservations(),
+      listEvaluations(),
       readSettings(),
     ]);
-    setRaw({ employees, branches, minutes, visits, observations, evaluations });
+    setData({ employees, minutes, visits, observations, evaluations });
     setSettings(loadedSettings);
   }, []);
-
-  const refresh = useCallback(async () => {
-    await loadAll(demoRef.current);
-  }, [loadAll]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         if (!isIndexedDbAvailable()) {
-          setFatalError(
-            'التخزين المحلي (IndexedDB) غير متاح في هذا المتصفح. جرّب متصفحًا حديثًا أو اخرج من وضع التصفح الخاص.',
-          );
+          setFatalError('التخزين المحلي (IndexedDB) غير متاح في هذا المتصفح. استخدم متصفحًا حديثًا بدون وضع التصفح الخاص.');
           setReady(true);
           return;
         }
-        await ensureDefaults();
-        const storedDemo = await readMeta<boolean>('demoMode');
-        demoRef.current = Boolean(storedDemo);
-        if (!cancelled) setDemoModeState(Boolean(storedDemo));
-        await loadAll(Boolean(storedDemo));
+        await ensureSettings();
+        await load();
         if (!cancelled) setReady(true);
       } catch (error) {
         if (!cancelled) {
@@ -120,17 +89,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [loadAll]);
+  }, [load]);
 
-  const setDemoMode = useCallback(
-    (value: boolean) => {
-      demoRef.current = value;
-      setDemoModeState(value);
-      void writeMeta('demoMode', value).then(() => loadAll(value));
-      notify(value ? 'تم تفعيل وضع البيانات التجريبية — السجلات الفعلية مخفية الآن.' : 'تم إيقاف وضع البيانات التجريبية.', 'info');
-    },
-    [loadAll, notify],
-  );
+  const refresh = useCallback(async () => {
+    await load();
+  }, [load]);
 
   const saveSettingsAction = useCallback(
     async (patch: Partial<AppSettings>) => {
@@ -145,7 +108,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     async <T,>(action: () => Promise<T>, successMessage?: string): Promise<T | undefined> => {
       try {
         const result = await action();
-        await refresh();
+        await load();
         if (successMessage) notify(successMessage, 'success');
         return result;
       } catch (error) {
@@ -159,7 +122,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
     },
-    [refresh, notify],
+    [load, notify],
   );
 
   const value = useMemo<AppContextValue>(
@@ -167,17 +130,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ready,
       fatalError,
       settings,
-      raw,
-      demoMode,
-      setDemoMode,
+      data,
       refresh,
       saveSettings: saveSettingsAction,
-      toasts,
       notify,
+      toasts,
       dismissToast,
       runAction,
     }),
-    [ready, fatalError, settings, raw, demoMode, setDemoMode, refresh, saveSettingsAction, toasts, notify, dismissToast, runAction],
+    [ready, fatalError, settings, data, refresh, saveSettingsAction, notify, toasts, dismissToast, runAction],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
@@ -187,34 +148,4 @@ export function useApp(): AppContextValue {
   const ctx = useContext(AppContext);
   if (!ctx) throw new Error('useApp must be used inside AppProvider');
   return ctx;
-}
-
-/** تصفية السجلات حسب وضع العرض: فعلي (افتراضي) أو تجريبي */
-export function useVisibleData() {
-  const { raw, demoMode } = useApp();
-  return useMemo(() => {
-    const pick = <T extends { deletedAt?: string | null; isDemo?: boolean }>(rows: T[]) =>
-      rows.filter((r) => !r.deletedAt && (demoMode ? r.isDemo === true : !r.isDemo));
-    const archived = <T extends { deletedAt?: string | null; isDemo?: boolean }>(rows: T[]) =>
-      rows.filter((r) => r.deletedAt && (demoMode ? r.isDemo === true : !r.isDemo));
-    return {
-      employees: pick(raw.employees),
-      archivedEmployees: archived(raw.employees),
-      branches: pick(raw.branches),
-      archivedBranches: archived(raw.branches),
-      minutes: pick(raw.minutes),
-      archivedMinutes: archived(raw.minutes),
-      visits: pick(raw.visits),
-      archivedVisits: archived(raw.visits),
-      observations: pick(raw.observations),
-      archivedObservations: archived(raw.observations),
-      evaluations: pick(raw.evaluations),
-      archivedEvaluations: archived(raw.evaluations),
-    };
-  }, [raw, demoMode]);
-}
-
-/** للاختبارات: إعادة ضبط قاعدة البيانات على اسم مخصص */
-export async function prepareDatabaseForTest(name: string): Promise<void> {
-  await useDatabase(name);
 }

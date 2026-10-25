@@ -1,201 +1,236 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useApp, useVisibleData } from '../state/store';
-import { navigate, useRoute } from '../state/router';
-import { restoreEmployee, setEmployeeStatus, softDeleteEmployee } from '../db/repo';
+import { useMemo, useState } from 'react';
+import { useApp } from '../state/store';
+import { navigate } from '../state/router';
+import {
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  Field,
+  IconButton,
+  Input,
+  Modal,
+  PageHeader,
+  SearchInput,
+  Select,
+  Table,
+  TableWrap,
+  Textarea,
+  Toolbar,
+} from '../components/ui';
+import { ValidationError, deleteEmployee, nextSerial, saveEmployee, setEmployeeArchived } from '../db/repo';
 import type { Employee } from '../db/schema';
-import { countNoun, fmtDate, fmtNumber } from '../lib/format';
-import { computeEmployeeStats } from '../lib/analytics';
-import { Button, Card, ConfirmDialog, EmptyState, IconButton, PageHeader, SearchInput, Select, Table, TableWrap } from '../components/ui';
-import { EmployeeStatusBadge, useLookups } from '../components/domain';
-import { EmployeeForm } from '../components/forms/EmployeeForm';
+import { fmtDate, fmtNumber, todayInputValue, fromDateInputValue, toDateInputValue } from '../lib/format';
 
-type StatusFilter = 'all' | 'active' | 'inactive' | 'archived';
+interface Draft {
+  id?: string;
+  serial: string;
+  sector: string;
+  governorate: string;
+  name: string;
+  code: string;
+  jobTitle: string;
+  joiningDate: string;
+  visitCount: string;
+  notes: string;
+  archived: boolean;
+}
+
+const emptyDraft = (serial: number): Draft => ({
+  serial: String(serial),
+  sector: '',
+  governorate: '',
+  name: '',
+  code: '',
+  jobTitle: 'ضابط مخاطر',
+  joiningDate: todayInputValue(),
+  visitCount: '',
+  notes: '',
+  archived: false,
+});
 
 export function EmployeesPage() {
-  const { settings, runAction } = useApp();
-  const data = useVisibleData();
-  const lookups = useLookups();
-  const route = useRoute();
+  const { data, settings, runAction, notify } = useApp();
+  const [query, setQuery] = useState('');
+  const [sector, setSector] = useState('all');
+  const [governorate, setGovernorate] = useState('all');
+  const [showArchived, setShowArchived] = useState(false);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<Employee | null>(null);
 
-  const [search, setSearch] = useState(route.query.get('q') ?? '');
-  const [branch, setBranch] = useState(route.query.get('branch') ?? 'all');
-  const [status, setStatus] = useState<StatusFilter>((route.query.get('status') as StatusFilter) ?? 'all');
-  const [editing, setEditing] = useState<Employee | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
-  const [archiveTarget, setArchiveTarget] = useState<Employee | null>(null);
+  const rows = useMemo(() => {
+    const text = query.trim().toLowerCase();
+    return data.employees
+      .filter((row) => (showArchived ? true : !row.archived))
+      .filter((row) => (sector === 'all' ? true : row.sector === sector))
+      .filter((row) => (governorate === 'all' ? true : row.governorate === governorate))
+      .filter((row) =>
+        !text
+          ? true
+          : [row.name, row.code, row.sector, row.governorate, row.jobTitle]
+              .join(' ')
+              .toLowerCase()
+              .includes(text),
+      )
+      .sort((a, b) => a.serial - b.serial);
+  }, [data.employees, query, sector, governorate, showArchived]);
 
-  useEffect(() => {
-    if (route.query.get('new') === '1') {
-      setEditing(null);
-      setFormOpen(true);
+  const sectors = useMemo(
+    () => Array.from(new Set([...settings.sectors, ...data.employees.map((row) => row.sector)].filter(Boolean))).sort(),
+    [settings.sectors, data.employees],
+  );
+  const governorates = useMemo(
+    () =>
+      Array.from(new Set([...settings.governorates, ...data.employees.map((row) => row.governorate)].filter(Boolean))).sort(),
+    [settings.governorates, data.employees],
+  );
+
+  const openNew = async () => {
+    setErrors({});
+    setDraft(emptyDraft(await nextSerial()));
+  };
+
+  const openEdit = (employee: Employee) => {
+    setErrors({});
+    setDraft({
+      id: employee.id,
+      serial: String(employee.serial),
+      sector: employee.sector,
+      governorate: employee.governorate,
+      name: employee.name,
+      code: employee.code,
+      jobTitle: employee.jobTitle,
+      joiningDate: toDateInputValue(employee.joiningDate),
+      visitCount: employee.visitCount === null ? '' : String(employee.visitCount),
+      notes: employee.notes,
+      archived: Boolean(employee.archived),
+    });
+  };
+
+  const submit = async () => {
+    if (!draft) return;
+    setSaving(true);
+    setErrors({});
+    try {
+      await runAction(
+        () =>
+          saveEmployee({
+            id: draft.id,
+            serial: Number(draft.serial),
+            sector: draft.sector,
+            governorate: draft.governorate,
+            name: draft.name,
+            code: draft.code,
+            jobTitle: draft.jobTitle,
+            joiningDate: fromDateInputValue(draft.joiningDate) ?? '',
+            visitCount: draft.visitCount === '' ? null : Number(draft.visitCount),
+            notes: draft.notes,
+            archived: draft.archived,
+          }),
+        draft.id ? 'تم تحديث بيانات الموظف.' : 'تمت إضافة الموظف.',
+      );
+      setDraft(null);
+    } catch (error) {
+      if (error instanceof ValidationError) setErrors(error.errors);
+    } finally {
+      setSaving(false);
     }
-  }, [route.query]);
-
-  const statsByEmployee = useMemo(() => {
-    const map = new Map<string, ReturnType<typeof computeEmployeeStats>>();
-    for (const employee of data.employees) map.set(employee.id, computeEmployeeStats(employee, data, settings));
-    return map;
-  }, [data, settings]);
-
-  const list = useMemo(() => {
-    const source = status === 'archived' ? data.archivedEmployees : data.employees;
-    return source
-      .filter((employee) => (status === 'all' || status === 'archived' ? true : employee.status === status))
-      .filter((employee) => (branch === 'all' ? true : employee.branchId === branch))
-      .filter((employee) => {
-        const needle = search.trim().toLowerCase();
-        if (!needle) return true;
-        return [employee.fullName, employee.employeeCode, employee.jobTitle, employee.governorate, lookups.branchName(employee.branchId)]
-          .join(' ')
-          .toLowerCase()
-          .includes(needle);
-      })
-      .sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar'));
-  }, [data, status, branch, search, lookups]);
-
-  const openNew = () => {
-    setEditing(null);
-    setFormOpen(true);
-    navigate('/employees?new=1', { replace: true });
   };
 
-  const closeForm = () => {
-    setFormOpen(false);
-    setEditing(null);
-    navigate('/employees', { replace: true });
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    try {
+      await runAction(() => deleteEmployee(deleting.id), 'تم حذف الموظف نهائيًا.');
+      setDeleting(null);
+    } catch {
+      setDeleting(null);
+    }
   };
+
+  const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
 
   return (
     <>
       <PageHeader
         title="الموظفون"
-        description="ملفات ضباط المخاطر، الرقم الوظيفي، الفرع، الحالة الوظيفية، والسجلات التاريخية."
+        description="إدارة ضباط المخاطر المسؤولين عن دقائق الصرف والزيارات والتقييمات."
         actions={
-          <>
-            <Button icon="reports" onClick={() => navigate('/reports')}>
-              تقارير الموظفين
-            </Button>
-            <Button variant="primary" icon="plus" onClick={openNew}>
-              موظف جديد
-            </Button>
-          </>
+          <Button variant="primary" icon="plus" onClick={openNew}>
+            إضافة موظف
+          </Button>
         }
       />
 
-      <div className="filter-bar">
-        <SearchInput value={search} onChange={setSearch} placeholder="بحث بالاسم أو الرقم الوظيفي…" />
-        <span className="filter-bar__label">الفرع</span>
-        <Select value={branch} onChange={(e) => setBranch(e.target.value)}>
-          <option value="all">كل الفروع</option>
-          {lookups.branches.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </Select>
-        <span className="filter-bar__label">الحالة</span>
-        <Select value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-          <option value="all">الكل</option>
-          <option value="active">على رأس العمل</option>
-          <option value="inactive">غير نشط</option>
-          <option value="archived">المؤرشفون</option>
-        </Select>
-        <span className="filter-count">
-          {countNoun(list.length, 'employee')} — من إجمالي {fmtNumber(data.employees.length)}
-        </span>
-      </div>
-
       <Card padded={false}>
-        {list.length === 0 ? (
-          status === 'archived' ? (
-            <EmptyState icon="archive" title="لا يوجد موظفون مؤرشفون" description="الموظفون المحذوفون (حذفًا ناعمًا) يظهرون هنا ويمكن استعادتهم." />
-          ) : (
-            <EmptyState
-              icon="employees"
-              title="لا يوجد موظفون مطابقون"
-              description="أضف موظفًا جديدًا أو عدّل معايير البحث."
-              action={
-                <Button variant="primary" icon="plus" onClick={openNew}>
-                  إضافة موظف
-                </Button>
-              }
-            />
-          )
-        ) : (
+        <Toolbar>
+          <SearchInput value={query} onChange={setQuery} placeholder="بحث بالاسم أو الكود…" />
+          <Select value={sector} onChange={(e) => setSector(e.target.value)} aria-label="تصفية بالقطاع">
+            <option value="all">كل القطاعات</option>
+            {sectors.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </Select>
+          <Select value={governorate} onChange={(e) => setGovernorate(e.target.value)} aria-label="تصفية بالمحافظة">
+            <option value="all">كل المحافظات</option>
+            {governorates.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </Select>
+          <Checkbox label="إظهار المؤرشفين" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+          <span className="toolbar__count">
+            {rows.length} من {data.employees.length}
+          </span>
+        </Toolbar>
+
+        {rows.length ? (
           <TableWrap>
             <Table>
               <thead>
                 <tr>
-                  <th>الموظف</th>
+                  <th>م</th>
+                  <th>الاسم</th>
+                  <th>الكود</th>
                   <th>المسمى الوظيفي</th>
-                  <th>الفرع</th>
+                  <th>القطاع</th>
                   <th>المحافظة</th>
-                  <th>تاريخ التعيين</th>
-                  <th>الحالة</th>
+                  <th>تاريخ الالتحاق</th>
+                  <th>عدد الزيارات</th>
                   <th>دقائق مفتوحة</th>
-                  <th>ملاحظات مفتوحة</th>
-                  <th>آخر تقييم</th>
-                  <th />
+                  <th>إجراءات</th>
                 </tr>
               </thead>
               <tbody>
-                {list.map((employee) => {
-                  const stats = statsByEmployee.get(employee.id);
+                {rows.map((employee) => {
+                  const openMinutes = data.minutes.filter(
+                    (minute) => minute.employeeId === employee.id && minute.status === 'open',
+                  ).length;
                   return (
-                    <tr key={employee.id}>
+                    <tr key={employee.id} className={employee.archived ? 'row--muted' : undefined}>
+                      <td className="num">{employee.serial}</td>
                       <td>
-                        <button type="button" className="link-btn" onClick={() => navigate(`/employees/${employee.id}`)}>
-                          {employee.fullName}
-                        </button>
-                        <span className="table__sub">{employee.employeeCode}</span>
+                        <a href={`#/employees/${employee.id}`} className="link">
+                          {employee.name}
+                        </a>
+                        {employee.archived ? <Badge tone="neutral"> مؤرشف</Badge> : null}
                       </td>
-                      <td>{employee.jobTitle || '—'}</td>
-                      <td>{lookups.branchName(employee.branchId)}</td>
-                      <td>{employee.governorate || '—'}</td>
-                      <td className="num">{fmtDate(employee.hireDate)}</td>
-                      <td>
-                        <EmployeeStatusBadge status={employee.status} />
-                      </td>
-                      <td className="num">{fmtNumber(stats?.minutesPending ?? 0)}</td>
-                      <td className="num">{fmtNumber(stats?.observationsOpen ?? 0)}</td>
-                      <td className="num">
-                        {stats?.latestMonthlySummary?.average != null
-                          ? `${stats.latestMonthlySummary.average.toFixed(1)} / ${settings.ratingScale.max}`
-                          : '—'}
-                      </td>
-                      <td className="actions">
-                        {status === 'archived' ? (
-                          <>
-                            <IconButton
-                              icon="restore"
-                              label="استعادة"
-                              onClick={() => void runAction(() => restoreEmployee(employee.id), 'تمت استعادة الموظف.')}
-                            />
-                          </>
-                        ) : (
-                          <>
-                            <IconButton icon="user" label="الملف" onClick={() => navigate(`/employees/${employee.id}`)} />
-                            <IconButton
-                              icon="edit"
-                              label="تعديل"
-                              onClick={() => {
-                                setEditing(employee);
-                                setFormOpen(true);
-                              }}
-                            />
-                            <IconButton
-                              icon={employee.status === 'inactive' ? 'check' : 'lock'}
-                              label={employee.status === 'inactive' ? 'تنشيط' : 'إيقاف'}
-                              onClick={() =>
-                                void runAction(
-                                  () => setEmployeeStatus(employee.id, employee.status === 'inactive' ? 'active' : 'inactive'),
-                                  'تم تحديث حالة الموظف.',
-                                )
-                              }
-                            />
-                            <IconButton icon="trash" label="أرشفة" variant="danger" onClick={() => setArchiveTarget(employee)} />
-                          </>
-                        )}
+                      <td className="mono">{employee.code}</td>
+                      <td>{employee.jobTitle}</td>
+                      <td>{employee.sector}</td>
+                      <td>{employee.governorate}</td>
+                      <td>{fmtDate(employee.joiningDate)}</td>
+                      <td className="num">{fmtNumber(employee.visitCount)}</td>
+                      <td className="num">{openMinutes}</td>
+                      <td className="cell-actions">
+                        <IconButton icon="user" label="الملف الشخصي" onClick={() => navigate(`/employees/${employee.id}`)} />
+                        <IconButton icon="edit" label="تعديل" onClick={() => openEdit(employee)} />
+                        <IconButton icon="trash" label="حذف" variant="danger" onClick={() => setDeleting(employee)} />
                       </td>
                     </tr>
                   );
@@ -203,23 +238,138 @@ export function EmployeesPage() {
               </tbody>
             </Table>
           </TableWrap>
+        ) : (
+          <EmptyState
+            icon="employees"
+            title="لا توجد نتائج"
+            description="أضف موظفًا جديدًا أو عدّل معايير التصفية."
+            action={
+              <Button variant="primary" icon="plus" onClick={openNew}>
+                إضافة موظف
+              </Button>
+            }
+          />
         )}
       </Card>
 
-      <EmployeeForm open={formOpen} employee={editing} onClose={closeForm} />
+      <Modal
+        open={Boolean(draft)}
+        onClose={() => setDraft(null)}
+        title={draft?.id ? 'تعديل بيانات الموظف' : 'إضافة موظف جديد'}
+        subtitle="كل الحقول الأساسية مطلوبة. تُدخل البيانات يدويًا بالكامل."
+        footer={
+          <>
+            <Button onClick={() => setDraft(null)}>إلغاء</Button>
+            <Button variant="primary" icon="save" loading={saving} onClick={submit}>
+              حفظ
+            </Button>
+          </>
+        }
+      >
+        {draft ? (
+          <div className="form-grid">
+            <Field label="الرقم التسلسلي" required error={errors.serial} htmlFor="emp-serial">
+              <Input
+                id="emp-serial"
+                type="number"
+                min={1}
+                value={draft.serial}
+                onChange={(e) => set('serial', e.target.value)}
+              />
+            </Field>
+            <Field label="كود الموظف" required error={errors.code} htmlFor="emp-code">
+              <Input id="emp-code" value={draft.code} onChange={(e) => set('code', e.target.value)} placeholder="مثال: RO-1024" />
+            </Field>
+            <Field label="اسم الموظف" required error={errors.name} htmlFor="emp-name" className="span-2">
+              <Input id="emp-name" value={draft.name} onChange={(e) => set('name', e.target.value)} />
+            </Field>
+            <Field label="المسمى الوظيفي" required error={errors.jobTitle} htmlFor="emp-title">
+              <Input id="emp-title" value={draft.jobTitle} onChange={(e) => set('jobTitle', e.target.value)} />
+            </Field>
+            <Field label="تاريخ الالتحاق" required error={errors.joiningDate} htmlFor="emp-joining">
+              <Input id="emp-joining" type="date" value={draft.joiningDate} onChange={(e) => set('joiningDate', e.target.value)} />
+            </Field>
+            <Field label="القطاع" required error={errors.sector} htmlFor="emp-sector">
+              <Input
+                id="emp-sector"
+                list="sector-options"
+                value={draft.sector}
+                onChange={(e) => set('sector', e.target.value)}
+              />
+              <datalist id="sector-options">
+                {settings.sectors.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
+            </Field>
+            <Field label="المحافظة" required error={errors.governorate} htmlFor="emp-gov">
+              <Input
+                id="emp-gov"
+                list="gov-options"
+                value={draft.governorate}
+                onChange={(e) => set('governorate', e.target.value)}
+              />
+              <datalist id="gov-options">
+                {settings.governorates.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
+            </Field>
+            <Field
+              label="عدد الزيارات"
+              error={errors.visitCount}
+              hint="إدخال يدوي — اتركه فارغًا إن لم يكن محددًا."
+              htmlFor="emp-visits"
+            >
+              <Input
+                id="emp-visits"
+                type="number"
+                min={0}
+                value={draft.visitCount}
+                onChange={(e) => set('visitCount', e.target.value)}
+              />
+            </Field>
+            <Field label="ملاحظات عامة" htmlFor="emp-notes" className="span-2">
+              <Textarea id="emp-notes" rows={3} value={draft.notes} onChange={(e) => set('notes', e.target.value)} />
+            </Field>
+            <div className="span-2">
+              <Checkbox label="موظف مؤرشف (يُخفى من القوائم)" checked={draft.archived} onChange={(e) => set('archived', e.target.checked)} />
+            </div>
+          </div>
+        ) : null}
+      </Modal>
 
-      <ConfirmDialog
-        open={Boolean(archiveTarget)}
-        title="أرشفة الموظف"
-        message={`سيتم أرشفة «${archiveTarget?.fullName ?? ''}» مع الاحتفاظ بكل سجلاته (دقائق، زيارات، ملاحظات، تقييمات). يمكنك استعادته لاحقًا.`}
-        confirmLabel="أرشفة"
-        onCancel={() => setArchiveTarget(null)}
-        onConfirm={() => {
-          const target = archiveTarget;
-          setArchiveTarget(null);
-          if (target) void runAction(() => softDeleteEmployee(target.id), 'تمت أرشفة الموظف.');
-        }}
-      />
+      <Modal
+        open={Boolean(deleting)}
+        onClose={() => setDeleting(null)}
+        title="حذف موظف"
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setDeleting(null)}>إلغاء</Button>
+            <Button variant="danger" onClick={confirmDelete} icon="trash">
+              حذف نهائي
+            </Button>
+          </>
+        }
+      >
+        <p className="confirm-text">
+          سيتم حذف «{deleting?.name}» نهائيًا. لا يمكن الحذف إذا كان لديه دقائق أو زيارات أو ملاحظات أو تقييمات مسجلة —
+          استخدم الأرشفة في هذه الحالة.
+        </p>
+        <Button
+          variant="secondary"
+          icon="archive"
+          onClick={async () => {
+            if (!deleting) return;
+            await runAction(() => setEmployeeArchived(deleting.id, true), 'تم أرشفة الموظف.');
+            setDeleting(null);
+            notify('يمكنك إظهار المؤرشفين من خيار «إظهار المؤرشفين».', 'info');
+          }}
+        >
+          أرشفة بدلًا من الحذف
+        </Button>
+      </Modal>
     </>
   );
 }

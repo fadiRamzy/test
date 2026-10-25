@@ -1,153 +1,165 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useDatabase, wipeAllData } from '../src/db/database';
-import { saveBranch, saveEmployee, saveMinute } from '../src/db/repo';
 import { AppProvider } from '../src/state/store';
-import { App } from '../src/App';
-
-beforeAll(async () => {
-  await useDatabase('roms-test-app');
-});
+import { EmployeesPage } from '../src/pages/Employees';
+import { MinutesPage } from '../src/pages/Minutes';
+import { EvaluationsPage } from '../src/pages/Evaluations';
+import { ReportsPage } from '../src/pages/Reports';
+import { clearStore, useDatabase } from '../src/db/database';
+import { nextSerial, saveEmployee, saveMinute } from '../src/db/repo';
+import { STORE_NAMES } from '../src/db/schema';
 
 beforeEach(async () => {
-  await wipeAllData();
-  window.location.hash = '#/';
+  await useDatabase(`test-ui-${Math.random().toString(36).slice(2)}`);
+  for (const store of STORE_NAMES) await clearStore(store);
 });
 
-function renderApp() {
-  return render(
-    <AppProvider>
-      <App />
-    </AppProvider>,
-  );
+function renderPage(page: React.ReactNode) {
+  return render(<AppProvider>{page}</AppProvider>);
 }
 
-describe('واجهة التطبيق', () => {
-  it('يعرض لوحة المعلومات عند عدم وجود بيانات', async () => {
-    renderApp();
-    expect(await screen.findByRole('heading', { name: 'لوحة المعلومات' })).toBeInTheDocument();
-    expect(screen.getByText('لا توجد سجلات بعد')).toBeInTheDocument();
+/** ينتظر تحميل البيانات المحلية (تصبح أزرار الإضافة مفعّلة) */
+async function waitReady(name: RegExp) {
+  await waitFor(() => {
+    const [button] = screen.getAllByRole('button', { name });
+    expect(button).toBeEnabled();
   });
+}
 
-  it('ينشئ موظفًا من الواجهة ويظهر في القائمة', async () => {
+const byId = (id: string) => document.getElementById(id) as HTMLInputElement;
+
+async function seedEmployee() {
+  return saveEmployee({
+    serial: await nextSerial(),
+    sector: 'قطاع القاهرة',
+    governorate: 'القاهرة',
+    name: 'محمد عبد الله',
+    code: 'RO-501',
+    jobTitle: 'ضابط مخاطر',
+    joiningDate: '2024-01-15T00:00:00.000Z',
+    visitCount: 4,
+    notes: '',
+  });
+}
+
+describe('شاشة الموظفين', () => {
+  it('تضيف موظفًا جديدًا وتظهره في الجدول', async () => {
     const user = userEvent.setup();
-    renderApp();
-    await screen.findByRole('heading', { name: 'لوحة المعلومات' });
+    renderPage(<EmployeesPage />);
+    await waitReady(/إضافة موظف/);
 
-    window.location.hash = '#/employees';
-    await waitFor(() => expect(window.location.hash).toBe('#/employees'));
+    await user.click(screen.getAllByRole('button', { name: /إضافة موظف/ })[0]);
 
-    await user.click(await screen.findByRole('button', { name: /موظف جديد/ }));
+    await user.type(byId('emp-name'), 'هدى سامي');
+    await user.clear(byId('emp-code'));
+    await user.type(byId('emp-code'), 'RO-777');
+    await user.type(byId('emp-sector'), 'قطاع الدلتا');
+    await user.type(byId('emp-gov'), 'الغربية');
 
-    const nameInput = await screen.findByPlaceholderText('مثال: محمد أحمد علي');
-    await user.type(nameInput, 'هبة مصطفى');
-    await user.type(screen.getByPlaceholderText('EMP-001'), 'UI-500');
-    await user.click(screen.getByRole('button', { name: 'حفظ' }));
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
 
-    await waitFor(() => expect(screen.getByText('هبة مصطفى')).toBeInTheDocument());
-    expect(screen.getByText('UI-500')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const row = await screen.findByText('هدى سامي');
+    expect(row).toBeInTheDocument();
+    expect(screen.getByText('RO-777')).toBeInTheDocument();
   });
 
-  it('يحافظ على البيانات بعد إعادة تحميل الصفحة (إعادة تركيب التطبيق)', async () => {
-    const branch = await saveBranch({ code: 'BR-UI', name: 'فرع الواجهة', governorate: 'القاهرة' });
-    await saveEmployee({
-      employeeCode: 'UI-1',
-      fullName: 'سجل ثابت للاختبار',
-      jobTitle: 'ضابط مخاطر',
-      branchId: branch.id,
-      hireDate: '2024-01-01',
-      status: 'active',
-    });
+  it('يمنع حفظ موظف بدون اسم ويعرض رسالة الخطأ', async () => {
+    const user = userEvent.setup();
+    renderPage(<EmployeesPage />);
+    await waitReady(/إضافة موظف/);
 
-    const first = renderApp();
-    window.location.hash = '#/employees';
-    await waitFor(() => expect(screen.getByText('سجل ثابت للاختبار')).toBeInTheDocument());
-    first.unmount();
+    await user.click(screen.getAllByRole('button', { name: /إضافة موظف/ })[0]);
+    await user.type(byId('emp-code'), 'RO-888');
+    await user.type(byId('emp-sector'), 'قطاع الصعيد');
+    await user.type(byId('emp-gov'), 'أسيوط');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
 
-    renderApp();
-    await waitFor(() => expect(screen.getByText('سجل ثابت للاختبار')).toBeInTheDocument());
+    expect(await screen.findByText('اسم الموظف مطلوب')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
+});
 
-  it('يفلتر دقائق الصرف المتأخرة ويعرض إحصاءاتها', async () => {
-    const branch = await saveBranch({ code: 'BR-M', name: 'فرع الدقائق', governorate: 'الجيزة' });
-    const employee = await saveEmployee({
-      employeeCode: 'M-1',
-      fullName: 'ضابط متأخر',
-      jobTitle: 'ضابط مخاطر',
-      branchId: branch.id,
-      hireDate: '2024-01-01',
-      status: 'active',
-    });
-    const threeDaysAgo = new Date();
-    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+describe('شاشة دقائق الصرف', () => {
+  it('تعرض المدد المحسوبة ووسم تجاوز المهلة', async () => {
+    const employee = await seedEmployee();
+    const receivedAt = new Date(Date.now() - 240 * 60000).toISOString();
+    const reviewStartedAt = new Date(Date.now() - 180 * 60000).toISOString();
     await saveMinute({
       employeeId: employee.id,
-      branchId: branch.id,
-      clientRef: 'CL-LATE-1',
-      financingType: 'تمويل قائمة',
-      receivedAt: threeDaysAgo.toISOString(),
-      status: 'in_progress',
-      finalResponseAt: null,
+      branchRef: 'فرع الزمالك',
+      receivedAt,
+      fileRequestedAt: new Date(Date.now() - 230 * 60000).toISOString(),
+      fileReceivedAt: new Date(Date.now() - 200 * 60000).toISOString(),
+      reviewStartedAt,
+      status: 'open',
     });
 
-    renderApp();
-    window.location.hash = '#/minutes?status=overdue';
-    await waitFor(() => expect(screen.getByText('CL-LATE-1')).toBeInTheDocument());
-    const table = screen.getByRole('table');
-    expect(within(table).getByText('متأخر')).toBeInTheDocument();
+    renderPage(<MinutesPage />);
+
+    expect(await screen.findByText('فرع الزمالك')).toBeInTheDocument();
+    expect(await screen.findByText(/تجاوز \+/)).toBeInTheDocument();
+    expect(screen.getByText('بانتظار الرد')).toBeInTheDocument();
   });
 
-  it('يفصل البيانات التجريبية عن الفعلية في الواجهة', async () => {
-    const branch = await saveBranch({ code: 'BR-D', name: 'فرع حقيقي', governorate: 'القاهرة' });
-    await saveEmployee({
-      employeeCode: 'REAL-1',
-      fullName: 'موظف حقيقي',
-      jobTitle: 'ضابط مخاطر',
-      branchId: branch.id,
-      hireDate: '2024-01-01',
-      status: 'active',
-    });
-    await saveEmployee({
-      employeeCode: 'DEMO-1',
-      fullName: 'موظف تجريبي',
-      jobTitle: 'ضابط مخاطر',
-      branchId: branch.id,
-      hireDate: '2024-01-01',
-      status: 'active',
-      isDemo: true,
-    });
+  it('تسجّل دقيقة جديدة عبر النموذج', async () => {
+    const employee = await seedEmployee();
+    const user = userEvent.setup();
+    renderPage(<MinutesPage />);
+    await waitReady(/تسجيل دقيقة/);
 
-    renderApp();
-    window.location.hash = '#/employees';
-    await waitFor(() => expect(screen.getByText('موظف حقيقي')).toBeInTheDocument());
-    expect(screen.queryByText('موظف تجريبي')).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: /تسجيل دقيقة/ })[0]);
+    await user.selectOptions(byId('min-employee'), employee.id);
+    await user.type(byId('min-branch'), 'فرع المعادي');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(await screen.findByText('فرع المعادي')).toBeInTheDocument();
   });
+});
 
-  it('يفتح صفحة التقرير ويولّد مستند الطباعة', async () => {
-    const branch = await saveBranch({ code: 'BR-R', name: 'فرع التقارير', governorate: 'القاهرة' });
-    const employee = await saveEmployee({
-      employeeCode: 'R-9',
-      fullName: 'مريم للتقرير',
-      jobTitle: 'ضابط مخاطر',
-      branchId: branch.id,
-      hireDate: '2024-01-01',
-      status: 'active',
+describe('شاشة التقييمات', () => {
+  it('تحسب المتوسط من الدرجات المسجلة فقط دون أوزان', async () => {
+    await seedEmployee();
+    const user = userEvent.setup();
+    renderPage(<EvaluationsPage />);
+    await waitReady(/تقييم جديد/);
+
+    await user.click(screen.getAllByRole('button', { name: /تقييم جديد/ })[0]);
+
+    const criteria = await screen.findAllByRole('group');
+    expect(criteria).toHaveLength(8);
+
+    const first = within(criteria[0]);
+    await user.click(first.getByRole('button', { name: '4' }));
+    const second = within(criteria[1]);
+    await user.click(second.getByRole('button', { name: '2' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/المجموع: 6 من 2/)).toBeInTheDocument();
     });
+    expect(screen.getByText(/المتوسط:\s*3\.00/)).toBeInTheDocument();
+  });
+});
+
+describe('تقرير الموظف', () => {
+  it('يعرض بيانات الموظف ودقائقه في صفحة قابلة للطباعة', async () => {
+    const employee = await seedEmployee();
     await saveMinute({
       employeeId: employee.id,
-      branchId: branch.id,
-      clientRef: 'CL-RPT',
-      financingType: 'تمويل قائمة',
-      receivedAt: new Date().toISOString(),
+      branchRef: 'فرع المهندسين',
+      receivedAt: '2026-09-01T08:00:00.000Z',
+      reviewStartedAt: '2026-09-01T08:30:00.000Z',
+      finalResponseAt: '2026-09-01T09:00:00.000Z',
       status: 'completed',
-      finalResponseAt: new Date().toISOString(),
     });
 
-    renderApp();
-    window.location.hash = `#/reports?employee=${employee.id}`;
-    await waitFor(() => expect(screen.getAllByText(/تقرير أداء ضابط مخاطر/).length).toBeGreaterThan(0));
-    expect(screen.getAllByText(/مريم للتقرير/).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: /طباعة \/ حفظ PDF/ })).toBeInTheDocument();
+    const { container } = renderPage(<ReportsPage />);
+
+    expect((await screen.findAllByText('محمد عبد الله')).length).toBeGreaterThan(0);
+    expect(await screen.findByText('فرع المهندسين')).toBeInTheDocument();
+    expect(container.querySelector('.report-page')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /طباعة/ })).toBeInTheDocument();
   });
 });

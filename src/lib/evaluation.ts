@@ -1,75 +1,53 @@
-import type { Evaluation, EvaluationCriterion, EvaluationScores } from '../db/schema';
+import { EVALUATION_CRITERIA, RATING_MAX, type Evaluation, type EvaluationScores } from '../db/schema';
 
-export interface EvaluationSummary {
+export interface ScoreSummary {
+  /** مجموع الدرجات المسجلة */
   sum: number;
+  /** عدد المعايير المسجلة */
   count: number;
-  /** المتوسط = مجموع الدرجات المسجلة ÷ عدد المعايير المسجلة (بلا أوزان مخترعة) */
+  /** المتوسط = المجموع ÷ عدد المعايير المسجلة (بلا أوزان ولا عتبات) */
   average: number | null;
-  maxPossible: number;
-  missingCriteria: string[];
-  recordedCriteria: string[];
-  percentOfMax: number | null;
+  totalCriteria: number;
+  missing: string[];
+  recorded: string[];
 }
 
-/**
- * متوسط التقييم الافتراضي: مجموع الدرجات المسجلة ÷ عدد المعايير المسجلة.
- * لا تُستخدم أي أوزان أو معادلات رسمية.
- */
-export function summarizeScores(
-  scores: EvaluationScores | undefined,
-  criteria: EvaluationCriterion[],
-  scaleMax = 5,
-): EvaluationSummary {
-  const active = criteria.filter((c) => c.active);
-  const recordedCriteria: string[] = [];
-  const missingCriteria: string[] = [];
+export function summarizeScores(scores: EvaluationScores | undefined): ScoreSummary {
+  const recorded: string[] = [];
+  const missing: string[] = [];
   let sum = 0;
-  let count = 0;
 
-  for (const criterion of active) {
+  for (const criterion of EVALUATION_CRITERIA) {
     const raw = scores?.[criterion.id];
     const value = typeof raw === 'number' && !Number.isNaN(raw) ? raw : null;
     if (value === null) {
-      missingCriteria.push(criterion.id);
+      missing.push(criterion.id);
     } else {
-      recordedCriteria.push(criterion.id);
+      recorded.push(criterion.id);
       sum += value;
-      count += 1;
     }
   }
 
   return {
     sum,
-    count,
-    average: count ? sum / count : null,
-    maxPossible: count * scaleMax,
-    missingCriteria,
-    recordedCriteria,
-    percentOfMax: count ? (sum / (count * scaleMax)) * 100 : null,
+    count: recorded.length,
+    average: recorded.length ? sum / recorded.length : null,
+    totalCriteria: EVALUATION_CRITERIA.length,
+    missing,
+    recorded,
   };
 }
 
-export function isScoreValid(value: number | null, min: number, max: number): boolean {
-  if (value === null) return true;
-  return Number.isFinite(value) && value >= min && value <= max;
-}
+export const MAX_SCORE_TOTAL = EVALUATION_CRITERIA.length * RATING_MAX;
 
-/**
- * اشتقاق تقييم سنوي من التقييمات الشهرية المعتمدة/المسجلة:
- * لكل معيار يُحسب متوسط الدرجات المسجلة في شهور السنة (إن وجدت).
- */
-export function deriveAnnualScores(
-  evaluations: Evaluation[],
-  year: number,
-  criteria: EvaluationCriterion[],
-): { scores: EvaluationScores; monthsUsed: number[] } {
+/** متوسط كل معيار عبر التقييمات الشهرية لسنة معينة (للاستخدام كمرجع في التقييم السنوي) */
+export function monthlyAveragePerCriterion(evaluations: Evaluation[], year: number) {
   const monthly = evaluations.filter(
-    (e) => e.periodType === 'monthly' && e.year === year && !e.deletedAt && e.month,
+    (row) => row.periodType === 'monthly' && row.year === year && row.month !== null,
   );
   const scores: EvaluationScores = {};
   const monthsUsed = new Set<number>();
-
-  for (const criterion of criteria) {
+  for (const criterion of EVALUATION_CRITERIA) {
     const values: number[] = [];
     for (const evaluation of monthly) {
       const value = evaluation.scores?.[criterion.id];
@@ -82,14 +60,5 @@ export function deriveAnnualScores(
       ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10
       : null;
   }
-
-  return { scores, monthsUsed: Array.from(monthsUsed).sort((a, b) => a - b) };
-}
-
-export function evaluationTone(average: number | null, scaleMax = 5): 'success' | 'warning' | 'danger' | 'neutral' {
-  if (average === null) return 'neutral';
-  const ratio = average / scaleMax;
-  if (ratio >= 0.8) return 'success';
-  if (ratio >= 0.6) return 'warning';
-  return 'danger';
+  return { scores, months: Array.from(monthsUsed).sort((a, b) => a - b) };
 }

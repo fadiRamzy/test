@@ -4,17 +4,15 @@ import {
   DEFAULT_SETTINGS,
   STORE_NAMES,
   type AppSettings,
-  type AuditEntry,
   type StoreName,
 } from './schema';
-import { DATA_MIGRATIONS, upgradeSchema } from './migrations';
 
 /**
- * طبقة الوصول إلى IndexedDB. كل البيانات محلية داخل المتصفح ولا تُرسل لأي خادم.
+ * طبقة IndexedDB. لا يوجد خادم ولا مزامنة: كل البيانات محلية في هذا المتصفح فقط.
  */
 
 let dbPromise: Promise<IDBDatabase> | null = null;
-let currentDbName = DB_NAME;
+let currentName = DB_NAME;
 
 export class StorageUnavailableError extends Error {
   constructor(message: string) {
@@ -31,187 +29,156 @@ export function isIndexedDbAvailable(): boolean {
   }
 }
 
-function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
+function req<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error('فشل تنفيذ العملية على قاعدة البيانات'));
+    request.onerror = () => reject(request.error ?? new Error('فشلت عملية على قاعدة البيانات'));
   });
 }
 
-export function openDatabase(dbName = currentDbName): Promise<IDBDatabase> {
+function txDone(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('فشلت الكتابة في قاعدة البيانات'));
+    tx.onabort = () => reject(tx.error ?? new Error('أُلغيت الكتابة في قاعدة البيانات'));
+  });
+}
+
+export function openDatabase(name = currentName): Promise<IDBDatabase> {
   if (!isIndexedDbAvailable()) {
     return Promise.reject(new StorageUnavailableError('التخزين المحلي (IndexedDB) غير متاح في هذا المتصفح.'));
   }
-  if (dbPromise && dbName === currentDbName) return dbPromise;
+  if (dbPromise && name === currentName) return dbPromise;
+  currentName = name;
 
-  currentDbName = dbName;
   dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(dbName, DB_VERSION);
+    const request = indexedDB.open(name, DB_VERSION);
 
-    request.onupgradeneeded = (event) => {
+    request.onupgradeneeded = () => {
       const db = request.result;
-      const transaction = request.transaction as IDBTransaction;
-      upgradeSchema(db, transaction);
-      const oldVersion = event.oldVersion ?? 0;
-
-      // ترحيلات البيانات تُنفّذ بعد اكتمال الترقية الهيكلية
-      transaction.oncomplete = () => {
-        void runDataMigrations(db, oldVersion);
+      const create = (store: StoreName, indexes: string[] = []) => {
+        const objectStore = db.objectStoreNames.contains(store)
+          ? request.transaction!.objectStore(store)
+          : db.createObjectStore(store, { keyPath: 'id' });
+        indexes.forEach((index) => {
+          if (!objectStore.indexNames.contains(index)) objectStore.createIndex(index, index, { unique: false });
+        });
       };
+      create('employees', ['code', 'sector', 'governorate', 'serial']);
+      create('minutes', ['employeeId', 'receivedAt', 'status']);
+      create('visits', ['employeeId', 'status']);
+      create('observations', ['employeeId', 'date', 'type', 'status', 'minuteId', 'visitId']);
+      create('evaluations', ['employeeId', 'year']);
+      create('settings');
+      create('meta');
     };
 
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error('تعذّر فتح قاعدة البيانات المحلية'));
-    request.onblocked = () =>
-      reject(new Error('قاعدة البيانات مفتوحة في تبويب آخر. أغلق التبويبات الأخرى ثم أعد المحاولة.'));
+    request.onblocked = () => reject(new Error('قاعدة البيانات مفتوحة في تبويب آخر — أغلق التبويبات الأخرى.'));
   });
 
   return dbPromise;
 }
 
-async function runDataMigrations(db: IDBDatabase, fromVersion: number): Promise<void> {
-  const pending = DATA_MIGRATIONS.filter((m) => m.version > fromVersion);
-  const applied = await readMeta<number>('dataVersion').catch(() => null);
-  const startFrom = typeof applied === 'number' ? applied : fromVersion;
-  for (const migration of pending.filter((m) => m.version > startFrom)) {
-    await migration.up(db);
-    await writeMeta('dataVersion', migration.version);
-  }
-}
-
 export async function getDb(): Promise<IDBDatabase> {
-  if (!dbPromise) return openDatabase();
-  return dbPromise;
+  return dbPromise ?? openDatabase();
 }
 
 /** استخدام قاعدة بيانات مخصصة (للاختبارات) */
-export async function useDatabase(dbName: string): Promise<void> {
-  if (dbPromise) {
-    const existing = await dbPromise.catch(() => null);
-    existing?.close();
-  }
+export async function useDatabase(name: string): Promise<void> {
+  const existing = await dbPromise?.catch(() => null);
+  existing?.close();
   dbPromise = null;
-  currentDbName = dbName;
-  await openDatabase(dbName);
-  await ensureDefaults();
+  await openDatabase(name);
+  await ensureSettings();
 }
 
 export async function closeDatabase(): Promise<void> {
-  if (!dbPromise) return;
-  const db = await dbPromise.catch(() => null);
+  const db = await dbPromise?.catch(() => null);
   db?.close();
   dbPromise = null;
 }
 
-export async function deleteDatabase(dbName = currentDbName): Promise<void> {
-  await closeDatabase();
-  await requestToPromise(indexedDB.deleteDatabase(dbName));
-}
-
-/* ------------------------------------------------------------------ */
-/* عمليات عامة                                                        */
-/* ------------------------------------------------------------------ */
-
 export async function getAll<T>(store: StoreName): Promise<T[]> {
   const db = await getDb();
-  const tx = db.transaction(store, 'readonly');
-  return requestToPromise(tx.objectStore(store).getAll() as IDBRequest<T[]>);
+  return req(db.transaction(store, 'readonly').objectStore(store).getAll() as IDBRequest<T[]>);
 }
 
 export async function getById<T>(store: StoreName, id: string): Promise<T | undefined> {
   const db = await getDb();
-  const tx = db.transaction(store, 'readonly');
-  return requestToPromise(tx.objectStore(store).get(id) as IDBRequest<T | undefined>);
+  return req(db.transaction(store, 'readonly').objectStore(store).get(id) as IDBRequest<T | undefined>);
 }
 
 export async function putRecord<T extends { id: string }>(store: StoreName, record: T): Promise<T> {
   const db = await getDb();
   const tx = db.transaction(store, 'readwrite');
-  await requestToPromise(tx.objectStore(store).put(record));
-  await transactionDone(tx);
+  await req(tx.objectStore(store).put(record));
+  await txDone(tx);
   return record;
 }
 
-export async function putMany<T extends { id: string }>(store: StoreName, records: T[]): Promise<number> {
-  if (!records.length) return 0;
+export async function putMany<T extends { id: string }>(store: StoreName, records: T[]): Promise<void> {
+  if (!records.length) return;
   const db = await getDb();
   const tx = db.transaction(store, 'readwrite');
-  const objectStore = tx.objectStore(store);
-  records.forEach((record) => objectStore.put(record));
-  await transactionDone(tx);
-  return records.length;
+  records.forEach((record) => tx.objectStore(store).put(record));
+  await txDone(tx);
 }
 
-export async function hardDelete(store: StoreName, id: string): Promise<void> {
+export async function deleteRecord(store: StoreName, id: string): Promise<void> {
   const db = await getDb();
   const tx = db.transaction(store, 'readwrite');
-  await requestToPromise(tx.objectStore(store).delete(id));
-  await transactionDone(tx);
+  await req(tx.objectStore(store).delete(id));
+  await txDone(tx);
 }
 
 export async function clearStore(store: StoreName): Promise<void> {
   const db = await getDb();
   const tx = db.transaction(store, 'readwrite');
-  await requestToPromise(tx.objectStore(store).clear());
-  await transactionDone(tx);
+  await req(tx.objectStore(store).clear());
+  await txDone(tx);
 }
 
 export async function countRecords(store: StoreName): Promise<number> {
   const db = await getDb();
-  const tx = db.transaction(store, 'readonly');
-  return requestToPromise(tx.objectStore(store).count());
+  return req(db.transaction(store, 'readonly').objectStore(store).count());
 }
 
-export function transactionDone(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error ?? new Error('فشلت عملية الكتابة في قاعدة البيانات'));
-    tx.onabort = () => reject(tx.error ?? new Error('أُلغيت عملية الكتابة في قاعدة البيانات'));
-  });
-}
+/* -------------------------------- الإعدادات ----------------------------- */
 
-/* ------------------------------------------------------------------ */
-/* الإعدادات                                                          */
-/* ------------------------------------------------------------------ */
+const SETTINGS_ID = 'app-settings';
 
-const SETTINGS_KEY = 'app-settings';
-
-export async function readSettings(): Promise<AppSettings> {
-  const stored = await getById<{ id: string; value: AppSettings }>('settings', SETTINGS_KEY);
-  if (!stored?.value) return { ...DEFAULT_SETTINGS };
-  return mergeSettings(stored.value);
-}
-
-export function mergeSettings(value: Partial<AppSettings> | undefined): AppSettings {
+export function mergeSettings(value?: Partial<AppSettings>): AppSettings {
   const v = value ?? {};
   return {
     ...DEFAULT_SETTINGS,
     ...v,
-    workingHours: { ...DEFAULT_SETTINGS.workingHours, ...(v.workingHours ?? {}) },
-    thresholds: { ...DEFAULT_SETTINGS.thresholds, ...(v.thresholds ?? {}) },
-    ratingScale: { ...DEFAULT_SETTINGS.ratingScale, ...(v.ratingScale ?? {}) },
-    holidays: Array.isArray(v.holidays) ? v.holidays : DEFAULT_SETTINGS.holidays,
-    workingDays: Array.isArray(v.workingDays) ? v.workingDays : DEFAULT_SETTINGS.workingDays,
-    observationCategories:
-      Array.isArray(v.observationCategories) && v.observationCategories.length
-        ? v.observationCategories
-        : DEFAULT_SETTINGS.observationCategories,
-    evaluationCriteria:
-      Array.isArray(v.evaluationCriteria) && v.evaluationCriteria.length
-        ? v.evaluationCriteria
-        : DEFAULT_SETTINGS.evaluationCriteria,
+    sectors: Array.isArray(v.sectors) && v.sectors.length ? v.sectors : DEFAULT_SETTINGS.sectors,
+    governorates: Array.isArray(v.governorates) && v.governorates.length ? v.governorates : DEFAULT_SETTINGS.governorates,
+    observationTypes:
+      Array.isArray(v.observationTypes) && v.observationTypes.length ? v.observationTypes : DEFAULT_SETTINGS.observationTypes,
+    deadlineMinutes: Number(v.deadlineMinutes) > 0 ? Number(v.deadlineMinutes) : DEFAULT_SETTINGS.deadlineMinutes,
   };
+}
+
+export async function readSettings(): Promise<AppSettings> {
+  const row = await getById<{ id: string; value: AppSettings }>('settings', SETTINGS_ID);
+  return mergeSettings(row?.value);
 }
 
 export async function writeSettings(settings: AppSettings): Promise<AppSettings> {
   const value = { ...mergeSettings(settings), updatedAt: new Date().toISOString() };
-  await putRecord('settings', { id: SETTINGS_KEY, value });
+  await putRecord('settings', { id: SETTINGS_ID, value });
   return value;
 }
 
-/* ------------------------------------------------------------------ */
-/* بيانات وصفية                                                       */
-/* ------------------------------------------------------------------ */
+export async function ensureSettings(): Promise<void> {
+  const row = await getById<{ id: string }>('settings', SETTINGS_ID);
+  if (!row) await writeSettings({ ...DEFAULT_SETTINGS });
+}
+
+/* ------------------------------ بيانات وصفية ---------------------------- */
 
 export async function readMeta<T>(key: string): Promise<T | null> {
   const row = await getById<{ id: string; value: T }>('meta', key);
@@ -222,55 +189,12 @@ export async function writeMeta<T>(key: string, value: T): Promise<void> {
   await putRecord('meta', { id: key, value });
 }
 
-/* ------------------------------------------------------------------ */
-/* سجل التغييرات                                                      */
-/* ------------------------------------------------------------------ */
-
-export async function appendAudit(entry: Omit<AuditEntry, 'id' | 'at'> & { at?: string }): Promise<void> {
-  const db = await getDb();
-  const record: AuditEntry = { ...entry, at: entry.at ?? new Date().toISOString() };
-  const tx = db.transaction('audit', 'readwrite');
-  tx.objectStore('audit').add(record);
-  await transactionDone(tx);
-}
-
-export async function readAudit(limit = 300): Promise<AuditEntry[]> {
-  const db = await getDb();
-  const tx = db.transaction('audit', 'readonly');
-  const store = tx.objectStore('audit');
-  const rows = await requestToPromise(store.getAll() as IDBRequest<AuditEntry[]>);
-  return rows
-    .filter((r) => !r.isDemo)
-    .sort((a, b) => (a.at < b.at ? 1 : -1))
-    .slice(0, limit);
-}
-
-/** تهيئة الإعدادات الافتراضية عند أول تشغيل */
-export async function ensureDefaults(): Promise<void> {
-  const existing = await getById<{ id: string }>('settings', SETTINGS_KEY);
-  if (!existing) await writeSettings({ ...DEFAULT_SETTINGS });
-  const seeded = await readMeta<boolean>('seededAt');
-  if (!seeded) await writeMeta('seededAt', new Date().toISOString());
-}
-
-/** حذف كل البيانات المحلية وإعادة التهيئة */
 export async function wipeAllData(): Promise<void> {
   for (const store of STORE_NAMES) {
     if (store === 'settings' || store === 'meta') continue;
     await clearStore(store);
   }
   await clearStore('settings');
-  await ensureDefaults();
-}
-
-/** توفير مساحة التخزين (إن كان مدعومًا) */
-export async function storageEstimate(): Promise<{ usage: number; quota: number } | null> {
-  if (typeof navigator === 'undefined' || !navigator.storage?.estimate) return null;
-  try {
-    const estimate = await navigator.storage.estimate();
-    if (typeof estimate.usage !== 'number' || typeof estimate.quota !== 'number') return null;
-    return { usage: estimate.usage, quota: estimate.quota };
-  } catch {
-    return null;
-  }
+  await ensureSettings();
+  await clearStore('meta');
 }

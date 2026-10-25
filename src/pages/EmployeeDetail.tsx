@@ -1,398 +1,548 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useApp, useVisibleData } from '../state/store';
+import { useMemo, useState } from 'react';
+import { useApp } from '../state/store';
 import { navigate, useRoute } from '../state/router';
-import { readAudit } from '../db/database';
-import { restoreEmployee, softDeleteEmployee } from '../db/repo';
-import type { AuditEntry, Employee, Evaluation } from '../db/schema';
-import { computeEmployeeStats } from '../lib/analytics';
-import { fmtDate, fmtDateTime, fmtDecimal, fmtMinutes, fmtNumber, fmtPercent, monthLabel } from '../lib/format';
-import { summarizeScores } from '../lib/evaluation';
 import {
   Badge,
   Button,
   Callout,
   Card,
-  ConfirmDialog,
   DefinitionList,
   EmptyState,
+  Field,
+  IconButton,
+  Input,
+  Modal,
   PageHeader,
-  ProgressBar,
+  Select,
   Table,
   TableWrap,
   Tabs,
+  Textarea,
 } from '../components/ui';
-import { EmployeeStatusBadge, MetricRow, useLookups } from '../components/domain';
-import { EvaluationsTable, MinutesTable, ObservationDetails, ObservationsTable, VisitsTable } from '../components/RecordTables';
-import { EmployeeForm } from '../components/forms/EmployeeForm';
+import { deleteObservation, saveObservation } from '../db/repo';
+import {
+  MINUTE_STATUS_LABELS,
+  OBSERVATION_STATUS_LABELS,
+  VISIT_STATUS_LABELS,
+  type Observation,
+} from '../db/schema';
+import { EVALUATION_CRITERIA } from '../db/schema';
+import { countNoun, fmtAvg, fmtDate, fmtDateTime, fmtDurationShort, fmtNumber, monthLabel, NOUNS, todayInputValue, toDateInputValue } from '../lib/format';
+import { minuteState, visitState } from '../lib/tracking';
+import { summarizeScores } from '../lib/evaluation';
 
-type TabId = 'overview' | 'minutes' | 'visits' | 'observations' | 'evaluations' | 'history';
+type TabId = 'overview' | 'minutes' | 'visits' | 'observations' | 'evaluations';
+
+const TAB_LABELS: Record<TabId, string> = {
+  overview: 'نظرة عامة',
+  minutes: 'دقائق الصرف',
+  visits: 'الزيارات والتقارير',
+  observations: 'الملاحظات',
+  evaluations: 'التقييمات',
+};
+
+interface ObsDraft {
+  id?: string;
+  date: string;
+  type: string;
+  text: string;
+  status: 'open' | 'closed';
+  resolution: string;
+}
 
 export function EmployeeDetailPage() {
   const route = useRoute();
-  const id = route.segments[1];
-  const { settings, runAction } = useApp();
-  const data = useVisibleData();
-  const lookups = useLookups();
-  const [tab, setTab] = useState<TabId>((route.query.get('tab') as TabId) ?? 'overview');
-  const [editOpen, setEditOpen] = useState(false);
-  const [archiveOpen, setArchiveOpen] = useState(false);
-  const [history, setHistory] = useState<AuditEntry[]>([]);
-  const [selectedObservation, setSelectedObservation] = useState<string | null>(null);
+  const employeeId = route.segments[1] ?? '';
+  const { data, settings, runAction } = useApp();
+  const [tab, setTab] = useState<TabId>('overview');
+  const [obsType, setObsType] = useState('all');
+  const [obsStatus, setObsStatus] = useState('all');
+  const [obsFrom, setObsFrom] = useState('');
+  const [obsTo, setObsTo] = useState('');
+  const [draft, setDraft] = useState<ObsDraft | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const employee = data.employees.find((e) => e.id === id) ?? data.archivedEmployees.find((e) => e.id === id);
+  const employee = data.employees.find((row) => row.id === employeeId);
 
-  useEffect(() => {
-    if (!employee) return;
-    void readAudit(400).then((entries) =>
-      setHistory(entries.filter((entry) => entry.entityId === employee.id || entry.summary.includes(employee.fullName))),
-    );
-  }, [employee, data]);
-
-  const stats = useMemo(
-    () => (employee ? computeEmployeeStats(employee, data, settings) : null),
-    [employee, data, settings],
+  const minutes = useMemo(
+    () => data.minutes.filter((row) => row.employeeId === employeeId),
+    [data.minutes, employeeId],
+  );
+  const visits = useMemo(() => data.visits.filter((row) => row.employeeId === employeeId), [data.visits, employeeId]);
+  const observations = useMemo(
+    () => data.observations.filter((row) => row.employeeId === employeeId),
+    [data.observations, employeeId],
+  );
+  const evaluations = useMemo(
+    () => data.evaluations.filter((row) => row.employeeId === employeeId),
+    [data.evaluations, employeeId],
   );
 
-  if (!employee || !stats) {
+  const filteredObservations = useMemo(
+    () =>
+      observations
+        .filter((row) => (obsType === 'all' ? true : row.type === obsType))
+        .filter((row) => (obsStatus === 'all' ? true : row.status === obsStatus))
+        .filter((row) => (obsFrom ? row.date >= obsFrom : true))
+        .filter((row) => (obsTo ? row.date <= obsTo : true))
+        .sort((a, b) => (a.date < b.date ? 1 : -1)),
+    [observations, obsType, obsStatus, obsFrom, obsTo],
+  );
+
+  if (!employee) {
     return (
       <Card>
         <EmptyState
-          icon="user"
+          icon="search"
           title="الموظف غير موجود"
-          description="ربما تم أرشفته أو حُذف. تحقق من قائمة الموظفين أو المؤرشفين."
-          action={<Button onClick={() => navigate('/employees')}>العودة للموظفين</Button>}
+          description="ربما تم حذفه أو أن الرابط غير صحيح."
+          action={
+            <Button variant="primary" onClick={() => navigate('/employees')}>
+              العودة لقائمة الموظفين
+            </Button>
+          }
         />
       </Card>
     );
   }
 
-  const observation = data.observations.find((o) => o.id === selectedObservation) ?? null;
-  const latestMonthly = stats.latestMonthly;
-  const monthlySummary = stats.latestMonthlySummary;
+  const openMinutes = minutes.filter((row) => row.status === 'open');
+  const overdueMinutes = minutes.filter((row) => minuteState(row, settings.deadlineMinutes).overdue);
+  const pendingReports = visits.filter((row) => {
+    const state = visitState(row, settings.deadlineMinutes);
+    return state.reportPending || state.reportAwaitingReview;
+  });
+
+  const startObservation = (observation?: Observation) => {
+    setErrors({});
+    setDraft({
+      id: observation?.id,
+      date: observation ? toDateInputValue(observation.date) : todayInputValue(),
+      type: observation?.type ?? settings.observationTypes[0] ?? 'أخرى',
+      text: observation?.text ?? '',
+      status: observation?.status ?? 'open',
+      resolution: observation?.resolution ?? '',
+    });
+  };
+
+  const submitObservation = async () => {
+    if (!draft) return;
+    try {
+      await runAction(
+        () =>
+          saveObservation({
+            id: draft.id,
+            employeeId,
+            date: draft.date,
+            type: draft.type,
+            text: draft.text,
+            status: draft.status,
+            resolution: draft.resolution,
+            minuteId: null,
+            visitId: null,
+            cycleId: null,
+          }),
+        draft.id ? 'تم تحديث الملاحظة.' : 'تمت إضافة الملاحظة.',
+      );
+      setDraft(null);
+    } catch (error) {
+      if (error && typeof error === 'object' && 'errors' in error) {
+        setErrors((error as { errors: Record<string, string> }).errors);
+      }
+    }
+  };
 
   return (
     <>
-      <div className="breadcrumb">
-        <a href="#/employees">الموظفون</a>
-        <span>/</span>
-        <span>{employee.fullName}</span>
-      </div>
-
       <PageHeader
-        title={
-          <span className="row" style={{ gap: 10 }}>
-            {employee.fullName}
-            <EmployeeStatusBadge status={employee.status} />
-            {employee.deletedAt ? <Badge tone="danger">مؤرشف</Badge> : null}
-          </span>
+        breadcrumb={
+          <>
+            <a href="#/employees">الموظفون</a> <span>/</span> <span>{employee.name}</span>
+          </>
         }
-        description={`${employee.employeeCode} — ${employee.jobTitle || 'بدون مسمى'} — ${lookups.branchName(employee.branchId)}`}
+        title={employee.name}
+        description={`${employee.jobTitle} — كود ${employee.code} — ${employee.sector} / ${employee.governorate}`}
         actions={
           <>
-            <Button icon="reports" onClick={() => navigate(`/reports?employee=${employee.id}`)}>
+            <Button icon="plus" onClick={() => startObservation()}>
+              ملاحظة جديدة
+            </Button>
+            <Button icon="print" variant="primary" onClick={() => navigate(`/reports?employee=${employee.id}`)}>
               تقرير الموظف
             </Button>
-            <Button icon="edit" onClick={() => setEditOpen(true)}>
-              تعديل
-            </Button>
-            {employee.deletedAt ? (
-              <Button
-                variant="success"
-                icon="restore"
-                onClick={() => void runAction(() => restoreEmployee(employee.id), 'تمت استعادة الموظف.')}
-              >
-                استعادة
-              </Button>
-            ) : (
-              <Button variant="danger" icon="archive" onClick={() => setArchiveOpen(true)}>
-                أرشفة
-              </Button>
-            )}
           </>
         }
       />
 
-      <div className="grid grid--stats">
-        <MetricCard label="نسبة الالتزام بالمهلة" value={stats.compliancePercent === null ? '—' : fmtPercent(stats.compliancePercent)} hint={`${stats.minutesMet} من ${stats.minutesClosed} دقيقة مغلقة`} />
-        <MetricCard label="دقائق قيد التنفيذ" value={fmtNumber(stats.minutesPending)} hint={`${stats.minutesOverdue} متأخرة`} tone={stats.minutesOverdue > 0 ? 'danger' : undefined} />
-        <MetricCard label="متوسط زمن معالجة الضابط" value={fmtMinutes(stats.avgOfficerMinutes)} hint="وقت العمل الفعلي" />
-        <MetricCard label="متوسط زمن انتظار الفرع" value={fmtMinutes(stats.avgWaitingMinutes)} hint="من طلب الملف/الاستيضاح حتى الرد" />
-        <MetricCard label="زيارات ميدانية" value={fmtNumber(stats.visitsTotal)} hint={`${stats.visitsThisMonth} هذا الشهر`} />
-        <MetricCard label="جودة التقارير" value={stats.avgQuality === null ? '—' : `${fmtDecimal(stats.avgQuality)} / 5`} hint={`${stats.delayedReports} تقرير متأخر — ${stats.returnedReports} أعيد للتصحيح`} />
-        <MetricCard label="ملاحظات مفتوحة" value={fmtNumber(stats.observationsOpen)} hint={`${stats.observationsRecurring} متكررة من ${stats.observationsTotal}`} tone={stats.observationsOpen > 0 ? 'warning' : undefined} />
-        <MetricCard
-          label="آخر تقييم شهري"
-          value={monthlySummary?.average == null ? '—' : `${fmtDecimal(monthlySummary.average)} / ${settings.ratingScale.max}`}
-          hint={latestMonthly ? monthLabel(latestMonthly.year, latestMonthly.month) : 'لا يوجد تقييم'}
-        />
-      </div>
+      {employee.archived ? <Callout tone="warning">هذا الموظف مؤرشف — سجلاته محفوظة لكنه مخفي من القوائم النشطة.</Callout> : null}
 
-      <Card className="mt-16" padded={false}>
-        <Tabs
-          tabs={[
-            { id: 'overview', label: 'نظرة عامة' },
-            { id: 'minutes', label: 'دقائق الصرف', count: stats.minutes.length },
-            { id: 'visits', label: 'الزيارات', count: stats.visits.length },
-            { id: 'observations', label: 'الملاحظات', count: stats.observations.length },
-            { id: 'evaluations', label: 'التقييمات', count: stats.evaluations.length },
-            { id: 'history', label: 'السجل الزمني' },
-          ]}
-          value={tab}
-          onChange={(next) => setTab(next as TabId)}
-        />
+      <Tabs
+        tabs={(Object.keys(TAB_LABELS) as TabId[]).map((id) => ({ id, label: TAB_LABELS[id] }))}
+        value={tab}
+        onChange={setTab}
+      />
 
-        <div style={{ padding: 16 }}>
-          {tab === 'overview' ? (
-            <div className="grid grid--2">
-              <div>
-                <h3 className="section-title">البيانات الوظيفية</h3>
-                <DefinitionList
-                  items={[
-                    { label: 'الرقم الوظيفي', value: employee.employeeCode },
-                    { label: 'الاسم', value: employee.fullName },
-                    { label: 'المسمى الوظيفي', value: employee.jobTitle || '—' },
-                    { label: 'الفرع', value: lookups.branchName(employee.branchId) },
-                    { label: 'المحافظة', value: employee.governorate || '—' },
-                    { label: 'تاريخ التعيين', value: fmtDate(employee.hireDate) },
-                    { label: 'تاريخ الانتهاء', value: employee.endDate ? fmtDate(employee.endDate) : '—' },
-                    { label: 'الهاتف', value: employee.phone || '—' },
-                    { label: 'البريد الإلكتروني', value: employee.email || '—' },
-                    { label: 'ملاحظات', value: employee.notes || '—' },
-                  ]}
-                />
+      {tab === 'overview' ? (
+        <div className="grid-2">
+          <Card title="البيانات الأساسية">
+            <DefinitionList
+              items={[
+                { label: 'الرقم التسلسلي', value: fmtNumber(employee.serial) },
+                { label: 'كود الموظف', value: employee.code },
+                { label: 'المسمى الوظيفي', value: employee.jobTitle },
+                { label: 'القطاع', value: employee.sector },
+                { label: 'المحافظة', value: employee.governorate },
+                { label: 'تاريخ الالتحاق', value: fmtDate(employee.joiningDate) },
+                { label: 'عدد الزيارات (يدوي)', value: fmtNumber(employee.visitCount) },
+                { label: 'زيارات مسجلة بالنظام', value: fmtNumber(visits.length) },
+                { label: 'ملاحظات عامة', value: employee.notes || '—' },
+              ]}
+            />
+          </Card>
+          <Card title="الحالة الحالية">
+            <div className="stat-grid stat-grid--tight">
+              <div className="stat stat--primary">
+                <div className="stat__top">
+                  <span className="stat__label">دقائق مفتوحة</span>
+                </div>
+                <div className="stat__value">{openMinutes.length}</div>
               </div>
-              <div>
-                <h3 className="section-title">ملخص التقييم</h3>
-                {monthlySummary ? (
-                  <div className="card" style={{ padding: 12 }}>
-                    <div className="row" style={{ justifyContent: 'space-between' }}>
-                      <strong style={{ fontSize: 13 }}>
-                        {latestMonthly ? monthLabel(latestMonthly.year, latestMonthly.month) : ''}
-                      </strong>
-                      <Badge tone={latestMonthly?.status === 'approved' ? 'success' : 'neutral'}>
-                        {latestMonthly?.status === 'approved' ? 'معتمد' : 'مسودة'}
-                      </Badge>
-                    </div>
-                    <div className="row mt-8" style={{ gap: 14 }}>
-                      <div>
-                        <div className="stat__value" style={{ fontSize: 22 }}>
-                          {monthlySummary.average === null ? '—' : monthlySummary.average.toFixed(2)}
-                        </div>
-                        <span className="small muted">المتوسط من {settings.ratingScale.max}</span>
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <ProgressBar
-                          value={((monthlySummary.average ?? 0) / settings.ratingScale.max) * 100}
-                          tone={monthlySummary.average === null ? 'neutral' : 'primary'}
-                        />
-                        <p className="small muted mt-8">
-                          مجموع الدرجات {fmtNumber(monthlySummary.sum)} ÷ {monthlySummary.count} معيار مسجل
-                        </p>
-                      </div>
-                    </div>
-                    {monthlySummary.missingCriteria.length ? (
-                      <Callout tone="warning" title="معايير غير مسجلة" icon="alert">
-                        {monthlySummary.missingCriteria
-                          .map((cid) => settings.evaluationCriteria.find((c) => c.id === cid)?.name ?? cid)
-                          .join('، ')}
-                      </Callout>
-                    ) : null}
-                    <div className="mt-12">
-                      <Button size="sm" icon="evaluations" onClick={() => navigate(`/evaluations?employee=${employee.id}`)}>
-                        إدارة التقييمات
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="small muted">لا يوجد تقييم شهري مسجل بعد.</p>
-                )}
-
-                <h3 className="section-title">مؤشرات تشغيلية</h3>
-                <MetricRow label="دقائق مسجلة" value={fmtNumber(stats.minutesTotal)} />
-                <MetricRow label="دقائق تجاوزت المهلة" value={fmtNumber(stats.minutesBreached)} tone={stats.minutesBreached ? 'danger' : undefined} />
-                <MetricRow label="تقارير أعيدت للتصحيح" value={fmtNumber(stats.returnedReports)} tone={stats.returnedReports ? 'warning' : undefined} />
-                <MetricRow label="مهام معلقة في الزيارات" value={fmtNumber(stats.pendingActions)} />
-                <MetricRow label="ملاحظات تمت معالجتها" value={fmtNumber(stats.observationsResolved)} tone="success" />
-                <MetricRow
-                  label="التقييم السنوي"
-                  value={
-                    stats.annualSummary?.average != null
-                      ? `${fmtDecimal(stats.annualSummary.average)} / ${settings.ratingScale.max} (${stats.annual?.year})`
-                      : 'لا يوجد'
-                  }
-                />
+              <div className="stat stat--danger">
+                <div className="stat__top">
+                  <span className="stat__label">دقائق متأخرة</span>
+                </div>
+                <div className="stat__value">{overdueMinutes.length}</div>
+              </div>
+              <div className="stat stat--info">
+                <div className="stat__top">
+                  <span className="stat__label">تقارير معلّقة</span>
+                </div>
+                <div className="stat__value">{pendingReports.length}</div>
+              </div>
+              <div className="stat stat--warning">
+                <div className="stat__top">
+                  <span className="stat__label">ملاحظات مفتوحة</span>
+                </div>
+                <div className="stat__value">{observations.filter((row) => row.status === 'open').length}</div>
               </div>
             </div>
-          ) : null}
-
-          {tab === 'minutes' ? (
-            stats.minutes.length ? (
-              <MinutesTable minutes={stats.minutes} showEmployee={false} />
-            ) : (
-              <EmptyState icon="minutes" title="لا توجد دقائق صرف" description="أضف دقيقة صرف جديدة من شاشة دقائق الصرف." />
-            )
-          ) : null}
-
-          {tab === 'visits' ? (
-            stats.visits.length ? (
-              <div className="stack">
-                <VisitsTable visits={stats.visits} showEmployee={false} />
-                <div>
-                  <h3 className="section-title">دورات المراجعة لكل زيارة</h3>
-                  {stats.visits.map((visit) => (
-                    <div className="cycle-card" key={visit.id}>
-                      <div className="cycle-card__head">
-                        <span className="cycle-card__title">
-                          {visit.refNo} — {visit.clientRef}
-                        </span>
-                        <span className="small muted">{fmtDate(visit.visitDate)}</span>
-                      </div>
-                      {visit.reviewCycles?.length ? (
-                        <ul className="timeline">
-                          {visit.reviewCycles.map((cycle) => (
-                            <li className="timeline__item" key={cycle.id}>
-                              <span className={`timeline__marker ${cycle.reviewedAt ? 'timeline__marker--done' : 'timeline__marker--muted'}`} />
-                              <div>
-                                <div className="timeline__title">دورة #{cycle.cycleNo}</div>
-                                <div className="timeline__meta">
-                                  تسليم: {cycle.submittedAt ? fmtDate(cycle.submittedAt) : '—'} · مراجعة:{' '}
-                                  {cycle.reviewedAt ? fmtDate(cycle.reviewedAt) : '—'} · تصحيحات:{' '}
-                                  {cycle.correctionsRequestedAt ? fmtDate(cycle.correctionsRequestedAt) : '—'} · الجودة:{' '}
-                                  {cycle.qualityScore ?? '—'}
-                                </div>
-                                {cycle.feedback ? <div className="small mt-8">{cycle.feedback}</div> : null}
-                              </div>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="small muted">لا توجد دورات مسجلة.</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <EmptyState icon="visits" title="لا توجد زيارات ميدانية" description="سجّل زيارة من شاشة الزيارات والتقارير." />
-            )
-          ) : null}
-
-          {tab === 'observations' ? (
-            stats.observations.length ? (
-              <div className="stack">
-                <ObservationsTable observations={stats.observations} showEmployee={false} onOpen={(o) => setSelectedObservation(o.id)} />
-                {observation ? (
-                  <Card title="تفاصيل الملاحظة" subtitle={observation.refNo}>
-                    <ObservationDetails observation={observation} />
-                  </Card>
-                ) : null}
-              </div>
-            ) : (
-              <EmptyState icon="observations" title="لا توجد ملاحظات" description="سجّل ملاحظة من سجل الملاحظات لربطها بهذا الموظف." />
-            )
-          ) : null}
-
-          {tab === 'evaluations' ? (
-            stats.evaluations.length ? (
-              <div className="stack">
-                <EvaluationsTable evaluations={stats.evaluations} />
-                <Card title="سجل التقييمات الشهرية" subtitle="المتوسط لكل شهر — بلا أوزان أو معادلات رسمية">
-                  <TableWrap>
-                    <Table className="table--compact">
-                      <thead>
-                        <tr>
-                          <th>الشهر</th>
-                          <th>مجموع الدرجات</th>
-                          <th>المعايير المسجلة</th>
-                          <th>المتوسط</th>
-                          <th>الحالة</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {stats.monthlyAverages.map((row) => {
-                          const evaluation = stats.evaluations.find(
-                            (e: Evaluation) => e.periodType === 'monthly' && e.year === row.year && e.month === row.month,
-                          );
-                          const summary = evaluation
-                            ? summarizeScores(evaluation.scores, settings.evaluationCriteria, settings.ratingScale.max)
-                            : null;
-                          return (
-                            <tr key={`${row.year}-${row.month}`}>
-                              <td>{monthLabel(row.year, row.month)}</td>
-                              <td className="num">{summary ? fmtNumber(summary.sum) : '—'}</td>
-                              <td className="num">
-                                {summary ? `${summary.count} / ${settings.evaluationCriteria.filter((c) => c.active).length}` : '—'}
-                              </td>
-                              <td className="num">{row.average === null ? '—' : row.average.toFixed(2)}</td>
-                              <td>{evaluation?.status === 'approved' ? <Badge tone="success">معتمد</Badge> : <Badge tone="neutral">مسودة</Badge>}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </Table>
-                  </TableWrap>
-                </Card>
-              </div>
-            ) : (
-              <EmptyState icon="evaluations" title="لا توجد تقييمات" description="أنشئ تقييمًا شهريًا من شاشة التقييمات." />
-            )
-          ) : null}
-
-          {tab === 'history' ? (
-            history.length ? (
-              <ul className="timeline">
-                {history.map((entry, index) => (
-                  <li className="timeline__item" key={`${entry.at}-${index}`}>
-                    <span className="timeline__marker timeline__marker--done" />
-                    <div>
-                      <div className="timeline__title">{entry.summary}</div>
-                      <div className="timeline__meta">{fmtDateTime(entry.at)}</div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <EmptyState icon="history" title="لا توجد تغييرات مسجلة" description="يُسجّل النظام كل إضافة أو تعديل أو أرشفة في سجل التغييرات." />
-            )
-          ) : null}
+            <Callout tone="info" title="آخر تقييم">
+              {evaluations.length
+                ? (() => {
+                    const latest = [...evaluations].sort(
+                      (a, b) => (a.year === b.year ? (b.month ?? 13) - (a.month ?? 13) : b.year - a.year),
+                    )[0];
+                    const summary = summarizeScores(latest.scores);
+                    return `${monthLabel(latest.year, latest.month)} — المجموع ${summary.sum} من ${summary.count} معيارًا مسجلًا، المتوسط ${fmtAvg(summary.average)}`;
+                  })()
+                : 'لا يوجد تقييم مسجل بعد.'}
+            </Callout>
+          </Card>
         </div>
-      </Card>
+      ) : null}
 
-      <EmployeeForm open={editOpen} employee={employee as Employee} onClose={() => setEditOpen(false)} />
+      {tab === 'minutes' ? (
+        <Card
+          title="دقائق الصرف"
+          subtitle={countNoun(minutes.length, NOUNS.minute)}
+          padded={false}
+          actions={<Button size="sm" onClick={() => navigate('/minutes')}>إدارة الدقائق</Button>}
+        >
+          {minutes.length ? (
+            <TableWrap>
+              <Table>
+                <thead>
+                  <tr>
+                    <th>المرجع</th>
+                    <th>الفرع / العميل</th>
+                    <th>الورود</th>
+                    <th>طلب الملف</th>
+                    <th>استلام الملف</th>
+                    <th>بدء المراجعة</th>
+                    <th>الرد النهائي</th>
+                    <th>انتظار الملف</th>
+                    <th>زمن المراجعة</th>
+                    <th>الحالة</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {minutes.map((row) => {
+                    const state = minuteState(row, settings.deadlineMinutes);
+                    return (
+                      <tr key={row.id}>
+                        <td className="mono">{row.refNo}</td>
+                        <td>{row.branchRef}</td>
+                        <td>{fmtDateTime(row.receivedAt)}</td>
+                        <td>{fmtDateTime(row.fileRequestedAt)}</td>
+                        <td>{fmtDateTime(row.fileReceivedAt)}</td>
+                        <td>{fmtDateTime(row.reviewStartedAt)}</td>
+                        <td>{fmtDateTime(row.finalResponseAt)}</td>
+                        <td>{fmtDurationShort(state.waitingMinutes)}</td>
+                        <td>
+                          {fmtDurationShort(state.reviewMinutes)}{' '}
+                          {state.overdue ? <Badge tone="danger">تجاوز +{fmtDurationShort(state.overdueBy)}</Badge> : null}
+                        </td>
+                        <td>
+                          <Badge tone={row.status === 'completed' ? 'success' : row.status === 'cancelled' ? 'neutral' : 'info'}>
+                            {MINUTE_STATUS_LABELS[row.status]}
+                          </Badge>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            </TableWrap>
+          ) : (
+            <EmptyState icon="minutes" title="لا دقائق مسجلة" description="سجّل دقائق الصرف من صفحة دقائق الصرف." />
+          )}
+        </Card>
+      ) : null}
 
-      <ConfirmDialog
-        open={archiveOpen}
-        title="أرشفة الموظف"
-        message="سيتم أرشفة الموظف مع الاحتفاظ بكل سجلاته. يمكن استعادته من فلتر «المؤرشفون»."
-        confirmLabel="أرشفة"
-        onCancel={() => setArchiveOpen(false)}
-        onConfirm={() => {
-          setArchiveOpen(false);
-          void runAction(() => softDeleteEmployee(employee.id), 'تمت أرشفة الموظف.').then(() => navigate('/employees'));
-        }}
-      />
+      {tab === 'visits' ? (
+        <Card title="الزيارات ومراجعة التقارير" subtitle={countNoun(visits.length, NOUNS.visit)} padded={false}>
+          {visits.length ? (
+            <TableWrap>
+              <Table>
+                <thead>
+                  <tr>
+                    <th>المرجع</th>
+                    <th>الفرع / العميل</th>
+                    <th>التحرك</th>
+                    <th>الوصول</th>
+                    <th>الإتمام</th>
+                    <th>العودة</th>
+                    <th>تسليم التقرير</th>
+                    <th>مراجعة التقرير</th>
+                    <th>البريد النهائي</th>
+                    <th>دورات المراجعة</th>
+                    <th>الحالة</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visits.map((row) => {
+                    const state = visitState(row, settings.deadlineMinutes);
+                    return (
+                      <tr key={row.id}>
+                        <td className="mono">{row.refNo}</td>
+                        <td>{row.branchRef}</td>
+                        <td>{fmtDateTime(row.departureAt)}</td>
+                        <td>{fmtDateTime(row.arrivalAt)}</td>
+                        <td>{fmtDateTime(row.completedAt)}</td>
+                        <td>{fmtDateTime(row.returnAt)}</td>
+                        <td>{fmtDateTime(row.reportSubmittedAt)}</td>
+                        <td>{fmtDateTime(row.reportReviewedAt)}</td>
+                        <td>{fmtDateTime(row.finalEmailAt)}</td>
+                        <td className="num">{state.cycles}</td>
+                        <td>
+                          <Badge tone={row.status === 'completed' ? 'success' : row.status === 'cancelled' ? 'neutral' : 'info'}>
+                            {VISIT_STATUS_LABELS[row.status]}
+                          </Badge>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            </TableWrap>
+          ) : (
+            <EmptyState icon="visits" title="لا زيارات مسجلة" description="سجّل الزيارات من صفحة الزيارات والتقارير." />
+          )}
+        </Card>
+      ) : null}
+
+      {tab === 'observations' ? (
+        <Card
+          title="ملاحظات الموظف"
+          subtitle="كل ملاحظة مؤرَّخة. استخدم عوامل التصفية للوصول إلى فترة أو نوع أو حالة محددة."
+          actions={
+            <Button size="sm" variant="primary" icon="plus" onClick={() => startObservation()}>
+              ملاحظة
+            </Button>
+          }
+        >
+          <div className="toolbar">
+            <Select value={obsType} onChange={(e) => setObsType(e.target.value)} aria-label="نوع الملاحظة">
+              <option value="all">كل الأنواع</option>
+              {Array.from(new Set([...settings.observationTypes, ...observations.map((row) => row.type)])).map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
+            </Select>
+            <Select value={obsStatus} onChange={(e) => setObsStatus(e.target.value)} aria-label="حالة الملاحظة">
+              <option value="all">كل الحالات</option>
+              <option value="open">مفتوحة</option>
+              <option value="closed">مغلقة</option>
+            </Select>
+            <Input type="date" value={obsFrom} onChange={(e) => setObsFrom(e.target.value)} aria-label="من تاريخ" />
+            <Input type="date" value={obsTo} onChange={(e) => setObsTo(e.target.value)} aria-label="إلى تاريخ" />
+            <Button
+              size="sm"
+              onClick={() => {
+                setObsType('all');
+                setObsStatus('all');
+                setObsFrom('');
+                setObsTo('');
+              }}
+            >
+              مسح التصفية
+            </Button>
+          </div>
+
+          {filteredObservations.length ? (
+            <TableWrap>
+              <Table>
+                <thead>
+                  <tr>
+                    <th>التاريخ</th>
+                    <th>النوع</th>
+                    <th>الملاحظة</th>
+                    <th>الحالة</th>
+                    <th>المعالجة</th>
+                    <th>إجراءات</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredObservations.map((row) => (
+                    <tr key={row.id}>
+                      <td>{fmtDate(row.date)}</td>
+                      <td>
+                        <Badge tone="info">{row.type}</Badge>
+                      </td>
+                      <td className="wrap">{row.text}</td>
+                      <td>
+                        <Badge tone={row.status === 'open' ? 'warning' : 'success'}>{OBSERVATION_STATUS_LABELS[row.status]}</Badge>
+                      </td>
+                      <td className="wrap small">{row.resolution || '—'}</td>
+                      <td className="cell-actions">
+                        <IconButton icon="edit" label="تعديل" onClick={() => startObservation(row)} />
+                        <IconButton
+                          icon="trash"
+                          label="حذف"
+                          variant="danger"
+                          onClick={() => runAction(() => deleteObservation(row.id), 'تم حذف الملاحظة.')}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableWrap>
+          ) : (
+            <EmptyState icon="observations" title="لا ملاحظات مطابقة" description="أضف ملاحظة جديدة أو عدّل عوامل التصفية." />
+          )}
+        </Card>
+      ) : null}
+
+      {tab === 'evaluations' ? (
+        <Card
+          title="التقييمات"
+          subtitle="تقييم شهري وسنوي على 8 معايير، كل معيار من 1 إلى 5."
+          padded={false}
+          actions={<Button size="sm" onClick={() => navigate('/evaluations')}>إدارة التقييمات</Button>}
+        >
+          {evaluations.length ? (
+            <TableWrap>
+              <Table>
+                <thead>
+                  <tr>
+                    <th>الفترة</th>
+                    <th>النوع</th>
+                    {EVALUATION_CRITERIA.map((criterion, index) => (
+                      <th key={criterion.id} title={criterion.name}>
+                        م{index + 1}
+                      </th>
+                    ))}
+                    <th>المجموع</th>
+                    <th>المتوسط</th>
+                    <th>تعليق عام</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {evaluations.map((row) => {
+                    const summary = summarizeScores(row.scores);
+                    return (
+                      <tr key={row.id}>
+                        <td>{monthLabel(row.year, row.month)}</td>
+                        <td>{row.periodType === 'monthly' ? 'شهري' : 'سنوي'}</td>
+                        {EVALUATION_CRITERIA.map((criterion) => (
+                          <td key={criterion.id} className="num">
+                            {row.scores?.[criterion.id] ?? '—'}
+                          </td>
+                        ))}
+                        <td className="num">
+                          {summary.sum} / {summary.count}
+                        </td>
+                        <td className="num">{fmtAvg(summary.average)}</td>
+                        <td className="wrap small">{row.overallComment || '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            </TableWrap>
+          ) : (
+            <EmptyState icon="evaluations" title="لا تقييمات مسجلة" description="أضف تقييمًا شهريًا من صفحة التقييمات." />
+          )}
+        </Card>
+      ) : null}
+
+      <Modal
+        open={Boolean(draft)}
+        onClose={() => setDraft(null)}
+        title={draft?.id ? 'تعديل ملاحظة' : 'ملاحظة جديدة'}
+        subtitle={employee.name}
+        footer={
+          <>
+            <Button onClick={() => setDraft(null)}>إلغاء</Button>
+            <Button variant="primary" icon="save" onClick={submitObservation}>
+              حفظ
+            </Button>
+          </>
+        }
+      >
+        {draft ? (
+          <div className="form-grid">
+            <Field label="التاريخ" required error={errors.date} htmlFor="obs-date">
+              <Input id="obs-date" type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} />
+            </Field>
+            <Field label="النوع" required error={errors.type} htmlFor="obs-type">
+              <Input
+                id="obs-type"
+                list="obs-types"
+                value={draft.type}
+                onChange={(e) => setDraft({ ...draft, type: e.target.value })}
+              />
+              <datalist id="obs-types">
+                {settings.observationTypes.map((type) => (
+                  <option key={type} value={type} />
+                ))}
+              </datalist>
+            </Field>
+            <Field label="نص الملاحظة" required error={errors.text} htmlFor="obs-text" className="span-2">
+              <Textarea id="obs-text" rows={3} value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} />
+            </Field>
+            <Field label="الحالة" htmlFor="obs-status">
+              <Select
+                id="obs-status"
+                value={draft.status}
+                onChange={(e) => setDraft({ ...draft, status: e.target.value as 'open' | 'closed' })}
+              >
+                <option value="open">مفتوحة</option>
+                <option value="closed">مغلقة</option>
+              </Select>
+            </Field>
+            <Field label="المعالجة" htmlFor="obs-resolution">
+              <Input
+                id="obs-resolution"
+                value={draft.resolution}
+                onChange={(e) => setDraft({ ...draft, resolution: e.target.value })}
+              />
+            </Field>
+          </div>
+        ) : null}
+      </Modal>
     </>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  hint,
-  tone,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  tone?: 'danger' | 'warning';
-}) {
-  return (
-    <div className={`stat stat--${tone ?? 'primary'}`}>
-      <span className="stat__label">{label}</span>
-      <div className="stat__value" style={{ fontSize: 20 }}>
-        {value}
-      </div>
-      {hint ? <span className="stat__hint">{hint}</span> : null}
-    </div>
   );
 }

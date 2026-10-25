@@ -1,406 +1,389 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useApp, useVisibleData } from '../state/store';
-import { navigate, useRoute } from '../state/router';
-import { restoreMinute, softDeleteMinute } from '../db/repo';
-import type { DisbursementMinute } from '../db/schema';
-import { MINUTE_OUTCOME_LABELS } from '../db/schema';
-import { computeMinuteTimings, summarizeMinutes, type SlaStatus } from '../lib/minuteCalc';
-import { calendarFromSettings } from '../lib/analytics';
-import { fmtDateTime, fmtDurationShort, fmtMinutes, fmtNumber, fmtPercent } from '../lib/format';
+import { useMemo, useState } from 'react';
+import { useApp } from '../state/store';
+import { useRoute } from '../state/router';
 import {
   Badge,
   Button,
   Callout,
   Card,
-  ConfirmDialog,
   EmptyState,
+  Field,
   IconButton,
+  Input,
   Modal,
   PageHeader,
   SearchInput,
   Select,
-  StatCard,
   Table,
   TableWrap,
-  DefinitionList,
+  Tabs,
+  Textarea,
 } from '../components/ui';
-import { SlaBadge, useLookups } from '../components/domain';
-import { MinuteForm } from '../components/forms/MinuteForm';
+import { ValidationError, deleteMinute, saveMinute } from '../db/repo';
+import { MINUTE_STATUS_LABELS, type Minute, type MinuteStatus } from '../db/schema';
+import {
+  fmtDateTime,
+  fmtDurationShort,
+  fromDateTimeInputValue,
+  nowDateTimeInputValue,
+  toDateInputValue,
+  toDateTimeInputValue,
+} from '../lib/format';
+import { MINUTE_FLAG_LABELS, matchMinuteFlag, minuteState, type MinuteFlag } from '../lib/tracking';
 
-const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'all', label: 'الكل' },
-  { value: 'pending', label: 'قيد التنفيذ' },
-  { value: 'overdue', label: 'متأخرة' },
-  { value: 'warning', label: 'قاربت المهلة' },
-  { value: 'breached', label: 'تجاوزت المهلة' },
-  { value: 'closed', label: 'مغلقة' },
-];
+interface Draft {
+  id?: string;
+  employeeId: string;
+  branchRef: string;
+  receivedAt: string;
+  fileRequestedAt: string;
+  fileReceivedAt: string;
+  reviewStartedAt: string;
+  finalResponseAt: string;
+  status: MinuteStatus;
+  observations: string;
+  delayReason: string;
+}
+
+const FLAGS: MinuteFlag[] = ['all', 'file_not_requested', 'waiting_file', 'review_not_started', 'pending_response', 'overdue', 'completed'];
+
+const emptyDraft = (): Draft => ({
+  employeeId: '',
+  branchRef: '',
+  receivedAt: nowDateTimeInputValue(),
+  fileRequestedAt: '',
+  fileReceivedAt: '',
+  reviewStartedAt: '',
+  finalResponseAt: '',
+  status: 'open',
+  observations: '',
+  delayReason: '',
+});
 
 export function MinutesPage() {
-  const { settings, runAction } = useApp();
-  const data = useVisibleData();
-  const lookups = useLookups();
   const route = useRoute();
-
-  const [search, setSearch] = useState(route.query.get('q') ?? '');
-  const [status, setStatus] = useState(route.query.get('status') ?? 'all');
+  const { data, settings, runAction } = useApp();
+  const initialFlag = (route.query.get('flag') as MinuteFlag | null) ?? 'all';
+  const [flag, setFlag] = useState<MinuteFlag>(FLAGS.includes(initialFlag) ? initialFlag : 'all');
   const [employee, setEmployee] = useState(route.query.get('employee') ?? 'all');
-  const [branch, setBranch] = useState(route.query.get('branch') ?? 'all');
-  const [from, setFrom] = useState(route.query.get('from') ?? '');
-  const [to, setTo] = useState(route.query.get('to') ?? '');
-  const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<DisbursementMinute | null>(null);
-  const [detail, setDetail] = useState<DisbursementMinute | null>(null);
-  const [archiveTarget, setArchiveTarget] = useState<DisbursementMinute | null>(null);
-  const [showArchived, setShowArchived] = useState(false);
+  const [query, setQuery] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<Minute | null>(null);
 
-  useEffect(() => {
-    if (route.query.get('new') === '1') {
-      setEditing(null);
-      setFormOpen(true);
-    }
-    const qStatus = route.query.get('status');
-    if (qStatus) setStatus(qStatus);
-    const qBranch = route.query.get('branch');
-    if (qBranch) setBranch(qBranch);
-    const qEmployee = route.query.get('employee');
-    if (qEmployee) setEmployee(qEmployee);
-  }, [route.query]);
+  const employees = data.employees.filter((row) => !row.archived);
+  const nameOf = (id: string | null) => data.employees.find((row) => row.id === id)?.name ?? '—';
 
-  const calendar = useMemo(() => calendarFromSettings(settings), [settings]);
-  const source = showArchived ? data.archivedMinutes : data.minutes;
-
-  const timings = useMemo(() => {
-    const map = new Map<string, ReturnType<typeof computeMinuteTimings>>();
-    for (const minute of source) {
-      map.set(minute.id, computeMinuteTimings(minute, calendar, settings.minutesDeadlineMinutes, settings.deadlineWarnPercent));
+  const counts = useMemo(() => {
+    const map = {} as Record<MinuteFlag, number>;
+    for (const item of FLAGS) {
+      map[item] = data.minutes.filter((row) => matchMinuteFlag(minuteState(row, settings.deadlineMinutes), item)).length;
     }
     return map;
-  }, [source, calendar, settings]);
+  }, [data.minutes, settings.deadlineMinutes]);
 
-  const filtered = useMemo(() => {
-    return source
-      .filter((minute) => {
-        const timing = timings.get(minute.id);
-        if (status === 'pending') return timing && !timing.isClosed && timing.slaStatus !== 'na';
-        if (status === 'overdue') return timing?.slaStatus === 'overdue';
-        if (status === 'warning') return timing?.slaStatus === 'warning';
-        if (status === 'breached') return timing?.slaStatus === 'breached';
-        if (status === 'closed') return timing?.isClosed;
-        return true;
-      })
-      .filter((minute) => (employee === 'all' ? true : minute.employeeId === employee))
-      .filter((minute) => (branch === 'all' ? true : minute.branchId === branch))
-      .filter((minute) => (from ? minute.receivedAt.slice(0, 10) >= from : true))
-      .filter((minute) => (to ? minute.receivedAt.slice(0, 10) <= to : true))
-      .filter((minute) => {
-        const needle = search.trim().toLowerCase();
-        if (!needle) return true;
-        return [
-          minute.refNo,
-          minute.clientRef,
-          minute.financingType,
-          minute.notes,
-          lookups.employeeName(minute.employeeId),
-          lookups.branchName(minute.branchId),
-        ]
-          .join(' ')
-          .toLowerCase()
-          .includes(needle);
-      });
-  }, [source, timings, status, employee, branch, from, to, search, lookups]);
+  const rows = useMemo(() => {
+    const text = query.trim().toLowerCase();
+    return data.minutes
+      .filter((row) => matchMinuteFlag(minuteState(row, settings.deadlineMinutes), flag))
+      .filter((row) => (employee === 'all' ? true : row.employeeId === employee))
+      .filter((row) => (from ? row.receivedAt.slice(0, 10) >= from : true))
+      .filter((row) => (to ? row.receivedAt.slice(0, 10) <= to : true))
+      .filter((row) =>
+        !text ? true : `${row.refNo} ${row.branchRef} ${row.observations} ${row.delayReason}`.toLowerCase().includes(text),
+      )
+      .sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
+  }, [data.minutes, flag, employee, from, to, query, settings.deadlineMinutes]);
 
-  const summary = useMemo(
-    () => summarizeMinutes(filtered.map((minute) => timings.get(minute.id)!).filter(Boolean)),
-    [filtered, timings],
-  );
-
-  const openNew = () => {
-    setEditing(null);
-    setFormOpen(true);
+  const startNew = () => {
+    setErrors({});
+    setDraft({ ...emptyDraft(), employeeId: employees[0]?.id ?? '' });
   };
 
-  const resetFilters = () => {
-    setSearch('');
-    setStatus('all');
-    setEmployee('all');
-    setBranch('all');
-    setFrom('');
-    setTo('');
-    navigate('/minutes', { replace: true });
+  const startEdit = (minute: Minute) => {
+    setErrors({});
+    setDraft({
+      id: minute.id,
+      employeeId: minute.employeeId ?? '',
+      branchRef: minute.branchRef,
+      receivedAt: toDateTimeInputValue(minute.receivedAt),
+      fileRequestedAt: toDateTimeInputValue(minute.fileRequestedAt),
+      fileReceivedAt: toDateTimeInputValue(minute.fileReceivedAt),
+      reviewStartedAt: toDateTimeInputValue(minute.reviewStartedAt),
+      finalResponseAt: toDateTimeInputValue(minute.finalResponseAt),
+      status: minute.status,
+      observations: minute.observations,
+      delayReason: minute.delayReason,
+    });
   };
 
-  const detailTimings = detail ? timings.get(detail.id) : null;
+  const submit = async () => {
+    if (!draft) return;
+    setSaving(true);
+    setErrors({});
+    try {
+      await runAction(
+        () =>
+          saveMinute({
+            id: draft.id,
+            employeeId: draft.employeeId || null,
+            branchRef: draft.branchRef,
+            receivedAt: fromDateTimeInputValue(draft.receivedAt) ?? '',
+            fileRequestedAt: fromDateTimeInputValue(draft.fileRequestedAt),
+            fileReceivedAt: fromDateTimeInputValue(draft.fileReceivedAt),
+            reviewStartedAt: fromDateTimeInputValue(draft.reviewStartedAt),
+            finalResponseAt: fromDateTimeInputValue(draft.finalResponseAt),
+            status: draft.status,
+            observations: draft.observations,
+            delayReason: draft.delayReason,
+          }),
+        draft.id ? 'تم تحديث دقيقة الصرف.' : 'تم تسجيل دقيقة الصرف.',
+      );
+      setDraft(null);
+    } catch (error) {
+      if (error instanceof ValidationError) setErrors(error.errors);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const draftPreview = useMemo(() => {
+    if (!draft) return null;
+    return minuteState(
+      {
+        id: 'preview',
+        createdAt: '',
+        updatedAt: '',
+        refNo: '—',
+        employeeId: draft.employeeId || null,
+        branchRef: draft.branchRef,
+        receivedAt: fromDateTimeInputValue(draft.receivedAt) ?? '',
+        fileRequestedAt: fromDateTimeInputValue(draft.fileRequestedAt),
+        fileReceivedAt: fromDateTimeInputValue(draft.fileReceivedAt),
+        reviewStartedAt: fromDateTimeInputValue(draft.reviewStartedAt),
+        finalResponseAt: fromDateTimeInputValue(draft.finalResponseAt),
+        status: draft.status,
+        observations: draft.observations,
+        delayReason: draft.delayReason,
+      },
+      settings.deadlineMinutes,
+    );
+  }, [draft, settings.deadlineMinutes]);
+
+  const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
 
   return (
     <>
       <PageHeader
-        title="دقائق الصرف اليومية"
-        description={`مراجعة دقائق الصرف مع حساب المهلة بأوقات العمل (${settings.minutesDeadlineMinutes} دقيقة) وفصل زمن الضابط عن زمن انتظار الفرع.`}
+        title="دقائق الصرف"
+        description={`مهلة المراجعة ${settings.deadlineMinutes} دقيقة — تُحسب المدد فقط من الأوقات المسجلة يدويًا.`}
         actions={
-          <>
-            <Button icon={showArchived ? 'list' : 'archive'} onClick={() => setShowArchived((v) => !v)}>
-              {showArchived ? 'العودة للسجلات النشطة' : 'الدقائق المؤرشفة'}
-            </Button>
-            <Button variant="primary" icon="plus" onClick={openNew}>
-              دقيقة جديدة
-            </Button>
-          </>
+          <Button variant="primary" icon="plus" onClick={startNew} disabled={!employees.length}>
+            تسجيل دقيقة
+          </Button>
         }
       />
 
-      {summary.overdue > 0 || summary.warning > 0 ? (
-        <Callout tone={summary.overdue > 0 ? 'danger' : 'warning'} title="تنبيه مواعيد نهائية" icon="clock">
-          {summary.overdue > 0 ? `${summary.overdue} دقيقة تجاوزت المهلة ولم تُغلق. ` : ''}
-          {summary.warning > 0 ? `${summary.warning} دقيقة اقتربت من المهلة.` : ''}
-        </Callout>
-      ) : null}
-
-      <div className="grid grid--stats mt-12">
-        <StatCard label="إجمالي النتائج" value={fmtNumber(summary.total)} hint={`${summary.closed} مغلقة`} icon="minutes" tone="primary" />
-        <StatCard label="قيد التنفيذ" value={fmtNumber(summary.pending)} hint={`${summary.overdue} متأخرة — ${summary.warning} قاربت المهلة`} icon="clock" tone={summary.overdue ? 'danger' : 'info'} onClick={() => setStatus('pending')} />
-        <StatCard label="نسبة الالتزام" value={summary.compliancePercent === null ? '—' : fmtPercent(summary.compliancePercent)} hint="من الدقائق المغلقة" icon="shield" tone="success" onClick={() => setStatus('closed')} />
-        <StatCard label="متوسط زمن الضابط" value={fmtMinutes(summary.avgOfficerMinutes)} hint={`انتظار الفرع: ${fmtMinutes(summary.avgWaitingMinutes)}`} icon="chart" tone="info" />
-      </div>
-
-      <div className="filter-bar mt-12">
-        <SearchInput value={search} onChange={setSearch} placeholder="بحث برقم الدقيقة أو مرجع العميل…" />
-        <span className="filter-bar__label">الحالة</span>
-        <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-          {STATUS_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </Select>
-        <span className="filter-bar__label">الضابط</span>
-        <Select value={employee} onChange={(e) => setEmployee(e.target.value)}>
-          <option value="all">الكل</option>
-          {data.employees.map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.fullName}
-            </option>
-          ))}
-        </Select>
-        <span className="filter-bar__label">الفرع</span>
-        <Select value={branch} onChange={(e) => setBranch(e.target.value)}>
-          <option value="all">الكل</option>
-          {data.branches.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </Select>
-        <span className="filter-bar__label">من تاريخ</span>
-        <input type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="من تاريخ" />
-        <span className="filter-bar__label">إلى</span>
-        <input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="إلى تاريخ" />
-        <Button size="sm" variant="ghost" onClick={resetFilters}>
-          تفريغ الفلاتر
-        </Button>
-        <span className="filter-count">{fmtNumber(filtered.length)} نتيجة</span>
-      </div>
+      <Tabs
+        tabs={FLAGS.map((item) => ({ id: item, label: MINUTE_FLAG_LABELS[item], count: counts[item] }))}
+        value={flag}
+        onChange={setFlag}
+      />
 
       <Card padded={false}>
-        {filtered.length ? (
-          <>
-            <TableWrap>
-              <Table className="table--compact">
-                <thead>
-                  <tr>
-                    <th>رقم الدقيقة</th>
-                    <th>الضابط</th>
-                    <th>الفرع</th>
-                    <th>مرجع العميل</th>
-                    <th>النتيجة</th>
-                    <th>الاستلام</th>
-                    <th>الموعد النهائي</th>
-                    <th>زمن الضابط</th>
-                    <th>انتظار الفرع</th>
-                    <th>الحالة</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((minute) => {
-                    const timing = timings.get(minute.id)!;
-                    return (
-                      <tr key={minute.id}>
-                        <td className="nowrap">
-                          <button type="button" className="link-btn" onClick={() => setDetail(minute)}>
-                            {minute.refNo}
-                          </button>
-                          <span className="table__sub">{minute.financingType}</span>
-                        </td>
-                        <td>{lookups.employeeName(minute.employeeId)}</td>
-                        <td>{lookups.branchName(minute.branchId)}</td>
-                        <td>{minute.clientRef}</td>
-                        <td>{MINUTE_OUTCOME_LABELS[minute.outcome]}</td>
-                        <td className="num nowrap">{fmtDateTime(minute.receivedAt)}</td>
-                        <td className="num nowrap">{timing.dueAt ? fmtDateTime(timing.dueAt) : '—'}</td>
-                        <td className="num nowrap">{fmtDurationShort(timing.officerMinutes)}</td>
-                        <td className="num nowrap">{fmtDurationShort(timing.waitingMinutes)}</td>
-                        <td>
-                          <SlaBadge status={timing.slaStatus} />
-                        </td>
-                        <td className="actions">
-                          <IconButton
-                            icon="edit"
-                            label="تعديل"
-                            onClick={() => {
-                              setEditing(minute);
-                              setFormOpen(true);
-                            }}
-                          />
-                          {showArchived ? (
-                            <IconButton
-                              icon="restore"
-                              label="استعادة"
-                              onClick={() => void runAction(() => restoreMinute(minute.id), 'تمت استعادة الدقيقة.')}
-                            />
-                          ) : (
-                            <IconButton icon="trash" label="أرشفة" variant="danger" onClick={() => setArchiveTarget(minute)} />
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </Table>
-            </TableWrap>
-          </>
+        <div className="toolbar">
+          <SearchInput value={query} onChange={setQuery} placeholder="بحث بالمرجع أو الفرع أو الملاحظات…" />
+          <Select value={employee} onChange={(e) => setEmployee(e.target.value)} aria-label="تصفية بالموظف">
+            <option value="all">كل الموظفين</option>
+            {data.employees.map((row) => (
+              <option key={row.id} value={row.id}>
+                {row.name}
+              </option>
+            ))}
+          </Select>
+          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="من تاريخ" />
+          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="إلى تاريخ" />
+          <span className="toolbar__count">{rows.length} دقيقة</span>
+        </div>
+
+        {rows.length ? (
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <th>المرجع</th>
+                  <th>الموظف</th>
+                  <th>الفرع / العميل</th>
+                  <th>ورود الدقيقة</th>
+                  <th>طلب الملف</th>
+                  <th>استلام الملف</th>
+                  <th>بدء المراجعة</th>
+                  <th>الرد النهائي</th>
+                  <th>انتظار الملف</th>
+                  <th>زمن المراجعة</th>
+                  <th>الإجمالي</th>
+                  <th>الحالة</th>
+                  <th>إجراءات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const state = minuteState(row, settings.deadlineMinutes);
+                  return (
+                    <tr key={row.id} className={state.overdue ? 'row--danger' : undefined}>
+                      <td className="mono">{row.refNo}</td>
+                      <td>{nameOf(row.employeeId)}</td>
+                      <td>{row.branchRef}</td>
+                      <td>{fmtDateTime(row.receivedAt)}</td>
+                      <td>{fmtDateTime(row.fileRequestedAt)}</td>
+                      <td>{fmtDateTime(row.fileReceivedAt)}</td>
+                      <td>{fmtDateTime(row.reviewStartedAt)}</td>
+                      <td>{fmtDateTime(row.finalResponseAt)}</td>
+                      <td>{fmtDurationShort(state.waitingMinutes)}</td>
+                      <td>{fmtDurationShort(state.reviewMinutes)}</td>
+                      <td>{fmtDurationShort(state.totalMinutes)}</td>
+                      <td>
+                        <div className="stack-sm">
+                          <Badge tone={row.status === 'completed' ? 'success' : row.status === 'cancelled' ? 'neutral' : 'info'}>
+                            {MINUTE_STATUS_LABELS[row.status]}
+                          </Badge>
+                          {state.overdue ? <Badge tone="danger">تجاوز +{fmtDurationShort(state.overdueBy)}</Badge> : null}
+                          {state.fileNotRequested ? <Badge tone="neutral">لم يُطلب الملف</Badge> : null}
+                          {state.waitingForFile ? <Badge tone="warning">بانتظار الملف</Badge> : null}
+                          {state.pendingFinalResponse ? <Badge tone="warning">بانتظار الرد</Badge> : null}
+                        </div>
+                        {row.delayReason ? <div className="small muted wrap">سبب التأخير: {row.delayReason}</div> : null}
+                      </td>
+                      <td className="cell-actions">
+                        <IconButton icon="edit" label="تعديل" onClick={() => startEdit(row)} />
+                        <IconButton icon="trash" label="حذف" variant="danger" onClick={() => setConfirmDelete(row)} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+          </TableWrap>
         ) : (
           <EmptyState
             icon="minutes"
-            title="لا توجد دقائق مطابقة"
-            description="جرّب تعديل الفلاتر أو أضف دقيقة صرف جديدة."
+            title="لا دقائق مطابقة"
+            description={data.minutes.length ? 'جرّب تغيير التصفية أو البحث.' : 'ابدأ بتسجيل أول دقيقة صرف.'}
             action={
-              <Button variant="primary" icon="plus" onClick={openNew}>
-                دقيقة جديدة
+              <Button variant="primary" icon="plus" onClick={startNew} disabled={!employees.length}>
+                تسجيل دقيقة
               </Button>
             }
           />
         )}
       </Card>
 
-      <MinuteForm
-        open={formOpen}
-        minute={editing}
-        onClose={() => {
-          setFormOpen(false);
-          setEditing(null);
-          if (route.query.get('new') === '1') navigate('/minutes', { replace: true });
-        }}
-      />
-
       <Modal
-        open={Boolean(detail)}
-        onClose={() => setDetail(null)}
-        title={detail ? `دقيقة الصرف ${detail.refNo}` : ''}
-        subtitle={detail ? `${detail.clientRef} — ${detail.financingType}` : ''}
+        open={Boolean(draft)}
+        onClose={() => setDraft(null)}
+        title={draft?.id ? 'تعديل دقيقة صرف' : 'تسجيل دقيقة صرف'}
+        subtitle="سجّل الأوقات كما حدثت فعلًا — تُحسب المدد والمهل تلقائيًا من هذه الأوقات فقط."
         size="lg"
         footer={
           <>
-            <Button
-              icon="edit"
-              onClick={() => {
-                setEditing(detail);
-                setDetail(null);
-                setFormOpen(true);
-              }}
-            >
-              تعديل
+            <Button onClick={() => setDraft(null)}>إلغاء</Button>
+            <Button variant="primary" icon="save" loading={saving} onClick={submit}>
+              حفظ
             </Button>
-            <Button onClick={() => setDetail(null)}>إغلاق</Button>
           </>
         }
       >
-        {detail ? (
-          <div className="stack">
-            <div className="row">
-              <SlaBadge status={(detailTimings?.slaStatus ?? 'na') as SlaStatus} />
-              <Badge tone="neutral">{MINUTE_OUTCOME_LABELS[detail.outcome]}</Badge>
-              <Badge tone="info">{lookups.employeeName(detail.employeeId)}</Badge>
-              <Badge tone="neutral">{lookups.branchName(detail.branchId)}</Badge>
-            </div>
-
-            <div className="summary-strip">
-              <div className="summary-strip__item">
-                <span>الزمن المنقضي</span>
-                <strong>{fmtMinutes(detailTimings?.elapsedMinutes ?? 0)}</strong>
+        {draft ? (
+          <div className="form-grid">
+            <Field label="الموظف المسؤول" required error={errors.employeeId} htmlFor="min-employee">
+              <Select id="min-employee" value={draft.employeeId} onChange={(e) => set('employeeId', e.target.value)}>
+                <option value="">— اختر —</option>
+                {employees.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.serial} — {row.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="الفرع / مرجع العميل" required error={errors.branchRef} htmlFor="min-branch">
+              <Input id="min-branch" value={draft.branchRef} onChange={(e) => set('branchRef', e.target.value)} />
+            </Field>
+            <Field label="وقت ورود الدقيقة" required error={errors.receivedAt} htmlFor="min-received">
+              <Input id="min-received" type="datetime-local" value={draft.receivedAt} onChange={(e) => set('receivedAt', e.target.value)} />
+            </Field>
+            <Field label="وقت طلب الملف" error={errors.fileRequestedAt} htmlFor="min-freq">
+              <Input id="min-freq" type="datetime-local" value={draft.fileRequestedAt} onChange={(e) => set('fileRequestedAt', e.target.value)} />
+            </Field>
+            <Field label="وقت استلام الملف" error={errors.fileReceivedAt} htmlFor="min-frec">
+              <Input id="min-frec" type="datetime-local" value={draft.fileReceivedAt} onChange={(e) => set('fileReceivedAt', e.target.value)} />
+            </Field>
+            <Field label="وقت بدء المراجعة" error={errors.reviewStartedAt} htmlFor="min-review">
+              <Input id="min-review" type="datetime-local" value={draft.reviewStartedAt} onChange={(e) => set('reviewStartedAt', e.target.value)} />
+            </Field>
+            <Field label="وقت الرد النهائي" error={errors.finalResponseAt} htmlFor="min-final">
+              <Input id="min-final" type="datetime-local" value={draft.finalResponseAt} onChange={(e) => set('finalResponseAt', e.target.value)} />
+            </Field>
+            <Field label="حالة الدقيقة" htmlFor="min-status">
+              <Select id="min-status" value={draft.status} onChange={(e) => set('status', e.target.value as MinuteStatus)}>
+                <option value="open">قيد المتابعة</option>
+                <option value="completed">مكتملة</option>
+                <option value="cancelled">ملغاة</option>
+              </Select>
+            </Field>
+            <Field label="سبب التأخير (إن وُجد)" htmlFor="min-delay" className="span-2">
+              <Input id="min-delay" value={draft.delayReason} onChange={(e) => set('delayReason', e.target.value)} />
+            </Field>
+            <Field label="ملاحظات" htmlFor="min-obs" className="span-2">
+              <Textarea id="min-obs" rows={2} value={draft.observations} onChange={(e) => set('observations', e.target.value)} />
+            </Field>
+            {draftPreview ? (
+              <div className="span-2">
+                <Callout tone={draftPreview.overdue ? 'danger' : 'info'} title="المدد المحسوبة">
+                  انتظار الملف: {fmtDurationShort(draftPreview.waitingMinutes)} · زمن المراجعة:{' '}
+                  {fmtDurationShort(draftPreview.reviewMinutes)} · الإجمالي من الورود:{' '}
+                  {fmtDurationShort(draftPreview.totalMinutes)}
+                  {draftPreview.overdue
+                    ? ` — تجاوز المهلة بمقدار ${fmtDurationShort(draftPreview.overdueBy)}`
+                    : draftPreview.isOpen
+                      ? ' — داخل المهلة حتى الآن'
+                      : ''}
+                </Callout>
               </div>
-              <div className="summary-strip__item">
-                <span>زمن معالجة الضابط</span>
-                <strong>{fmtMinutes(detailTimings?.officerMinutes ?? 0)}</strong>
-              </div>
-              <div className="summary-strip__item">
-                <span>زمن انتظار الفرع</span>
-                <strong>{fmtMinutes(detailTimings?.waitingMinutes ?? 0)}</strong>
-              </div>
-              <div className="summary-strip__item">
-                <span>الموعد النهائي</span>
-                <strong>{detailTimings?.dueAt ? fmtDateTime(detailTimings.dueAt) : '—'}</strong>
-              </div>
-              <div className="summary-strip__item">
-                <span>المتبقي</span>
-                <strong>{detailTimings && detailTimings.remainingMinutes > 0 ? fmtMinutes(detailTimings.remainingMinutes) : 'انتهت المهلة'}</strong>
-              </div>
-            </div>
-
-            <DefinitionList
-              items={[
-                { label: 'المبلغ', value: detail.amount === null ? '—' : fmtNumber(detail.amount) },
-                { label: 'وقت الاستلام', value: fmtDateTime(detail.receivedAt) },
-                { label: 'طلب الملف', value: detail.fileRequestedAt ? fmtDateTime(detail.fileRequestedAt) : '—' },
-                { label: 'استلام الملف', value: detail.fileReceivedAt ? fmtDateTime(detail.fileReceivedAt) : '—' },
-                { label: 'بدء المراجعة', value: detail.reviewStartedAt ? fmtDateTime(detail.reviewStartedAt) : '—' },
-                { label: 'طلب الاستيضاح', value: detail.clarificationRequestedAt ? fmtDateTime(detail.clarificationRequestedAt) : '—' },
-                { label: 'الرد على الاستيضاح', value: detail.clarificationRespondedAt ? fmtDateTime(detail.clarificationRespondedAt) : '—' },
-                { label: 'الرد النهائي', value: detail.finalResponseAt ? fmtDateTime(detail.finalResponseAt) : 'لم يُسجّل بعد' },
-                { label: 'ملاحظات', value: detail.notes || '—' },
-              ]}
-            />
-
-            <div>
-              <strong className="small">المسار الزمني</strong>
-              <ul className="timeline mt-8">
-                {[
-                  { label: 'استلام الدقيقة', value: detail.receivedAt },
-                  { label: 'طلب الملف', value: detail.fileRequestedAt },
-                  { label: 'استلام الملف', value: detail.fileReceivedAt },
-                  { label: 'بدء المراجعة', value: detail.reviewStartedAt },
-                  { label: 'طلب استيضاح', value: detail.clarificationRequestedAt },
-                  { label: 'رد الفرع على الاستيضاح', value: detail.clarificationRespondedAt },
-                  { label: 'الرد النهائي', value: detail.finalResponseAt },
-                ]
-                  .filter((step) => step.value)
-                  .map((step, index) => (
-                    <li className="timeline__item" key={`${step.label}-${index}`}>
-                      <span className="timeline__marker timeline__marker--done" />
-                      <div>
-                        <div className="timeline__title">{step.label}</div>
-                        <div className="timeline__meta">{fmtDateTime(step.value)}</div>
-                      </div>
-                    </li>
-                  ))}
-              </ul>
-            </div>
+            ) : null}
           </div>
         ) : null}
       </Modal>
 
-      <ConfirmDialog
-        open={Boolean(archiveTarget)}
-        title="أرشفة دقيقة الصرف"
-        message={`سيتم أرشفة ${archiveTarget?.refNo ?? ''} (حذف ناعم). يمكن استعادتها من زر «الدقائق المؤرشفة».`}
-        confirmLabel="أرشفة"
-        onCancel={() => setArchiveTarget(null)}
-        onConfirm={() => {
-          const target = archiveTarget;
-          setArchiveTarget(null);
-          if (target) void runAction(() => softDeleteMinute(target.id), 'تمت أرشفة الدقيقة.');
-        }}
-      />
+      <Modal
+        open={Boolean(confirmDelete)}
+        onClose={() => setConfirmDelete(null)}
+        title="حذف دقيقة صرف"
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setConfirmDelete(null)}>إلغاء</Button>
+            <Button
+              variant="danger"
+              icon="trash"
+              onClick={async () => {
+                if (!confirmDelete) return;
+                await runAction(() => deleteMinute(confirmDelete.id), 'تم حذف الدقيقة.');
+                setConfirmDelete(null);
+              }}
+            >
+              حذف
+            </Button>
+          </>
+        }
+      >
+        <p className="confirm-text">
+          سيتم حذف الدقيقة «{confirmDelete?.refNo}» المسجلة بتاريخ {confirmDelete ? toDateInputValue(confirmDelete.receivedAt) : ''}.
+          الملاحظات المرتبطة بها ستبقى في سجل الموظف دون ارتباط.
+        </p>
+      </Modal>
     </>
   );
 }

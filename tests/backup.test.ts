@@ -1,124 +1,71 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { useDatabase, wipeAllData, readSettings, countRecords } from '../src/db/database';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { clearStore, useDatabase } from '../src/db/database';
 import { createBackup, restoreBackup, validateBackup } from '../src/db/backup';
-import { listEmployees, saveBranch, saveEmployee, saveMinute, listMinutes } from '../src/db/repo';
-
-beforeAll(async () => {
-  await useDatabase('roms-test-backup');
-});
+import { listEmployees, listMinutes, nextSerial, saveEmployee, saveMinute } from '../src/db/repo';
+import { STORE_NAMES } from '../src/db/schema';
 
 beforeEach(async () => {
-  await wipeAllData();
+  await useDatabase(`test-backup-${Math.random().toString(36).slice(2)}`);
+  for (const store of STORE_NAMES) await clearStore(store);
 });
 
 async function seed() {
-  const branch = await saveBranch({ code: 'BR-B1', name: 'فرع النسخ', governorate: 'الجيزة' });
   const employee = await saveEmployee({
-    employeeCode: 'B-1',
-    fullName: 'موظف النسخ',
+    serial: await nextSerial(),
+    sector: 'قطاع الدلتا',
+    governorate: 'الغربية',
+    name: 'سارة علي',
+    code: 'RO-B1',
     jobTitle: 'ضابط مخاطر',
-    branchId: branch.id,
-    governorate: 'الجيزة',
-    hireDate: '2024-05-01',
-    status: 'active',
+    joiningDate: '2025-02-01T00:00:00.000Z',
+    visitCount: 2,
+    notes: '',
   });
-  await saveMinute({
-    employeeId: employee.id,
-    branchId: branch.id,
-    clientRef: 'CL-B1',
-    financingType: 'تمويل قائمة',
-    receivedAt: new Date().toISOString(),
-    status: 'completed',
-  });
-  return { branch, employee };
+  await saveMinute({ employeeId: employee.id, branchRef: 'فرع ب', receivedAt: '2026-10-01T08:00:00.000Z' });
+  return employee;
 }
 
-describe('النسخ الاحتياطي والاستعادة', () => {
-  it('يصدّر كل الكيانات مع الإعدادات والبصمة', async () => {
+describe('النسخ الاحتياطي', () => {
+  it('يصدّر كل الجداول مع عدد السجلات وبصمة تحقق', async () => {
     await seed();
     const backup = await createBackup();
-    expect(backup.app).toBe('risk-officer-management-system');
-    expect(backup.data.employees).toHaveLength(1);
-    expect(backup.data.branches).toHaveLength(1);
-    expect(backup.data.minutes).toHaveLength(1);
     expect(backup.counts.employees).toBe(1);
-    expect(backup.settings.minutesDeadlineMinutes).toBe(60);
+    expect(backup.counts.minutes).toBe(1);
+    expect(backup.counts.visits).toBe(0);
     expect(backup.checksum).toBeTruthy();
   });
 
-  it('يرفض ملفًا ليس من النظام', async () => {
-    const result = await validateBackup({ app: 'something-else', data: {} });
+  it('يرفض ملفًا من تطبيق آخر', async () => {
+    const result = await validateBackup({ app: 'other', formatVersion: 1, data: {} });
     expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toContain('ليس نسخة احتياطية');
+    expect(result.errors[0]).toContain('ليس نسخة احتياطية');
   });
 
-  it('يرفض نسخة ناقصة الأقسام أو بمعرّفات مكررة', async () => {
-    const missing = await validateBackup({ app: 'risk-officer-management-system', formatVersion: 1, data: { employees: [] } });
-    expect(missing.ok).toBe(false);
-
-    const duplicate = await validateBackup({
-      app: 'risk-officer-management-system',
-      formatVersion: 1,
-      data: {
-        employees: [{ id: 'x' }, { id: 'x' }],
-        branches: [],
-        minutes: [],
-        visits: [],
-        observations: [],
-        evaluations: [],
-      },
-    });
-    expect(duplicate.ok).toBe(false);
-    expect(duplicate.errors.join(' ')).toContain('مكرر');
-  });
-
-  it('يرفض ملفًا معدّلًا (بصمة غير مطابقة)', async () => {
+  it('يرفض نسخة معدّلة (بصمة غير مطابقة)', async () => {
     await seed();
     const backup = await createBackup();
-    const tampered = JSON.parse(JSON.stringify(backup));
-    tampered.data.employees[0].fullName = 'اسم معدّل';
-    const result = await validateBackup(tampered);
+    backup.data.employees[0].name = 'اسم معدّل';
+    const result = await validateBackup(backup);
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toContain('بصمة');
   });
 
-  it('يستعيد بنمط الاستبدال ويعيد البيانات والإعدادات', async () => {
+  it('يستعيد بالاستبدال الكامل', async () => {
     await seed();
     const backup = await createBackup();
-    await wipeAllData();
+    for (const store of STORE_NAMES) await clearStore(store);
     expect(await listEmployees()).toHaveLength(0);
-
     const result = await restoreBackup(backup, 'replace');
     expect(result.imported.employees).toBe(1);
     expect(await listEmployees()).toHaveLength(1);
-    expect((await readSettings()).organizationName).toBe(backup.settings.organizationName);
-    expect(result.safetyBackup).not.toBeNull();
-  });
-
-  it('يدمج النسخ دون حذف السجلات الحالية', async () => {
-    await seed();
-    const backup = await createBackup();
-    await saveEmployee({
-      employeeCode: 'B-2',
-      fullName: 'موظف إضافي',
-      jobTitle: 'ضابط مخاطر',
-      hireDate: '2024-06-01',
-      status: 'active',
-    });
-    expect(await listEmployees()).toHaveLength(2);
-
-    const result = await restoreBackup(backup, 'merge');
-    expect(result.imported.employees).toBe(0); // لا تغييرات (نفس التحديث)
-    expect(await listEmployees()).toHaveLength(2);
-  });
-
-  it('ينشئ نسخة أمان قبل الحذف الكامل', async () => {
-    await seed();
-    expect(await countRecords('employees')).toBe(1);
-    const backup = await createBackup();
-    await wipeAllData();
-    expect(await countRecords('employees')).toBe(0);
-    await restoreBackup(backup, 'replace');
     expect(await listMinutes()).toHaveLength(1);
+  });
+
+  it('يدمج دون تكرار السجلات', async () => {
+    await seed();
+    const backup = await createBackup();
+    const result = await restoreBackup(backup, 'merge');
+    expect(await listEmployees()).toHaveLength(1);
+    expect(result.safetyBackup.counts.employees).toBe(1);
   });
 });
