@@ -1,7 +1,20 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useApp } from '../state/store';
 import { navigate } from '../state/router';
-import { Badge, Button, Card, EmptyState, IconButton, PageHeader, Stat, Table, TableWrap } from '../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  IconButton,
+  PageHeader,
+  SearchInput,
+  Select,
+  Stat,
+  Table,
+  TableWrap,
+  Toolbar,
+} from '../components/ui';
 import {
   EMPLOYEE_STATUS_LABELS,
   EVALUATION_CRITERIA,
@@ -12,7 +25,7 @@ import {
   VISIT_STATUS_LABELS,
 } from '../db/schema';
 import { leaveTotals, minuteTiming, monthlyTotals, visitTiming } from '../lib/calc';
-import { fmtDate, fmtDurationWords, fmtNumber } from '../lib/format';
+import { fmtDate, fmtDurationWords, fmtNumber, monthName } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
 
 /**
@@ -27,17 +40,20 @@ import { downloadCsv, csvFileName } from '../lib/csv';
 export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
   const { data } = useApp();
 
+  // فلاتر سجلات هذا الموظف (الشهر / السنة / الفرع / بحث نصي) — لا تغيّر أي سجل محفوظ
+  const [query, setQuery] = useState('');
+  const [monthFilter, setMonthFilter] = useState('all');
+  const [yearFilter, setYearFilter] = useState('all');
+  const [branchFilter, setBranchFilter] = useState('all');
+
   const employee = data.employees.find((row) => row.id === employeeId);
 
-  const minutes = useMemo(
-    () =>
-      data.minutes
-        .filter((row) => row.employeeId === employeeId)
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+  const allMinutes = useMemo(
+    () => data.minutes.filter((row) => row.employeeId === employeeId),
     [data.minutes, employeeId],
   );
 
-  const visitTimings = useMemo(
+  const allVisitTimings = useMemo(
     () =>
       data.visitTimings
         .filter((row) => row.employeeId === employeeId)
@@ -49,6 +65,58 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
         }),
     [data.visitTimings, employeeId],
   );
+
+  const branches = useMemo(
+    () => Array.from(new Set(allVisitTimings.map((row) => row.branch).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ar')),
+    [allVisitTimings],
+  );
+
+  const years = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of allMinutes) set.add((row.date ?? row.createdAt.slice(0, 10)).slice(0, 4));
+    for (const row of allVisitTimings) if (row.visitDate) set.add(row.visitDate.slice(0, 4));
+    return Array.from(set)
+      .filter(Boolean)
+      .sort((a, b) => (a < b ? 1 : -1));
+  }, [allMinutes, allVisitTimings]);
+
+  const matchesPeriod = (isoDate: string) =>
+    (yearFilter === 'all' || isoDate.startsWith(yearFilter)) &&
+    (monthFilter === 'all' || Number(isoDate.slice(5, 7)) === Number(monthFilter));
+
+  const minutes = useMemo(() => {
+    const text = query.trim().toLowerCase();
+    return allMinutes
+      .filter((row) => matchesPeriod(row.date ?? row.createdAt.slice(0, 10)))
+      .filter((row) =>
+        !text
+          ? true
+          : `${row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : ''} ${row.responseTime ?? ''} ${row.fileReceivedTime ?? ''}`
+              .toLowerCase()
+              .includes(text),
+      )
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allMinutes, query, monthFilter, yearFilter]);
+
+  const visitTimings = useMemo(() => {
+    const text = query.trim().toLowerCase();
+    return allVisitTimings
+      .filter((row) => matchesPeriod(row.visitDate ?? ''))
+      .filter((row) => (branchFilter === 'all' ? true : row.branch === branchFilter))
+      .filter((row) =>
+        !text ? true : `${row.clientName} ${row.branch} ${row.location}`.toLowerCase().includes(text),
+      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allVisitTimings, query, monthFilter, yearFilter, branchFilter]);
+
+  const filtersActive = query !== '' || monthFilter !== 'all' || yearFilter !== 'all' || branchFilter !== 'all';
+  const resetFilters = () => {
+    setQuery('');
+    setMonthFilter('all');
+    setYearFilter('all');
+    setBranchFilter('all');
+  };
 
   const evaluations = useMemo(
     () =>
@@ -241,9 +309,42 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
         />
       </div>
 
+      <Card title="تصفية السجلات" subtitle="تُطبَّق على المحاضر والزيارات والمؤشرات أعلاه — لا تحذف أي سجل">
+        <Toolbar>
+          <SearchInput value={query} onChange={setQuery} placeholder="بحث بالعميل أو الفرع أو المكان…" />
+          <Select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} aria-label="الشهر">
+            <option value="all">كل الشهور</option>
+            {Array.from({ length: 12 }, (_, index) => index + 1).map((value) => (
+              <option key={value} value={value}>
+                {monthName(value)}
+              </option>
+            ))}
+          </Select>
+          <Select value={yearFilter} onChange={(e) => setYearFilter(e.target.value)} aria-label="السنة">
+            <option value="all">كل السنوات</option>
+            {years.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </Select>
+          <Select value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} aria-label="الفرع">
+            <option value="all">كل الفروع</option>
+            {branches.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </Select>
+          <Button size="sm" icon="restore" onClick={resetFilters} disabled={!filtersActive}>
+            إعادة تعيين
+          </Button>
+        </Toolbar>
+      </Card>
+
       <Card
         title="محاضر يومية"
-        subtitle={`كل المحاضر المسجلة باسم ${employee.name} — ${totals.minutesCount} محضر`}
+        subtitle={`محاضر ${employee.name} — ${totals.minutesCount} من ${allMinutes.length}`}
         padded={false}
       >
         {minutes.length ? (
@@ -295,13 +396,17 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
             </Table>
           </TableWrap>
         ) : (
-          <EmptyState icon="minutes" title="لا محاضر لهذا الموظف" description="سجّل المحاضر من قسم «محاضر يومية»." />
+          <EmptyState
+            icon="minutes"
+            title={filtersActive ? 'لا محاضر مطابقة للفلاتر' : 'لا محاضر لهذا الموظف'}
+            description={filtersActive ? 'جرّب تعديل الفلاتر أو إعادة تعيينها.' : 'سجّل المحاضر من قسم «محاضر يومية».'}
+          />
         )}
       </Card>
 
       <Card
         title="توقيت الزيارات"
-        subtitle={`كل الزيارات المسجلة باسم ${employee.name} — ${totals.visitsCount} زيارة`}
+        subtitle={`زيارات ${employee.name} — ${totals.visitsCount} من ${allVisitTimings.length}`}
         padded={false}
         actions={
           <span className="small muted">
@@ -348,7 +453,11 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
             </Table>
           </TableWrap>
         ) : (
-          <EmptyState icon="visits" title="لا زيارات لهذا الموظف" description="سجّل الزيارات من قسم «توقيت الزيارات»." />
+          <EmptyState
+            icon="visits"
+            title={filtersActive ? 'لا زيارات مطابقة للفلاتر' : 'لا زيارات لهذا الموظف'}
+            description={filtersActive ? 'جرّب تعديل الفلاتر أو إعادة تعيينها.' : 'سجّل الزيارات من قسم «توقيت الزيارات».'}
+          />
         )}
       </Card>
 

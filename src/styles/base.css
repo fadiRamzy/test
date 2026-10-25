@@ -749,3 +749,21 @@ textarea.cell--notes { min-height: 30px; height: 30px; resize: vertical; padding
 @media (max-width: 820px) {
   .topnav__backup { display: none; }
 }
+
+/* حقل «اسم العميل» في نموذج الزيارة — تمييز بصري هادئ (خلفية وحدود زرقاء فاتحة) */
+.input--client {
+  background: var(--brand-50);
+  border-color: #bcd4f6;
+  box-shadow: inset 3px 0 0 var(--brand-600);
+  font-weight: 600;
+}
+.input--client:hover { border-color: var(--brand-500); }
+.input--client:focus {
+  background: #fff;
+  border-color: var(--brand-600);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16), inset 3px 0 0 var(--brand-600);
+}
+@media print { .input--client { background: transparent !important; box-shadow: none !important; } }
+
+/* سطر يظهر عند إخفاء قائمة السجلات */
+.collapsed-note { padding: 16px 18px; text-align: center; border-top: 1px dashed var(--line); }

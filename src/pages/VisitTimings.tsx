@@ -61,6 +61,10 @@ export function VisitTimingsPage() {
   const { data, runAction } = useApp();
   const now = new Date();
   const [query, setQuery] = useState('');
+  const [showRecords, setShowRecords] = useState(false);
+  const [listEmployee, setListEmployee] = useState('all');
+  const [listBranch, setListBranch] = useState('all');
+  const [summaryBranch, setSummaryBranch] = useState('all');
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [year, setYear] = useState(now.getFullYear());
   const [employeeFilter, setEmployeeFilter] = useState('all');
@@ -81,25 +85,44 @@ export function VisitTimingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.visitTimings]);
 
+  const branches = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of data.visitTimings) if (row.branch) set.add(row.branch);
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ar'));
+  }, [data.visitTimings]);
+
   const rows = useMemo(() => {
     const text = query.trim().toLowerCase();
-    if (!text) return data.visitTimings;
-    return data.visitTimings.filter((row) =>
-      `${nameOf(row.employeeId)} ${row.branch} ${row.clientName} ${row.location}`.toLowerCase().includes(text),
-    );
+    return data.visitTimings
+      .filter((row) => (listEmployee === 'all' ? true : row.employeeId === listEmployee))
+      .filter((row) => (listBranch === 'all' ? true : row.branch === listBranch))
+      .filter((row) =>
+        !text ? true : `${nameOf(row.employeeId)} ${row.branch} ${row.clientName} ${row.location}`.toLowerCase().includes(text),
+      );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.visitTimings, data.employees, query]);
+  }, [data.visitTimings, data.employees, query, listEmployee, listBranch]);
+
+  const resetListFilters = () => {
+    setQuery('');
+    setListEmployee('all');
+    setListBranch('all');
+  };
+
+  const summarySource = useMemo(
+    () => (summaryBranch === 'all' ? data.visitTimings : data.visitTimings.filter((row) => row.branch === summaryBranch)),
+    [data.visitTimings, summaryBranch],
+  );
 
   const summaries = useMemo(
     () =>
       monthlyVisitSummary(
-        data.visitTimings,
+        summarySource,
         data.employees,
         year,
         month,
         employeeFilter === 'all' ? null : employeeFilter,
       ),
-    [data.visitTimings, data.employees, year, month, employeeFilter],
+    [summarySource, data.employees, year, month, employeeFilter],
   );
 
   const totals = useMemo(() => {
@@ -188,11 +211,47 @@ export function VisitTimingsPage() {
         </Card>
       ) : (
         <>
-          <Card padded={false} title="الزيارات المسجلة" subtitle={`${rows.length} زيارة`}>
+          <Card
+            padded={false}
+            title="الزيارات المسجلة"
+            subtitle={`${rows.length} زيارة`}
+            actions={
+              <Button
+                icon={showRecords ? 'close' : 'list'}
+                onClick={() => setShowRecords((value) => !value)}
+                aria-expanded={showRecords}
+                aria-controls="visits-records"
+              >
+                {showRecords ? 'إخفاء الزيارات' : 'إظهار الزيارات'}
+              </Button>
+            }
+          >
             <Toolbar>
               <SearchInput value={query} onChange={setQuery} placeholder="بحث بالموظف أو الفرع أو العميل…" />
+              <Select value={listEmployee} onChange={(e) => setListEmployee(e.target.value)} aria-label="الموظف في الزيارات">
+                <option value="all">كل الموظفين</option>
+                {data.employees.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.name}
+                  </option>
+                ))}
+              </Select>
+              <Select value={listBranch} onChange={(e) => setListBranch(e.target.value)} aria-label="الفرع في الزيارات">
+                <option value="all">كل الفروع</option>
+                {branches.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </Select>
+              <Button size="sm" icon="restore" onClick={resetListFilters} disabled={query === '' && listEmployee === 'all' && listBranch === 'all'}>
+                إعادة تعيين
+              </Button>
+              <span className="toolbar__spacer">{rows.length} زيارة</span>
             </Toolbar>
-            {rows.length ? (
+            {!showRecords ? (
+              <div className="collapsed-note small muted">قائمة الزيارات مخفية — اضغط «إظهار الزيارات» لعرضها.</div>
+            ) : rows.length ? (
               <TableWrap>
                 <Table>
                   <thead>
@@ -247,7 +306,14 @@ export function VisitTimingsPage() {
                 </Table>
               </TableWrap>
             ) : (
-              <EmptyState title="لا زيارات مسجلة" description="اضغط «إضافة زيارة» لتسجيل أول زيارة." />
+              <EmptyState
+                title={query || listEmployee !== 'all' || listBranch !== 'all' ? 'لا زيارات مطابقة للفلاتر' : 'لا زيارات مسجلة'}
+                description={
+                  query || listEmployee !== 'all' || listBranch !== 'all'
+                    ? 'جرّب تعديل الفلاتر أو إعادة تعيينها.'
+                    : 'اضغط «إضافة زيارة» لتسجيل أول زيارة.'
+                }
+              />
             )}
           </Card>
 
@@ -288,6 +354,25 @@ export function VisitTimingsPage() {
                   </option>
                 ))}
               </Select>
+              <Select value={summaryBranch} onChange={(e) => setSummaryBranch(e.target.value)} aria-label="فرع الملخص">
+                <option value="all">كل الفروع</option>
+                {branches.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </Select>
+              <Button
+                size="sm"
+                icon="restore"
+                disabled={employeeFilter === 'all' && summaryBranch === 'all'}
+                onClick={() => {
+                  setEmployeeFilter('all');
+                  setSummaryBranch('all');
+                }}
+              >
+                إعادة تعيين
+              </Button>
             </Toolbar>
 
             <div className="stats" data-testid="visit-month-totals">
@@ -401,7 +486,12 @@ export function VisitTimingsPage() {
               <Input id="vt-branch" value={draft.branch} onChange={(e) => set('branch', e.target.value)} />
             </Field>
             <Field label="اسم العميل" required error={errors.clientName} htmlFor="vt-client">
-              <Input id="vt-client" value={draft.clientName} onChange={(e) => set('clientName', e.target.value)} />
+              <Input
+                id="vt-client"
+                className="input--client"
+                value={draft.clientName}
+                onChange={(e) => set('clientName', e.target.value)}
+              />
             </Field>
             <Field label="مكان الزيارة" error={errors.location} htmlFor="vt-location">
               <Input id="vt-location" value={draft.location} onChange={(e) => set('location', e.target.value)} />

@@ -57,6 +57,7 @@ export function EmployeesPage() {
   const [sector, setSector] = useState('all');
   const [governorate, setGovernorate] = useState('all');
   const [status, setStatus] = useState('all');
+  const [branch, setBranch] = useState('all');
   const [showArchived, setShowArchived] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -70,14 +71,29 @@ export function EmployeesPage() {
       .filter((row) => (sector === 'all' ? true : row.sector === sector))
       .filter((row) => (governorate === 'all' ? true : row.governorate === governorate))
       .filter((row) => (status === 'all' ? true : row.status === status))
+      .filter((row) => (branch === 'all' ? true : row.branches.split(/[،,]/).map((item) => item.trim()).includes(branch)))
       .filter((row) =>
         !text ? true : [row.name, row.code, row.sector, row.governorate, row.jobTitle, row.branches].join(' ').toLowerCase().includes(text),
       )
       .sort((a, b) => a.employeeNo - b.employeeNo);
-  }, [data.employees, query, sector, governorate, status, showArchived]);
+  }, [data.employees, query, sector, governorate, status, branch, showArchived]);
 
   const sectors = Array.from(new Set([...settings.sectors, ...data.employees.map((row) => row.sector)].filter(Boolean)));
   const governorates = Array.from(new Set([...settings.governorates, ...data.employees.map((row) => row.governorate)].filter(Boolean)));
+  const branches = Array.from(
+    new Set([
+      ...settings.branches,
+      ...data.employees.flatMap((row) => row.branches.split(/[،,]/).map((item) => item.trim())),
+    ].filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b, 'ar'));
+  const filtersActive = query !== '' || sector !== 'all' || governorate !== 'all' || status !== 'all' || branch !== 'all';
+  const resetFilters = () => {
+    setQuery('');
+    setSector('all');
+    setGovernorate('all');
+    setStatus('all');
+    setBranch('all');
+  };
 
   const openNew = async () => {
     setErrors({});
@@ -189,6 +205,14 @@ export function EmployeesPage() {
               </option>
             ))}
           </Select>
+          <Select value={branch} onChange={(e) => setBranch(e.target.value)} aria-label="الفرع">
+            <option value="all">كل الفروع</option>
+            {branches.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </Select>
           <Select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="حالة الموظف">
             <option value="all">كل حالات الموظفين</option>
             {EMPLOYEE_STATUS_OPTIONS.map((value) => (
@@ -198,6 +222,9 @@ export function EmployeesPage() {
             ))}
           </Select>
           <Checkbox label="إظهار المؤرشفين" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+          <Button size="sm" icon="restore" onClick={resetFilters} disabled={!filtersActive}>
+            إعادة تعيين
+          </Button>
           <span className="toolbar__spacer">{rows.length} موظف</span>
         </Toolbar>
 
@@ -259,8 +286,8 @@ export function EmployeesPage() {
           </TableWrap>
         ) : (
           <EmptyState
-            title="لا يوجد موظفون"
-            description="ابدأ بإضافة أول ضابط مخاطر."
+            title={filtersActive ? 'لا يوجد موظفون مطابقون للفلاتر' : 'لا يوجد موظفون'}
+            description={filtersActive ? 'جرّب تعديل الفلاتر أو إعادة تعيينها.' : 'ابدأ بإضافة أول ضابط مخاطر.'}
             action={
               <Button variant="primary" icon="plus" onClick={openNew}>
                 إضافة موظف

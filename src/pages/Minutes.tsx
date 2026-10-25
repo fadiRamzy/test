@@ -25,7 +25,7 @@ import {
 } from '../db/schema';
 import { EmployeePicker } from '../components/EmployeePicker';
 import { minuteTiming } from '../lib/calc';
-import { fmtDurationWords } from '../lib/format';
+import { fmtDurationWords, monthName } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
 
 interface Draft {
@@ -48,6 +48,10 @@ const emptyDraft = (employeeId = ''): Draft => ({
 export function MinutesPage() {
   const { data, runAction } = useApp();
   const [query, setQuery] = useState('');
+  const [showRecords, setShowRecords] = useState(true);
+  const [employeeFilter, setEmployeeFilter] = useState('all');
+  const [monthFilter, setMonthFilter] = useState('all');
+  const [yearFilter, setYearFilter] = useState('all');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [confirmDelete, setConfirmDelete] = useState<DailyMinute | null>(null);
@@ -55,12 +59,35 @@ export function MinutesPage() {
   const activeEmployees = data.employees.filter((row) => !row.archived);
   const nameOf = (id: string) => data.employees.find((row) => row.id === id)?.name ?? 'موظف محذوف';
 
+  /** تاريخ المحضر: التاريخ المسجل إن وُجد، وإلا تاريخ الإنشاء */
+  const dateOf = (row: DailyMinute) => row.date ?? row.createdAt.slice(0, 10);
+
+  const years = useMemo(() => {
+    const set = new Set<number>([new Date().getFullYear()]);
+    for (const row of data.minutes) {
+      const value = Number(dateOf(row).slice(0, 4));
+      if (value) set.add(value);
+    }
+    return Array.from(set).sort((a, b) => b - a);
+  }, [data.minutes]);
+
   const rows = useMemo(() => {
     const text = query.trim().toLowerCase();
-    if (!text) return data.minutes;
-    return data.minutes.filter((row) => nameOf(row.employeeId).toLowerCase().includes(text));
+    return data.minutes
+      .filter((row) => (employeeFilter === 'all' ? true : row.employeeId === employeeFilter))
+      .filter((row) => (yearFilter === 'all' ? true : dateOf(row).slice(0, 4) === yearFilter))
+      .filter((row) => (monthFilter === 'all' ? true : Number(dateOf(row).slice(5, 7)) === Number(monthFilter)))
+      .filter((row) => (!text ? true : nameOf(row.employeeId).toLowerCase().includes(text)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.minutes, data.employees, query]);
+  }, [data.minutes, data.employees, query, employeeFilter, monthFilter, yearFilter]);
+
+  const resetFilters = () => {
+    setQuery('');
+    setEmployeeFilter('all');
+    setMonthFilter('all');
+    setYearFilter('all');
+  };
+  const filtersActive = query !== '' || employeeFilter !== 'all' || monthFilter !== 'all' || yearFilter !== 'all';
 
   const submit = async () => {
     if (!draft) return;
@@ -144,13 +171,56 @@ export function MinutesPage() {
           />
         </Card>
       ) : (
-        <Card padded={false}>
+        <Card
+          padded={false}
+          title="المحاضر المسجلة"
+          subtitle={`${rows.length} محضر`}
+          actions={
+            <Button
+              icon={showRecords ? 'close' : 'list'}
+              onClick={() => setShowRecords((value) => !value)}
+              aria-expanded={showRecords}
+              aria-controls="minutes-records"
+            >
+              {showRecords ? 'إخفاء المحاضر' : 'إظهار المحاضر'}
+            </Button>
+          }
+        >
           <Toolbar>
             <SearchInput value={query} onChange={setQuery} placeholder="بحث باسم الموظف…" />
+            <Select value={employeeFilter} onChange={(e) => setEmployeeFilter(e.target.value)} aria-label="الموظف في المحاضر">
+              <option value="all">كل الموظفين</option>
+              {data.employees.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                </option>
+              ))}
+            </Select>
+            <Select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} aria-label="شهر المحضر">
+              <option value="all">كل الشهور</option>
+              {Array.from({ length: 12 }, (_, index) => index + 1).map((value) => (
+                <option key={value} value={value}>
+                  {monthName(value)}
+                </option>
+              ))}
+            </Select>
+            <Select value={yearFilter} onChange={(e) => setYearFilter(e.target.value)} aria-label="سنة المحضر">
+              <option value="all">كل السنوات</option>
+              {years.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </Select>
+            <Button size="sm" icon="restore" onClick={resetFilters} disabled={!filtersActive}>
+              إعادة تعيين
+            </Button>
             <span className="toolbar__spacer">{rows.length} محضر</span>
           </Toolbar>
 
-          {rows.length ? (
+          {!showRecords ? (
+            <div className="collapsed-note small muted">قائمة المحاضر مخفية — اضغط «إظهار المحاضر» لعرضها.</div>
+          ) : rows.length ? (
             <TableWrap>
               <Table>
                 <thead>
@@ -214,7 +284,10 @@ export function MinutesPage() {
               </Table>
             </TableWrap>
           ) : (
-            <EmptyState title="لا محاضر مسجلة" description="اضغط «إضافة محضر» لتسجيل أول محضر يومي." />
+            <EmptyState
+              title={filtersActive ? 'لا محاضر مطابقة للفلاتر' : 'لا محاضر مسجلة'}
+              description={filtersActive ? 'جرّب تعديل الفلاتر أو إعادة تعيينها.' : 'اضغط «إضافة محضر» لتسجيل أول محضر يومي.'}
+            />
           )}
         </Card>
       )}
