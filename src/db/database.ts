@@ -53,11 +53,38 @@ export function openDatabase(name = currentName): Promise<IDBDatabase> {
       create('monthlyEvaluations', ['employeeId', 'year']);
       create('fieldVisits', ['employeeId', 'visitDate', 'status']);
       create('minutes', ['employeeId', 'date', 'status']);
+      create('visitTimings', ['employeeId', 'visitDate']);
       create('observations', ['employeeId', 'date', 'status', 'category']);
       create('leaves', ['employeeId', 'startDate']);
       create('annualNotes', ['employeeId', 'year']);
       create('settings');
       create('meta');
+
+      // ترقية v2: توحيد سجلات المحاضر القديمة (لا يُحذف أي حقل قديم)
+      if (request.transaction) {
+        const minutes = request.transaction.objectStore('minutes');
+        const cursorRequest = minutes.openCursor();
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor) return;
+          const row = cursor.value as Record<string, unknown>;
+          const next: Record<string, unknown> = {
+            ...row,
+            fileRequestTime: typeof row.fileRequestTime === 'string' ? row.fileRequestTime : '',
+            fileReceivedTime: typeof row.fileReceivedTime === 'string' ? row.fileReceivedTime : '',
+            responseTime:
+              typeof row.responseTime === 'string' && row.responseTime
+                ? row.responseTime
+                : typeof row.finalResponseTime === 'string'
+                  ? row.finalResponseTime
+                  : '',
+            inspectionResult:
+              row.inspectionResult === 'has_notes' || row.inspectionResult === 'no_notes' ? row.inspectionResult : '',
+          };
+          cursor.update(next);
+          cursor.continue();
+        };
+      }
     };
 
     request.onsuccess = () => resolve(request.result);

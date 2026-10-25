@@ -4,7 +4,15 @@ import userEvent from '@testing-library/user-event';
 import { App } from '../src/App';
 import { AppProvider } from '../src/state/store';
 import { clearStore, useDatabase } from '../src/db/database';
-import { nextEmployeeNo, saveEmployee, saveMonthlyEvaluation, listMonthlyEvaluations } from '../src/db/repo';
+import {
+  listEmployees,
+  listMonthlyEvaluations,
+  nextEmployeeNo,
+  saveEmployee,
+  saveMinute,
+  saveMonthlyEvaluation,
+  saveVisitTiming,
+} from '../src/db/repo';
 import { STORE_NAMES } from '../src/db/schema';
 
 beforeEach(async () => {
@@ -168,21 +176,42 @@ describe('سجلات الإدخال اليدوي', () => {
     expect(await screen.findByText('فرع المعادي')).toBeInTheDocument();
   });
 
-  it('تضيف دقيقة صرف بأقل الحقول المطلوبة', async () => {
+  it('تضيف محضرًا يوميًا بالحقول الجديدة وتحسب المدة', async () => {
     const employee = await seedEmployee();
     const user = userEvent.setup();
     window.location.hash = '#/minutes';
     renderApp();
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة دقيقة/ })).toBeEnabled());
-    await user.click(screen.getByRole('button', { name: /إضافة دقيقة/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة محضر/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة محضر/ }));
     await user.selectOptions(byId('min-employee'), employee.id);
-    await user.type(byId('min-branch'), 'فرع طنطا');
+    await user.type(byId('min-request'), '09:00');
     await user.type(byId('min-received'), '09:30');
+    await user.type(byId('min-response'), '10:45');
+    await user.selectOptions(byId('min-result'), 'has_notes');
+    expect(screen.getByTestId('minute-preview').textContent).toContain('ساعة و15 دقيقة');
     await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(await screen.findByText('فرع طنطا')).toBeInTheDocument();
+    expect(await screen.findByText('يوجد ملاحظات')).toBeInTheDocument();
+    expect(screen.getByText('ساعة و15 دقيقة')).toBeInTheDocument();
+    expect(screen.getByText('متأخر')).toBeInTheDocument();
+  });
+
+  it('لا يعدّ محضر 60 دقيقة متأخرًا', async () => {
+    await seedEmployee();
+    await saveMinute({
+      employeeId: (await listEmployees(true))[0].id,
+      fileReceivedTime: '09:00',
+      responseTime: '10:00',
+      inspectionResult: 'no_notes',
+    });
+    window.location.hash = '#/minutes';
+    renderApp();
+
+    expect(await screen.findByText('ساعة')).toBeInTheDocument();
+    expect(screen.getByText('في الوقت')).toBeInTheDocument();
+    expect(screen.queryByText('متأخر')).not.toBeInTheDocument();
   });
 
   it('تضيف ملاحظة وإجازة', async () => {
@@ -235,11 +264,108 @@ describe('ملف الموظف ولوحة المتابعة', () => {
 
   it('تعرض لوحة المتابعة مؤشرات حقيقية وتحيل إلى السجلات', async () => {
     await seedEmployee();
-    window.location.hash = '#/';
+    window.location.hash = '#/dashboard';
     renderApp();
 
     expect(await screen.findByText('موظفون على رأس العمل')).toBeInTheDocument();
     expect(screen.getByText('موظفون بدون تقييم هذا الشهر')).toBeInTheDocument();
     expect(screen.getByText('موظفون بدون تقييم شهري')).toBeInTheDocument();
+  });
+});
+
+describe('توقيت الزيارات', () => {
+  it('تضيف زيارة وتحسب المدة وتظهر في الملخص الشهري', async () => {
+    const employee = await seedEmployee();
+    const user = userEvent.setup();
+    const today = new Date();
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+    window.location.hash = '#/visit-times';
+    renderApp();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة زيارة/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة زيارة/ }));
+    await user.selectOptions(byId('vt-employee'), employee.id);
+    await user.clear(byId('vt-date'));
+    await user.type(byId('vt-date'), iso);
+    await user.type(byId('vt-branch'), 'فرع المعادي');
+    await user.type(byId('vt-client'), 'شركة النور');
+    await user.type(byId('vt-location'), 'المعادي');
+    await user.type(byId('vt-departure'), '09:00');
+    await user.type(byId('vt-return'), '10:10');
+    expect(screen.getByTestId('visit-preview').textContent).toContain('ساعة و10 دقائق');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect((await screen.findAllByText('شركة النور')).length).toBeGreaterThan(0);
+    // تظهر في جدول الزيارات وفي الملخص الشهري معًا
+    expect(screen.getAllByText('ساعة و10 دقائق').length).toBeGreaterThan(1);
+    const totals = screen.getByTestId('visit-month-totals');
+    expect(totals.textContent).toContain('إجمالي الزيارات');
+    expect(totals.textContent).toContain('ساعة و10 دقائق');
+    expect(screen.queryByText('متأخر')).not.toBeInTheDocument();
+  });
+
+  it('يحسب مدة زيارة تعبر منتصف الليل', async () => {
+    const employee = await seedEmployee();
+    const user = userEvent.setup();
+    window.location.hash = '#/visit-times';
+    renderApp();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة زيارة/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة زيارة/ }));
+    await user.selectOptions(byId('vt-employee'), employee.id);
+    await user.type(byId('vt-branch'), 'فرع أ');
+    await user.type(byId('vt-client'), 'عميل');
+    await user.type(byId('vt-departure'), '23:30');
+    await user.type(byId('vt-return'), '00:15');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getAllByText('45 دقيقة').length).toBeGreaterThan(0);
+  });
+
+  it('يفلتر الملخص الشهري ويستبعد الأشهر الأخرى ويحدّث بعد الحذف', async () => {
+    const employee = await seedEmployee();
+    const user = userEvent.setup();
+    await saveVisitTiming({
+      employeeId: employee.id,
+      visitDate: '2026-02-11',
+      branch: 'فرع شبين',
+      clientName: 'عميل فبراير',
+      location: 'شبين',
+      departureTime: '09:00',
+      returnTime: '09:45',
+    });
+
+    window.location.hash = '#/visit-times';
+    renderApp();
+    await waitFor(() => expect(screen.getAllByText('عميل فبراير').length).toBeGreaterThan(0));
+
+    // اختيار شهر مارس 2026 (لا زيارات فيه)
+    await user.selectOptions(screen.getByLabelText('الشهر'), '3');
+    await user.selectOptions(screen.getByLabelText('السنة'), '2026');
+    await waitFor(() => expect(screen.getByText(/لا زيارات في الشهر المحدد/)).toBeInTheDocument());
+
+    // العودة إلى فبراير 2026
+    await user.selectOptions(screen.getByLabelText('الشهر'), '2');
+    await waitFor(() => expect(screen.getByTestId('visit-month-totals').textContent).toContain('45 دقيقة'));
+
+    // الحذف يحدّث الإجماليات
+    await user.click(screen.getByRole('button', { name: 'حذف' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /^حذف$/ }));
+    await waitFor(() => expect(screen.getByText(/لا زيارات في الشهر المحدد/)).toBeInTheDocument());
+    expect(screen.getByTestId('visit-month-totals').textContent).toContain('0');
+  });
+});
+
+describe('التنقل الرئيسي', () => {
+  it('يعرض ثلاثة أقسام فقط بالترتيب المطلوب', async () => {
+    await seedEmployee();
+    renderApp();
+    const nav = await screen.findByRole('navigation', { name: 'التنقل الرئيسي' });
+    const links = within(nav).getAllByRole('link');
+    expect(links.map((link) => link.textContent)).toEqual(['الموظفون', 'محاضر يومية', 'توقيت الزيارات']);
   });
 });

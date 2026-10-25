@@ -5,12 +5,13 @@ import {
   SCORE_MAX,
   SCORE_MIN,
   type AnnualNote,
-  type DisbursementMinute,
+  type DailyMinute,
   type Employee,
   type FieldVisit,
   type Leave,
   type MonthlyEvaluation,
   type Observation,
+  type VisitTiming,
 } from './schema';
 import { isScoreValid } from '../lib/calc';
 
@@ -95,10 +96,11 @@ export async function setEmployeeArchived(id: string, archived: boolean): Promis
 
 /** حذف نهائي — يُسمح فقط إذا لم يكن للموظف أي سجلات */
 export async function deleteEmployee(id: string): Promise<void> {
-  const [evaluations, visits, minutes, observations, leaves] = await Promise.all([
+  const [evaluations, visits, minutes, visitTimings, observations, leaves] = await Promise.all([
     getAll<MonthlyEvaluation>('monthlyEvaluations'),
     getAll<FieldVisit>('fieldVisits'),
-    getAll<DisbursementMinute>('minutes'),
+    getAll<DailyMinute>('minutes'),
+    getAll<VisitTiming>('visitTimings'),
     getAll<Observation>('observations'),
     getAll<Leave>('leaves'),
   ]);
@@ -106,6 +108,7 @@ export async function deleteEmployee(id: string): Promise<void> {
     evaluations.filter((row) => row.employeeId === id).length +
     visits.filter((row) => row.employeeId === id).length +
     minutes.filter((row) => row.employeeId === id).length +
+    visitTimings.filter((row) => row.employeeId === id).length +
     observations.filter((row) => row.employeeId === id).length +
     leaves.filter((row) => row.employeeId === id).length;
 
@@ -265,50 +268,78 @@ export async function deleteFieldVisit(id: string): Promise<void> {
   await deleteRecord('fieldVisits', id);
 }
 
-/* --------------------------- دقائق الصرف ------------------------------- */
+/* ----------------------------- محاضر يومية ------------------------------ */
 
-export async function listMinutes(): Promise<DisbursementMinute[]> {
-  const rows = await getAll<DisbursementMinute>('minutes');
-  return rows.sort((a, b) => (a.date < b.date ? 1 : -1));
+const TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+const isTime = (value?: string | null) => Boolean(value) && TIME_RE.test(String(value).trim());
+
+function normalizeMinute(row: DailyMinute): DailyMinute {
+  const responseTime = row.responseTime || row.finalResponseTime || '';
+  const inspectionResult = row.inspectionResult === 'has_notes' || row.inspectionResult === 'no_notes' ? row.inspectionResult : '';
+  return {
+    ...row,
+    fileRequestTime: row.fileRequestTime ?? '',
+    fileReceivedTime: row.fileReceivedTime ?? '',
+    responseTime,
+    inspectionResult,
+  };
 }
 
-export function validateMinute(input: Partial<DisbursementMinute>): Record<string, string> {
+/** كل المحاضر مرتبة من الأحدث إلى الأقدم (تاريخ المحضر إن وُجد، وإلا تاريخ الإنشاء) */
+export async function listMinutes(): Promise<DailyMinute[]> {
+  const rows = await getAll<DailyMinute>('minutes');
+  return rows.map(normalizeMinute).sort((a, b) => {
+    const dateA = a.date ?? a.createdAt.slice(0, 10);
+    const dateB = b.date ?? b.createdAt.slice(0, 10);
+    if (dateA === dateB) return a.createdAt < b.createdAt ? 1 : -1;
+    return dateA < dateB ? 1 : -1;
+  });
+}
+
+export function validateMinute(input: Partial<DailyMinute>): Record<string, string> {
   const errors: Record<string, string> = {};
-  if (!input.employeeId) errors.employeeId = 'ضابط المخاطر المسؤول مطلوب';
-  if (!isDate(input.date)) errors.date = 'التاريخ مطلوب';
-  if (!trim(input.branch)) errors.branch = 'الفرع مطلوب';
-  if (!trim(input.minuteReceivedTime)) errors.minuteReceivedTime = 'وقت استلام الدقيقة مطلوب';
-  else if (!/^\d{1,2}:\d{2}$/.test(trim(input.minuteReceivedTime))) errors.minuteReceivedTime = 'صيغة الوقت غير صحيحة';
-  for (const field of ['fileRequestTime', 'fileReceivedTime', 'finalResponseTime'] as const) {
+  if (!input.employeeId) errors.employeeId = 'الموظف مطلوب';
+
+  for (const [field, label] of [
+    ['fileRequestTime', 'توقيت طلب الملف'],
+    ['fileReceivedTime', 'توقيت استلام الملف'],
+    ['responseTime', 'توقيت الرد على الملف'],
+  ] as const) {
     const value = input[field];
-    if (value && !/^\d{1,2}:\d{2}$/.test(value)) errors[field] = 'صيغة الوقت غير صحيحة';
+    if (value && !isTime(value)) errors[field] = `${label}: صيغة الوقت غير صحيحة (HH:MM)`;
   }
-  if (input.amount !== null && input.amount !== undefined && (!Number.isFinite(Number(input.amount)) || Number(input.amount) < 0))
-    errors.amount = 'المبلغ يجب أن يكون صفرًا أو أكثر';
+
+  if (input.inspectionResult !== 'has_notes' && input.inspectionResult !== 'no_notes')
+    errors.inspectionResult = 'نتيجة الفحص مطلوبة';
+
+  const received = input.fileReceivedTime ? parseInputTime(input.fileReceivedTime) : null;
+  const response = input.responseTime ? parseInputTime(input.responseTime) : null;
+  if (received !== null && response !== null && response < received)
+    errors.responseTime = 'توقيت الرد على الملف يسبق توقيت استلام الملف — تحقق من الأوقات';
+
   return errors;
 }
 
-export async function saveMinute(input: Partial<DisbursementMinute>): Promise<DisbursementMinute> {
+function parseInputTime(value: string): number | null {
+  if (!isTime(value)) return null;
+  const match = TIME_RE.exec(value.trim());
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+export async function saveMinute(input: Partial<DailyMinute>): Promise<DailyMinute> {
   const errors = validateMinute(input);
   if (Object.keys(errors).length) fail(errors);
-  const current = input.id ? await getById<DisbursementMinute>('minutes', input.id) : undefined;
-  const record: DisbursementMinute = {
+  const current = input.id ? await getById<DailyMinute>('minutes', input.id) : undefined;
+  const record: DailyMinute = {
+    ...(current ?? {}),
     id: input.id ?? uid('min'),
     createdAt: current?.createdAt ?? nowIso(),
     updatedAt: nowIso(),
     employeeId: input.employeeId as string,
-    date: input.date as string,
-    branch: trim(input.branch),
-    clientRef: input.clientRef ?? '',
-    financingType: input.financingType ?? '',
-    amount: input.amount === null || input.amount === undefined ? null : Number(input.amount),
-    minuteReceivedTime: input.minuteReceivedTime ?? '',
-    fileRequestTime: input.fileRequestTime ?? '',
-    fileReceivedTime: input.fileReceivedTime ?? '',
-    finalResponseTime: input.finalResponseTime ?? '',
-    result: input.result ?? 'pending',
-    status: input.status ?? 'open',
-    notes: input.notes ?? '',
+    fileRequestTime: (input.fileRequestTime ?? '').trim(),
+    fileReceivedTime: (input.fileReceivedTime ?? '').trim(),
+    responseTime: (input.responseTime ?? '').trim(),
+    inspectionResult: input.inspectionResult ?? 'no_notes',
   };
   await putRecord('minutes', record);
   return record;
@@ -316,6 +347,59 @@ export async function saveMinute(input: Partial<DisbursementMinute>): Promise<Di
 
 export async function deleteMinute(id: string): Promise<void> {
   await deleteRecord('minutes', id);
+}
+
+/* --------------------------- توقيت الزيارات ---------------------------- */
+
+export async function listVisitTimings(): Promise<VisitTiming[]> {
+  const rows = await getAll<VisitTiming>('visitTimings');
+  return rows.sort((a, b) => {
+    const dateA = a.visitDate ?? '';
+    const dateB = b.visitDate ?? '';
+    if (dateA !== dateB) return dateA < dateB ? 1 : -1;
+    const depA = a.departureTime ?? '';
+    const depB = b.departureTime ?? '';
+    if (depA !== depB) return depA < depB ? 1 : -1;
+    return a.createdAt < b.createdAt ? 1 : -1;
+  });
+}
+
+export function validateVisitTiming(input: Partial<VisitTiming>): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!input.employeeId) errors.employeeId = 'الموظف مطلوب';
+  if (!trim(input.visitDate)) errors.visitDate = 'تاريخ الزيارة مطلوب';
+  else if (Number.isNaN(new Date(`${input.visitDate}T00:00:00`).getTime())) errors.visitDate = 'تاريخ الزيارة غير صالح';
+  if (!trim(input.branch)) errors.branch = 'الفرع مطلوب';
+  if (!trim(input.clientName)) errors.clientName = 'اسم العميل مطلوب';
+  if (!trim(input.departureTime)) errors.departureTime = 'توقيت التحرك على الزيارة مطلوب';
+  else if (!isTime(input.departureTime)) errors.departureTime = 'توقيت التحرك: صيغة الوقت غير صحيحة (HH:MM)';
+  if (!trim(input.returnTime)) errors.returnTime = 'توقيت الرجوع للفرع مطلوب';
+  else if (!isTime(input.returnTime)) errors.returnTime = 'توقيت الرجوع: صيغة الوقت غير صحيحة (HH:MM)';
+  return errors;
+}
+
+export async function saveVisitTiming(input: Partial<VisitTiming>): Promise<VisitTiming> {
+  const errors = validateVisitTiming(input);
+  if (Object.keys(errors).length) fail(errors);
+  const current = input.id ? await getById<VisitTiming>('visitTimings', input.id) : undefined;
+  const record: VisitTiming = {
+    id: input.id ?? uid('vt'),
+    createdAt: current?.createdAt ?? nowIso(),
+    updatedAt: nowIso(),
+    employeeId: input.employeeId as string,
+    visitDate: trim(input.visitDate).slice(0, 10),
+    branch: trim(input.branch),
+    clientName: trim(input.clientName),
+    location: trim(input.location),
+    departureTime: trim(input.departureTime),
+    returnTime: trim(input.returnTime),
+  };
+  await putRecord('visitTimings', record);
+  return record;
+}
+
+export async function deleteVisitTiming(id: string): Promise<void> {
+  await deleteRecord('visitTimings', id);
 }
 
 /* ------------------------------ الملاحظات ------------------------------ */

@@ -8,17 +8,19 @@ import {
   listMinutes,
   listMonthlyEvaluations,
   listObservations,
+  listVisitTimings,
 } from '../db/repo';
 import {
   DEFAULT_SETTINGS,
   type AnnualNote,
   type AppSettings,
-  type DisbursementMinute,
+  type DailyMinute,
   type Employee,
   type FieldVisit,
   type Leave,
   type MonthlyEvaluation,
   type Observation,
+  type VisitTiming,
 } from '../db/schema';
 
 export type ToastKind = 'success' | 'error' | 'info';
@@ -32,7 +34,8 @@ export interface AppData {
   employees: Employee[];
   evaluations: MonthlyEvaluation[];
   visits: FieldVisit[];
-  minutes: DisbursementMinute[];
+  minutes: DailyMinute[];
+  visitTimings: VisitTiming[];
   observations: Observation[];
   leaves: Leave[];
   annualNotes: AnnualNote[];
@@ -43,6 +46,7 @@ const EMPTY: AppData = {
   evaluations: [],
   visits: [],
   minutes: [],
+  visitTimings: [],
   observations: [],
   leaves: [],
   annualNotes: [],
@@ -82,17 +86,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((toast) => toast.id !== id)), []);
 
   const load = useCallback(async () => {
-    const [employees, evaluations, visits, minutes, observations, leaves, annualNotes, loadedSettings] = await Promise.all([
+    const [employees, evaluations, visits, minutes, visitTimings, observations, leaves, annualNotes, loadedSettings] =
+      await Promise.all([
       listEmployees(true),
       listMonthlyEvaluations(),
       listFieldVisits(),
       listMinutes(),
+      listVisitTimings(),
       listObservations(),
       listLeaves(),
       listAnnualNotes(),
       readSettings(),
     ]);
-    setData({ employees, evaluations, visits, minutes, observations, leaves, annualNotes });
+    setData({ employees, evaluations, visits, minutes, visitTimings, observations, leaves, annualNotes });
     setSettings(loadedSettings);
   }, []);
 

@@ -184,40 +184,222 @@ export function visitsByMonth(visits: FieldVisit[], year: number, employeeId?: s
   return { byMonth, total: byMonth.reduce((a, b) => a + b, 0) };
 }
 
-/* ------------------------- دقائق الصرف ------------------------------- */
+/* --------------------------- الأوقات والمدد ---------------------------- */
 
-/** فرق بالدقائق بين وقتين HH:MM في نفس اليوم */
+const TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+
+/** يحوّل وقت HH:MM إلى عدد دقائق من منتصف الليل، أو null إذا كان غير صالح */
+export function parseTimeToMinutes(value?: string | null): number | null {
+  if (!value) return null;
+  const match = TIME_RE.exec(value.trim());
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+/**
+ * فرق بالدقائق بين وقتين HH:MM في نفس اليوم.
+ * يعيد null إذا كان أي وقت مفقودًا/غير صالح أو كان الفرق سالبًا.
+ */
 export function timeDiffMinutes(from?: string | null, to?: string | null): number | null {
-  if (!from || !to) return null;
-  const parse = (value: string) => {
-    const match = /^(\d{1,2}):(\d{2})/.exec(value);
-    if (!match) return null;
-    return Number(match[1]) * 60 + Number(match[2]);
-  };
-  const start = parse(from);
-  const end = parse(to);
+  const start = parseTimeToMinutes(from);
+  const end = parseTimeToMinutes(to);
   if (start === null || end === null) return null;
   const diff = end - start;
   return diff >= 0 ? diff : null;
 }
 
+/**
+ * فرق بالدقائق مع دعم عبور منتصف الليل (الزيارات):
+ * إذا كان وقت النهاية أصغر من وقت البداية تُحسب الزيادة يومًا كاملًا.
+ */
+export function timeDiffMinutesAcrossMidnight(from?: string | null, to?: string | null): number | null {
+  const start = parseTimeToMinutes(from);
+  const end = parseTimeToMinutes(to);
+  if (start === null || end === null) return null;
+  const diff = end - start;
+  return diff >= 0 ? diff : diff + 24 * 60;
+}
+
+/** عتبة التأخير في المحاضر: التأخير عندما تتجاوز المدة 60 دقيقة (60 نفسها ليست تأخيرًا) */
+export const MINUTE_DELAY_THRESHOLD = 60;
+
+/* --------------------------- محاضر يومية ------------------------------- */
+
+export interface MinuteTiming {
+  /** المدة بالدقائق بين استلام الملف والرد عليه */
+  minutes: number | null;
+  /** متأخر فقط عند تجاوز 60 دقيقة */
+  delayed: boolean;
+  /** التوقيتات ناقصة أو غير متسقة — لا مدة ولا تأخير */
+  invalid: boolean;
+  /** سبب عدم صلاحية المدة */
+  reason: string | null;
+}
+
+export function minuteTiming(minute: {
+  fileReceivedTime?: string | null;
+  responseTime?: string | null;
+  finalResponseTime?: string | null;
+}): MinuteTiming {
+  const received = minute.fileReceivedTime ?? '';
+  const response = minute.responseTime || minute.finalResponseTime || '';
+  const receivedMinutes = parseTimeToMinutes(received);
+  const responseMinutes = parseTimeToMinutes(response);
+
+  if (!received && !response) return { minutes: null, delayed: false, invalid: true, reason: 'توقيتات المحضر غير مسجلة' };
+  if (!received) return { minutes: null, delayed: false, invalid: true, reason: 'توقيت استلام الملف غير مسجل' };
+  if (!response) return { minutes: null, delayed: false, invalid: true, reason: 'توقيت الرد على الملف غير مسجل' };
+  if (receivedMinutes === null) return { minutes: null, delayed: false, invalid: true, reason: 'توقيت استلام الملف غير صالح' };
+  if (responseMinutes === null) return { minutes: null, delayed: false, invalid: true, reason: 'توقيت الرد على الملف غير صالح' };
+
+  const diff = responseMinutes - receivedMinutes;
+  if (diff < 0) return { minutes: null, delayed: false, invalid: true, reason: 'توقيت الرد يسبق توقيت الاستلام' };
+
+  return { minutes: diff, delayed: diff > MINUTE_DELAY_THRESHOLD, invalid: false, reason: null };
+}
+
 export interface MinuteDurations {
-  /** من استلام الدقيقة حتى الرد النهائي */
+  /** من استلام الملف حتى الرد على الملف */
   totalMinutes: number | null;
   /** من طلب الملف حتى استلامه */
   fileWaitMinutes: number | null;
 }
 
-export function minuteDurations(minute: DisbursementMinute): MinuteDurations {
+export function minuteDurations(minute: {
+  fileRequestTime?: string | null;
+  fileReceivedTime?: string | null;
+  responseTime?: string | null;
+  finalResponseTime?: string | null;
+}): MinuteDurations {
   return {
-    totalMinutes: timeDiffMinutes(minute.minuteReceivedTime, minute.finalResponseTime),
+    totalMinutes: minuteTiming(minute).minutes,
     fileWaitMinutes: timeDiffMinutes(minute.fileRequestTime, minute.fileReceivedTime),
   };
 }
 
-/** "دقيقة غير مكتملة" = لم يُسجل وقت الرد النهائي بعد */
-export function isMinuteOutstanding(minute: DisbursementMinute): boolean {
-  return !minute.finalResponseTime || minute.status === 'open';
+/** محضر لم يُسجل فيه توقيت الرد بعد */
+export function isMinuteOutstanding(minute: { responseTime?: string | null; finalResponseTime?: string | null }): boolean {
+  return !(minute.responseTime || minute.finalResponseTime);
+}
+
+/* --------------------------- توقيت الزيارات ---------------------------- */
+
+export interface VisitTimingResult {
+  /** مدة الزيارة بالدقائق (تدعم عبور منتصف الليل) */
+  minutes: number | null;
+  /** هل المدة صالحة لحساب الإجماليات؟ */
+  valid: boolean;
+  reason: string | null;
+}
+
+export function visitTiming(visit: {
+  departureTime?: string | null;
+  returnTime?: string | null;
+}): VisitTimingResult {
+  const departure = visit.departureTime ?? '';
+  const back = visit.returnTime ?? '';
+  if (!departure && !back) return { minutes: null, valid: false, reason: 'توقيتات الزيارة غير مسجلة' };
+  if (!departure) return { minutes: null, valid: false, reason: 'توقيت التحرك غير مسجل' };
+  if (!back) return { minutes: null, valid: false, reason: 'توقيت الرجوع غير مسجل' };
+  if (parseTimeToMinutes(departure) === null) return { minutes: null, valid: false, reason: 'توقيت التحرك غير صالح' };
+  if (parseTimeToMinutes(back) === null) return { minutes: null, valid: false, reason: 'توقيت الرجوع غير صالح' };
+  const minutes = timeDiffMinutesAcrossMidnight(departure, back);
+  if (minutes === null) return { minutes: null, valid: false, reason: 'مدة غير صالحة' };
+  return { minutes, valid: true, reason: null };
+}
+
+export function visitDurationMinutes(visit: { departureTime?: string | null; returnTime?: string | null }): number | null {
+  return visitTiming(visit).minutes;
+}
+
+export interface EmployeeVisitSummary {
+  employeeId: string;
+  employeeName: string;
+  /** عدد الزيارات المسجلة */
+  totalVisits: number;
+  /** عدد الزيارات ذات المدة الصالحة */
+  validVisits: number;
+  /** عدد الزيارات ذات المدة الناقصة/غير الصالحة */
+  invalidVisits: number;
+  /** مجموع المدد الصالحة بالدقائق */
+  totalMinutes: number;
+  /** متوسط المدة = مجموع المدد الصالحة ÷ عدد الزيارات الصالحة */
+  averageMinutes: number | null;
+  /** كل زيارات الشهر مرتبة زمنيًا */
+  visits: Array<{ visit: import('../db/schema').VisitTiming; timing: VisitTimingResult }>;
+}
+
+/** يستخرج السنة والشهر من تاريخ نصي YYYY-MM-DD دون أي تحويل زمني */
+export function dateParts(value?: string | null): { year: number; month: number; day: number } | null {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year, month, day };
+}
+
+/** تصفية الزيارات حسب الشهر والسنة (بناءً على تاريخ الزيارة المسجل) */
+export function visitsInMonth<T extends { visitDate?: string | null }>(
+  visits: T[],
+  year: number,
+  month: number,
+  employeeId?: string | null,
+): T[] {
+  return visits.filter((visit) => {
+    if (employeeId && (visit as { employeeId?: string }).employeeId !== employeeId) return false;
+    const parts = dateParts(visit.visitDate);
+    return Boolean(parts && parts.year === year && parts.month === month);
+  });
+}
+
+/**
+ * ملخص شهري للزيارات لكل موظف: العدد، مجموع المدد، المتوسط، وكل تفاصيل الزيارات.
+ * الزيارات ذات المدة غير الصالحة تبقى ظاهرة لكنها مستبعدة من المجموع والمتوسط.
+ */
+export function monthlyVisitSummary(
+  visits: Array<{ id: string; employeeId: string; visitDate?: string | null; departureTime?: string | null; returnTime?: string | null }>,
+  employees: Array<{ id: string; name: string }>,
+  year: number,
+  month: number,
+  employeeId?: string | null,
+): EmployeeVisitSummary[] {
+  const selected = visitsInMonth(visits, year, month, employeeId);
+  const groups = new Map<string, typeof selected>();
+  for (const visit of selected) {
+    const list = groups.get(visit.employeeId);
+    if (list) list.push(visit);
+    else groups.set(visit.employeeId, [visit]);
+  }
+
+  const summaries: EmployeeVisitSummary[] = [];
+  for (const [id, list] of groups) {
+    const sorted = [...list].sort((a, b) => {
+      const dateA = a.visitDate ?? '';
+      const dateB = b.visitDate ?? '';
+      if (dateA !== dateB) return dateA < dateB ? -1 : 1;
+      const depA = parseTimeToMinutes(a.departureTime) ?? Number.MAX_SAFE_INTEGER;
+      const depB = parseTimeToMinutes(b.departureTime) ?? Number.MAX_SAFE_INTEGER;
+      return depA - depB;
+    });
+    const details = sorted.map((visit) => ({ visit: visit as import('../db/schema').VisitTiming, timing: visitTiming(visit) }));
+    const valid = details.filter((row) => row.timing.valid && row.timing.minutes !== null);
+    const totalMinutes = valid.reduce((sum, row) => sum + (row.timing.minutes ?? 0), 0);
+    summaries.push({
+      employeeId: id,
+      employeeName: employees.find((row) => row.id === id)?.name ?? 'موظف غير معروف',
+      totalVisits: details.length,
+      validVisits: valid.length,
+      invalidVisits: details.length - valid.length,
+      totalMinutes,
+      averageMinutes: valid.length ? totalMinutes / valid.length : null,
+      visits: details,
+    });
+  }
+
+  return summaries.sort((a, b) => a.employeeName.localeCompare(b.employeeName, 'ar'));
 }
 
 /* --------------------------- الإجازات -------------------------------- */

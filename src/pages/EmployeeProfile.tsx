@@ -5,14 +5,14 @@ import { Badge, Button, Card, EmptyState, PageHeader, Select, Table, TableWrap }
 import {
   EMPLOYEE_STATUS_LABELS,
   EVALUATION_CRITERIA,
-  MINUTE_RESULT_LABELS,
+  INSPECTION_RESULT_LABELS,
   MONTHS_AR,
   OBSERVATION_STATUS_LABELS,
   SEVERITY_LABELS,
   VISIT_STATUS_LABELS,
 } from '../db/schema';
-import { annualSummary, leaveTotals, minuteDurations, monthlyTotals, visitsByMonth } from '../lib/calc';
-import { fmtDate, fmtNumber } from '../lib/format';
+import { annualSummary, leaveTotals, minuteTiming, monthlyTotals, visitsByMonth } from '../lib/calc';
+import { fmtDate, fmtDurationWords, fmtNumber } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
 
 const YEARS = (() => {
@@ -38,7 +38,10 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
     [data.visits, employeeId, year],
   );
   const minutes = useMemo(
-    () => data.minutes.filter((row) => row.employeeId === employeeId && row.date.startsWith(String(year))),
+    () =>
+      data.minutes.filter(
+        (row) => row.employeeId === employeeId && (row.date ?? row.createdAt.slice(0, 10)).startsWith(String(year)),
+      ),
     [data.minutes, employeeId, year],
   );
   const observations = useMemo(
@@ -72,7 +75,12 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
           return ['التقييم الشهري', `${row.month}/${row.year}`, `زيارات: ${monthly.visits} · مجموع الدرجات: ${monthly.scoresSum}`, monthly.total];
         }),
         ...visits.map((row) => ['زيارة ميدانية', row.visitDate, `${row.branch} — ${row.visitType}`, row.finalAssessment]),
-        ...minutes.map((row) => ['دقيقة صرف', row.date, `${row.branch} — ${row.clientRef}`, MINUTE_RESULT_LABELS[row.result]]),
+        ...minutes.map((row) => [
+          'محضر يومي',
+          row.date ?? row.createdAt.slice(0, 10),
+          `${row.fileRequestTime || '—'} / ${row.fileReceivedTime || '—'} / ${row.responseTime || '—'}`,
+          row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : '—',
+        ]),
         ...observations.map((row) => ['ملاحظة', row.date, row.details, OBSERVATION_STATUS_LABELS[row.status]]),
         ...leaves.map((row) => ['إجازة/إذن', row.startDate, `${row.type} حتى ${row.endDate}`, row.unit === 'days' ? `${row.days} يوم` : `${row.hours} ساعة`]),
       ],
@@ -238,37 +246,41 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
         )}
       </Card>
 
-      <Card title={`دقائق الصرف ${year}`} subtitle={`${minutes.length} دقيقة`} padded={false}>
+      <Card title={`محاضر يومية ${year}`} subtitle={`${minutes.length} محضر`} padded={false}>
         {minutes.length ? (
           <TableWrap>
             <Table>
               <thead>
                 <tr>
-                  <th>التاريخ</th>
-                  <th>الفرع</th>
-                  <th>العميل</th>
-                  <th>نوع التمويل</th>
-                  <th className="num">المبلغ</th>
-                  <th>الاستلام</th>
-                  <th>الرد النهائي</th>
-                  <th className="num">المدة</th>
-                  <th>النتيجة</th>
+                  <th>طلب الملف</th>
+                  <th>استلام الملف</th>
+                  <th>الرد على الملف</th>
+                  <th>نتيجة الفحص</th>
+                  <th>المدة</th>
+                  <th>حالة التأخير</th>
                 </tr>
               </thead>
               <tbody>
                 {minutes.map((row) => {
-                  const durations = minuteDurations(row);
+                  const timing = minuteTiming(row);
                   return (
                     <tr key={row.id}>
-                      <td className="nowrap">{fmtDate(row.date)}</td>
-                      <td>{row.branch}</td>
-                      <td>{row.clientRef || '—'}</td>
-                      <td>{row.financingType || '—'}</td>
-                      <td className="num">{row.amount === null ? '—' : fmtNumber(row.amount)}</td>
-                      <td>{row.minuteReceivedTime || '—'}</td>
-                      <td>{row.finalResponseTime || '—'}</td>
-                      <td className="num">{durations.totalMinutes === null ? '—' : `${durations.totalMinutes} د`}</td>
-                      <td>{MINUTE_RESULT_LABELS[row.result]}</td>
+                      <td className="mono">{row.fileRequestTime || '—'}</td>
+                      <td className="mono">{row.fileReceivedTime || '—'}</td>
+                      <td className="mono">{row.responseTime || '—'}</td>
+                      <td>{row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : '—'}</td>
+                      <td title={timing.reason ?? undefined}>
+                        {timing.minutes === null ? '—' : fmtDurationWords(timing.minutes)}
+                      </td>
+                      <td>
+                        {timing.invalid ? (
+                          <Badge tone="neutral">بيانات غير مكتملة</Badge>
+                        ) : timing.delayed ? (
+                          <Badge tone="danger">متأخر</Badge>
+                        ) : (
+                          <Badge tone="success">في الوقت</Badge>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -276,7 +288,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
             </Table>
           </TableWrap>
         ) : (
-          <EmptyState title={`لا دقائق في ${year}`} description="سجّلها من صفحة دقائق الصرف." />
+          <EmptyState title={`لا محاضر في ${year}`} description="سجّلها من صفحة «محاضر يومية»." />
         )}
       </Card>
 

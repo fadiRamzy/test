@@ -6,18 +6,23 @@ import {
   isMinuteOutstanding,
   leaveTotals,
   minuteDurations,
+  minuteTiming,
   monthlyTotals,
   ratingFor,
+  monthlyVisitSummary,
   timeDiffMinutes,
+  timeDiffMinutesAcrossMidnight,
+  visitTiming,
   visitsByMonth,
 } from '../src/lib/calc';
 import {
   DEFAULT_RATING_THRESHOLDS,
-  type DisbursementMinute,
+  type DailyMinute,
   type Employee,
   type FieldVisit,
   type Leave,
   type MonthlyEvaluation,
+  type VisitTiming,
 } from '../src/db/schema';
 
 const base = { createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
@@ -183,23 +188,15 @@ describe('ملخص الزيارات الشهري', () => {
   });
 });
 
-describe('دقائق الصرف', () => {
-  const minute = (patch: Partial<DisbursementMinute>): DisbursementMinute => ({
+describe('محاضر يومية', () => {
+  const minute = (patch: Partial<DailyMinute>): DailyMinute => ({
     ...base,
     id: 'm1',
     employeeId: 'e1',
-    date: '2026-03-01',
-    branch: 'فرع أ',
-    clientRef: '',
-    financingType: '',
-    amount: null,
-    minuteReceivedTime: '09:00',
     fileRequestTime: '',
     fileReceivedTime: '',
-    finalResponseTime: '',
-    result: 'pending',
-    status: 'open',
-    notes: '',
+    responseTime: '',
+    inspectionResult: 'no_notes',
     ...patch,
   });
 
@@ -210,14 +207,121 @@ describe('دقائق الصرف', () => {
   });
 
   it('يحسب مدة الإجراء وانتظار الملف', () => {
-    const durations = minuteDurations(minute({ fileRequestTime: '09:05', fileReceivedTime: '09:35', finalResponseTime: '10:20' }));
-    expect(durations.totalMinutes).toBe(80);
+    const durations = minuteDurations(minute({ fileRequestTime: '09:05', fileReceivedTime: '09:35', responseTime: '10:20' }));
+    expect(durations.totalMinutes).toBe(45);
     expect(durations.fileWaitMinutes).toBe(30);
   });
 
-  it('يعتبر الدقيقة غير منتهية عند غياب الرد النهائي', () => {
+  it('لا يعدّ المحضر متأخرًا عند 60 دقيقة بالضبط', () => {
+    const timing = minuteTiming(minute({ fileReceivedTime: '09:00', responseTime: '10:00' }));
+    expect(timing.minutes).toBe(60);
+    expect(timing.delayed).toBe(false);
+    expect(timing.invalid).toBe(false);
+  });
+
+  it('يعدّ المحضر متأخرًا عند تجاوز 60 دقيقة بدقيقة واحدة', () => {
+    const timing = minuteTiming(minute({ fileReceivedTime: '09:00', responseTime: '10:01' }));
+    expect(timing.minutes).toBe(61);
+    expect(timing.delayed).toBe(true);
+  });
+
+  it('يرفض المدة السالبة ولا ينتج مؤشر تأخير', () => {
+    const timing = minuteTiming(minute({ fileReceivedTime: '10:00', responseTime: '09:00' }));
+    expect(timing.minutes).toBeNull();
+    expect(timing.delayed).toBe(false);
+    expect(timing.invalid).toBe(true);
+  });
+
+  it('لا يحسب مدة عند نقص التوقيتات', () => {
+    expect(minuteTiming(minute({ fileReceivedTime: '09:00' })).invalid).toBe(true);
+    expect(minuteTiming(minute({ responseTime: '10:00' })).invalid).toBe(true);
+    expect(minuteTiming(minute({})).minutes).toBeNull();
+  });
+
+  it('يعتبر المحضر غير منتهٍ عند غياب وقت الرد', () => {
     expect(isMinuteOutstanding(minute({}))).toBe(true);
-    expect(isMinuteOutstanding(minute({ finalResponseTime: '10:00', status: 'closed' }))).toBe(false);
+    expect(isMinuteOutstanding(minute({ responseTime: '10:00' }))).toBe(false);
+  });
+});
+
+describe('توقيت الزيارات', () => {
+  const visit = (patch: Partial<VisitTiming>): VisitTiming => ({
+    ...base,
+    id: Math.random().toString(36).slice(2),
+    employeeId: 'e1',
+    visitDate: '2026-03-10',
+    branch: 'فرع أ',
+    clientName: 'عميل',
+    location: 'المعادي',
+    departureTime: '09:00',
+    returnTime: '09:35',
+    ...patch,
+  });
+
+  it('يحسب مدة الزيارة بالدقائق', () => {
+    expect(visitTiming(visit({})).minutes).toBe(35);
+    expect(visitTiming(visit({ departureTime: '09:00', returnTime: '10:10' })).minutes).toBe(70);
+  });
+
+  it('يدعم عبور منتصف الليل', () => {
+    expect(timeDiffMinutesAcrossMidnight('23:30', '00:15')).toBe(45);
+    expect(visitTiming(visit({ departureTime: '23:30', returnTime: '00:15' })).minutes).toBe(45);
+  });
+
+  it('لا ينتج مدة للزيارات ناقصة التوقيت', () => {
+    const result = visitTiming(visit({ returnTime: '' }));
+    expect(result.minutes).toBeNull();
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('الرجوع');
+  });
+
+  it('يلخص الشهر لكل موظف ويستبعد المدد غير الصالحة', () => {
+    const summaries = monthlyVisitSummary(
+      [
+        visit({ id: 'v1', employeeId: 'e1', visitDate: '2026-03-02', departureTime: '09:00', returnTime: '09:35' }),
+        visit({ id: 'v2', employeeId: 'e1', visitDate: '2026-03-01', departureTime: '10:00', returnTime: '12:00' }),
+        visit({ id: 'v3', employeeId: 'e1', visitDate: '2026-03-03', departureTime: '', returnTime: '' }),
+        visit({ id: 'v4', employeeId: 'e2', visitDate: '2026-03-04', departureTime: '08:00', returnTime: '08:30' }),
+        visit({ id: 'v5', employeeId: 'e2', visitDate: '2026-04-01', departureTime: '08:00', returnTime: '09:00' }),
+      ],
+      [
+        { id: 'e1', name: 'أحمد' },
+        { id: 'e2', name: 'باسم' },
+      ],
+      2026,
+      3,
+    );
+
+    const first = summaries.find((row) => row.employeeId === 'e1')!;
+    expect(first.totalVisits).toBe(3);
+    expect(first.validVisits).toBe(2);
+    expect(first.invalidVisits).toBe(1);
+    expect(first.totalMinutes).toBe(155);
+    expect(first.averageMinutes).toBe(77.5);
+    expect(first.visits.map((row) => row.visit.id)).toEqual(['v2', 'v1', 'v3']);
+
+    const second = summaries.find((row) => row.employeeId === 'e2')!;
+    expect(second.totalVisits).toBe(1); // زيارة أبريل مستبعدة
+    expect(second.totalMinutes).toBe(30);
+  });
+
+  it('يرجع نتيجة فارغة لشهر بلا زيارات', () => {
+    expect(monthlyVisitSummary([visit({})], [{ id: 'e1', name: 'أحمد' }], 2026, 5)).toEqual([]);
+  });
+
+  it('يفلتر بموظف واحد عند الطلب', () => {
+    const summaries = monthlyVisitSummary(
+      [visit({ employeeId: 'e1' }), visit({ employeeId: 'e2' })],
+      [
+        { id: 'e1', name: 'أحمد' },
+        { id: 'e2', name: 'باسم' },
+      ],
+      2026,
+      3,
+      'e2',
+    );
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].employeeId).toBe('e2');
   });
 });
 
@@ -254,7 +358,7 @@ describe('لوحة المتابعة', () => {
           { ...base, id: 'v1', employeeId: 'e1', region: '', branch: 'ب', visitDate: '2026-03-02', visitType: 'زيارة', reference: '', status: 'completed', reportSubmittedAt: null, reportReviewedAt: null, revisions: null, finalAssessment: '', notes: '' },
         ],
         minutes: [
-          { ...base, id: 'm1', employeeId: 'e1', date: '2026-03-02', branch: 'ب', clientRef: '', financingType: '', amount: null, minuteReceivedTime: '09:00', fileRequestTime: '', fileReceivedTime: '', finalResponseTime: '', result: 'pending', status: 'open', notes: '' },
+          { ...base, id: 'm1', employeeId: 'e1', fileRequestTime: '', fileReceivedTime: '09:00', responseTime: '', inspectionResult: 'no_notes' },
         ],
         observations: [
           { ...base, id: 'o1', employeeId: 'e1', date: '2026-03-02', source: 'ملاحظة مباشرة', branch: '', reference: '', category: '', severity: 'low', details: 'ملاحظة', correctiveAction: '', notificationDate: null, status: 'open', resolutionDate: null, recurrence: false, followUpNotes: '' },

@@ -11,15 +11,9 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { path: '/', label: 'لوحة المتابعة', icon: 'dashboard' },
   { path: '/employees', label: 'الموظفون', icon: 'employees' },
-  { path: '/monthly', label: 'التقييم الشهري', icon: 'chart' },
-  { path: '/annual', label: 'التقييم السنوي', icon: 'flag' },
-  { path: '/visits', label: 'الزيارات الميدانية', icon: 'visits' },
-  { path: '/minutes', label: 'دقائق الصرف', icon: 'minutes' },
-  { path: '/observations', label: 'الملاحظات', icon: 'observations' },
-  { path: '/leaves', label: 'الإجازات والأذونات', icon: 'calendar' },
-  { path: '/reports', label: 'التقارير والنسخ', icon: 'database' },
+  { path: '/minutes', label: 'محاضر يومية', icon: 'minutes' },
+  { path: '/visit-times', label: 'توقيت الزيارات', icon: 'visits' },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -30,12 +24,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
     window.scrollTo({ top: 0 });
   }, [route.path]);
 
-  const isActive = (path: string) => (path === '/' ? route.path === '/' : route.path.startsWith(path));
+  const isActive = (path: string) => route.path.startsWith(path);
 
   return (
     <div className="shell">
       <header className="topnav print-hide">
-        <a className="topnav__brand" href="#/">
+        <a className="topnav__brand" href="#/employees">
           <span className="topnav__logo">
             <Icon name="shield" size={17} />
           </span>
@@ -56,7 +50,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <main className="page">{ready ? children : <div className="loading">جارٍ فتح البيانات المحلية…</div>}</main>
       <footer className="appfoot print-hide">
         البيانات محفوظة داخل هذا المتصفح على هذا الجهاز فقط — لا مزامنة بين الأجهزة، ويمكن فقدانها عند حذف بيانات
-        المتصفح. صدّر نسخة احتياطية من صفحة «التقارير والنسخ».
+        المتصفح. <a href="#/reports">صدّر نسخة احتياطية</a> بشكل دوري.
       </footer>
     </div>
   );

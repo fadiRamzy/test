@@ -3,6 +3,7 @@ import { clearStore, useDatabase } from '../src/db/database';
 import {
   ValidationError,
   deleteEmployee,
+  deleteMinute,
   listFieldVisits,
   listLeaves,
   listMinutes,
@@ -14,6 +15,9 @@ import {
   saveFieldVisit,
   saveLeave,
   saveMinute,
+  saveVisitTiming,
+  listVisitTimings,
+  deleteVisitTiming,
   saveMonthlyBatch,
   saveMonthlyEvaluation,
   saveObservation,
@@ -157,26 +161,119 @@ describe('الزيارات الميدانية', () => {
   });
 });
 
-describe('دقائق الصرف', () => {
-  it('يحفظ دقيقة بالحد الأدنى من الحقول', async () => {
+describe('محاضر يومية', () => {
+  it('يحفظ محضرًا بالحقول الجديدة فقط', async () => {
     const employee = await makeEmployee({ code: 'RO-40' });
     const minute = await saveMinute({
       employeeId: employee.id,
-      date: '2026-03-05',
-      branch: 'فرع أ',
-      minuteReceivedTime: '09:15',
-      status: 'open',
-      result: 'pending',
+      fileRequestTime: '09:05',
+      fileReceivedTime: '09:35',
+      responseTime: '10:20',
+      inspectionResult: 'has_notes',
     });
-    expect(minute.finalResponseTime).toBe('');
+    expect(minute.responseTime).toBe('10:20');
+    expect(minute.inspectionResult).toBe('has_notes');
     expect((await listMinutes())).toHaveLength(1);
   });
 
   it('يرفض وقتًا بصيغة خاطئة', async () => {
     const employee = await makeEmployee({ code: 'RO-41' });
     await expect(
-      saveMinute({ employeeId: employee.id, date: '2026-03-05', branch: 'أ', minuteReceivedTime: '9' }),
+      saveMinute({ employeeId: employee.id, fileReceivedTime: '9', inspectionResult: 'no_notes' }),
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('يرفض نتيجة فحص فارغة أو غير معروفة', async () => {
+    const employee = await makeEmployee({ code: 'RO-42' });
+    await expect(saveMinute({ employeeId: employee.id, inspectionResult: '' })).rejects.toMatchObject({
+      errors: { inspectionResult: 'نتيجة الفحص مطلوبة' },
+    });
+  });
+
+  it('يرفض ردًا يسبق استلام الملف (مدة سالبة)', async () => {
+    const employee = await makeEmployee({ code: 'RO-43' });
+    await expect(
+      saveMinute({
+        employeeId: employee.id,
+        fileReceivedTime: '10:00',
+        responseTime: '09:00',
+        inspectionResult: 'no_notes',
+      }),
+    ).rejects.toMatchObject({ errors: { responseTime: expect.stringContaining('يسبق') } });
+  });
+
+  it('يعدّل ويحذف المحضر', async () => {
+    const employee = await makeEmployee({ code: 'RO-44' });
+    const minute = await saveMinute({ employeeId: employee.id, inspectionResult: 'no_notes' });
+    const updated = await saveMinute({ ...minute, fileReceivedTime: '08:00', responseTime: '09:30' });
+    expect(updated.id).toBe(minute.id);
+    expect(updated.responseTime).toBe('09:30');
+    await deleteMinute(minute.id);
+    expect(await listMinutes()).toHaveLength(0);
+  });
+});
+
+describe('توقيت الزيارات', () => {
+  it('يحفظ زيارة كاملة ويقرأها', async () => {
+    const employee = await makeEmployee({ code: 'RO-60' });
+    const visit = await saveVisitTiming({
+      employeeId: employee.id,
+      visitDate: '2026-03-10',
+      branch: 'فرع المعادي',
+      clientName: 'شركة النور',
+      location: 'المعادي',
+      departureTime: '09:00',
+      returnTime: '10:15',
+    });
+    expect(visit.id).toBeTruthy();
+    const rows = await listVisitTimings();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].clientName).toBe('شركة النور');
+  });
+
+  it('يرفض الزيارة ناقصة البيانات', async () => {
+    await expect(
+      saveVisitTiming({ employeeId: '', visitDate: '', branch: '', clientName: '', departureTime: '', returnTime: '' }),
+    ).rejects.toMatchObject({
+      errors: {
+        employeeId: 'الموظف مطلوب',
+        visitDate: 'تاريخ الزيارة مطلوب',
+        branch: 'الفرع مطلوب',
+        clientName: 'اسم العميل مطلوب',
+        departureTime: 'توقيت التحرك على الزيارة مطلوب',
+        returnTime: 'توقيت الرجوع للفرع مطلوب',
+      },
+    });
+  });
+
+  it('يرفض توقيتًا غير صالح', async () => {
+    const employee = await makeEmployee({ code: 'RO-61' });
+    await expect(
+      saveVisitTiming({
+        employeeId: employee.id,
+        visitDate: '2026-03-10',
+        branch: 'أ',
+        clientName: 'عميل',
+        departureTime: '25:00',
+        returnTime: '09:00',
+      }),
+    ).rejects.toMatchObject({ errors: { departureTime: expect.stringContaining('غير صحيحة') } });
+  });
+
+  it('يعدّل ويحذف الزيارة', async () => {
+    const employee = await makeEmployee({ code: 'RO-62' });
+    const visit = await saveVisitTiming({
+      employeeId: employee.id,
+      visitDate: '2026-03-10',
+      branch: 'أ',
+      clientName: 'عميل',
+      departureTime: '09:00',
+      returnTime: '10:00',
+    });
+    const updated = await saveVisitTiming({ ...visit, returnTime: '11:00' });
+    expect(updated.returnTime).toBe('11:00');
+    await deleteVisitTiming(visit.id);
+    expect(await listVisitTimings()).toHaveLength(0);
   });
 });
 

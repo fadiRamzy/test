@@ -4,13 +4,14 @@ import {
   ENTITY_LABELS,
   type AnnualNote,
   type AppSettings,
-  type DisbursementMinute,
+  type DailyMinute,
   type Employee,
   type EntityName,
   type FieldVisit,
   type Leave,
   type MonthlyEvaluation,
   type Observation,
+  type VisitTiming,
 } from './schema';
 
 export const BACKUP_APP = 'risk-officer-suite';
@@ -21,6 +22,7 @@ export const ENTITIES: EntityName[] = [
   'monthlyEvaluations',
   'fieldVisits',
   'minutes',
+  'visitTimings',
   'observations',
   'leaves',
   'annualNotes',
@@ -30,7 +32,8 @@ export interface BackupData {
   employees: Employee[];
   monthlyEvaluations: MonthlyEvaluation[];
   fieldVisits: FieldVisit[];
-  minutes: DisbursementMinute[];
+  minutes: DailyMinute[];
+  visitTimings: VisitTiming[];
   observations: Observation[];
   leaves: Leave[];
   annualNotes: AnnualNote[];
@@ -51,7 +54,8 @@ export async function createBackup(): Promise<BackupPayload> {
     employees: await getAll<Employee>('employees'),
     monthlyEvaluations: await getAll<MonthlyEvaluation>('monthlyEvaluations'),
     fieldVisits: await getAll<FieldVisit>('fieldVisits'),
-    minutes: await getAll<DisbursementMinute>('minutes'),
+    minutes: await getAll<DailyMinute>('minutes'),
+    visitTimings: await getAll<VisitTiming>('visitTimings'),
     observations: await getAll<Observation>('observations'),
     leaves: await getAll<Leave>('leaves'),
     annualNotes: await getAll<AnnualNote>('annualNotes'),
@@ -89,6 +93,12 @@ export function validateBackup(raw: unknown): ValidationResult {
   for (const entity of ENTITIES) {
     const rows = data[entity];
     if (!Array.isArray(rows)) {
+      // النسخ الاحتياطية الأقدم من إضافة «توقيت الزيارات» تُقبل بقسم فارغ
+      if (entity === 'visitTimings') {
+        counts[entity] = 0;
+        warnings.push('النسخة لا تحتوي قسم «توقيت الزيارات» — سيُستورد فارغًا.');
+        continue;
+      }
       errors.push(`قسم «${ENTITY_LABELS[entity]}» مفقود أو ليس قائمة.`);
       continue;
     }

@@ -57,6 +57,34 @@ export function fmtDuration(minutes?: number | null): string {
   return parts.join(' و');
 }
 
+/** كلمات عربية صحيحة للمدة: 45 دقيقة · ساعة و12 دقيقة · ساعتان و5 دقائق · 12 ساعة و45 دقيقة */
+function minutesWords(value: number): string {
+  if (value === 1) return 'دقيقة واحدة';
+  if (value === 2) return 'دقيقتان';
+  if (value >= 3 && value <= 10) return `${value} دقائق`;
+  return `${value} دقيقة`;
+}
+
+function hoursWords(value: number): string {
+  if (value === 1) return 'ساعة';
+  if (value === 2) return 'ساعتان';
+  if (value >= 3 && value <= 10) return `${value} ساعات`;
+  return `${value} ساعة`;
+}
+
+/**
+ * مدة بالدقائق → نص عربي مقروء.
+ * أقل من 60 دقيقة تُعرض بالدقائق، و60 أو أكثر تُعرض بالساعات والدقائق.
+ */
+export function fmtDurationWords(minutes?: number | null): string {
+  if (minutes === null || minutes === undefined || Number.isNaN(minutes)) return '—';
+  const total = Math.max(0, Math.round(minutes));
+  if (total < 60) return minutesWords(total);
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  return mins ? `${hoursWords(hours)} و${minutesWords(mins)}` : hoursWords(hours);
+}
+
 export function fmtDurationShort(minutes?: number | null): string {
   if (minutes === null || minutes === undefined || Number.isNaN(minutes)) return '—';
   const abs = Math.round(Math.abs(minutes));

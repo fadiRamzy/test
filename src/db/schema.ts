@@ -126,11 +126,63 @@ export interface FieldVisit extends BaseRecord {
 
 export const FINAL_ASSESSMENT_OPTIONS = ['ملتزم', 'ملتزم مع ملاحظات', 'يحتاج متابعة', 'غير ملتزم'];
 
-/* ------------------------- دقائق الصرف اليومية ------------------------- */
+/* --------------------------- محاضر يومية ------------------------------- */
+
+export type InspectionResult = 'has_notes' | 'no_notes';
+
+export const INSPECTION_RESULT_LABELS: Record<InspectionResult, string> = {
+  has_notes: 'يوجد ملاحظات',
+  no_notes: 'لا توجد ملاحظات',
+};
+
+/** نتائج الفحص المتاحة في نموذج المحضر — خياران فقط */
+export const INSPECTION_RESULT_OPTIONS: InspectionResult[] = ['has_notes', 'no_notes'];
+
+/**
+ * محضر يومي: الموظف + ثلاثة توقيتات + نتيجة الفحص.
+ * المدة تُحسب بين «توقيت استلام الملف» و«توقيت الرد على الملف».
+ */
+export interface DailyMinute extends BaseRecord {
+  employeeId: ID;
+  /** توقيت طلب الملف HH:MM (اختياري) */
+  fileRequestTime: string;
+  /** توقيت استلام الملف (بداية حساب المدة) */
+  fileReceivedTime: string;
+  /** توقيت الرد على الملف (نهاية حساب المدة) */
+  responseTime: string;
+  /** نتيجة الفحص — قد تكون فارغة في السجلات القديمة فقط */
+  inspectionResult: InspectionResult | '';
+
+  /* --- حقول النسخة السابقة: تُحفظ ولا تُحذف، وتُعرض للقراءة الاحتياطية فقط --- */
+  /** @deprecated تاريخ المحضر (لم يعد يُستخدم في النموذج) */
+  date?: string;
+  /** @deprecated */
+  branch?: string;
+  /** @deprecated */
+  clientRef?: string;
+  /** @deprecated */
+  financingType?: string;
+  /** @deprecated */
+  amount?: number | null;
+  /** @deprecated توقيت استلام الدقيقة (النسخة السابقة) */
+  minuteReceivedTime?: string;
+  /** @deprecated اسم بديل لـ responseTime في النسخة السابقة */
+  finalResponseTime?: string;
+  /** @deprecated */
+  result?: MinuteResult;
+  /** @deprecated */
+  status?: MinuteStatus;
+  /** @deprecated */
+  notes?: string;
+}
+
+/** @deprecated استخدم DailyMinute */
+export type DisbursementMinute = DailyMinute;
 
 export type MinuteStatus = 'open' | 'closed';
 export type MinuteResult = 'pending' | 'approved' | 'rejected' | 'need_more';
 
+/** تسميات النسخة السابقة — تُستخدم لعرض السجلات القديمة فقط */
 export const MINUTE_STATUS_LABELS: Record<MinuteStatus, string> = {
   open: 'قيد الإجراء',
   closed: 'منتهية',
@@ -143,22 +195,24 @@ export const MINUTE_RESULT_LABELS: Record<MinuteResult, string> = {
   need_more: 'يحتاج استكمال',
 };
 
-export interface DisbursementMinute extends BaseRecord {
+/* --------------------------- توقيت الزيارات ---------------------------- */
+
+/**
+ * زيارة ميدانية بتوقيتات: يوم الزيارة، الفرع، العميل، المكان،
+ * توقيت التحرك على الزيارة وتوقيت الرجوع للفرع.
+ * المدة = من التحرك حتى الرجوع (تدعم عبور منتصف الليل).
+ */
+export interface VisitTiming extends BaseRecord {
   employeeId: ID;
-  /** تاريخ الدقيقة YYYY-MM-DD */
-  date: string;
+  /** تاريخ الزيارة YYYY-MM-DD */
+  visitDate: string;
   branch: string;
-  clientRef: string;
-  financingType: string;
-  amount: number | null;
-  /** أوقات بصيغة HH:MM — كلها اختيارية ما عدا وقت الاستلام */
-  minuteReceivedTime: string;
-  fileRequestTime: string;
-  fileReceivedTime: string;
-  finalResponseTime: string;
-  result: MinuteResult;
-  status: MinuteStatus;
-  notes: string;
+  clientName: string;
+  location: string;
+  /** توقيت التحرك على الزيارة HH:MM */
+  departureTime: string;
+  /** توقيت الرجوع للفرع HH:MM */
+  returnTime: string;
 }
 
 /* ------------------------------ الملاحظات ----------------------------- */
@@ -255,13 +309,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
 /* ---------------------------------------------------------------------- */
 
 export const DB_NAME = 'risk-officer-suite';
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 export const STORE_NAMES = [
   'employees',
   'monthlyEvaluations',
   'fieldVisits',
   'minutes',
+  'visitTimings',
   'observations',
   'leaves',
   'annualNotes',
@@ -270,13 +325,22 @@ export const STORE_NAMES = [
 ] as const;
 
 export type StoreName = (typeof STORE_NAMES)[number];
-export type EntityName = 'employees' | 'monthlyEvaluations' | 'fieldVisits' | 'minutes' | 'observations' | 'leaves' | 'annualNotes';
+export type EntityName =
+  | 'employees'
+  | 'monthlyEvaluations'
+  | 'fieldVisits'
+  | 'minutes'
+  | 'visitTimings'
+  | 'observations'
+  | 'leaves'
+  | 'annualNotes';
 
 export const ENTITY_LABELS: Record<EntityName, string> = {
   employees: 'الموظفون',
   monthlyEvaluations: 'التقييمات الشهرية',
   fieldVisits: 'الزيارات الميدانية',
-  minutes: 'دقائق الصرف',
+  minutes: 'محاضر يومية',
+  visitTimings: 'توقيت الزيارات',
   observations: 'الملاحظات',
   leaves: 'الإجازات والأذونات',
   annualNotes: 'ملاحظات التقييم السنوي',

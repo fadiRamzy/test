@@ -12,6 +12,7 @@ import { MinutesPage } from './pages/Minutes';
 import { ObservationsPage } from './pages/Observations';
 import { LeavesPage } from './pages/Leaves';
 import { ReportsPage } from './pages/Reports';
+import { VisitTimingsPage } from './pages/VisitTimings';
 
 export function App() {
   const { fatalError, toasts, dismissToast } = useApp();
@@ -50,8 +51,10 @@ export function App() {
 function Router({ route }: { route: ReturnType<typeof useRoute> }) {
   const [first, second] = route.segments;
 
-  if (!first) return <DashboardPage />;
-  if (first === 'employees') return second ? <EmployeeProfilePage employeeId={second} /> : <EmployeesPage />;
+  if (!first || first === 'employees')
+    return second ? <EmployeeProfilePage employeeId={second} /> : <EmployeesPage />;
+  if (first === 'visit-times') return <VisitTimingsPage />;
+  if (first === 'dashboard') return <DashboardPage />;
   if (first === 'monthly') return <MonthlyEvaluationsPage />;
   if (first === 'annual') return <AnnualEvaluationsPage />;
   if (first === 'visits') return <FieldVisitsPage />;
@@ -60,5 +63,5 @@ function Router({ route }: { route: ReturnType<typeof useRoute> }) {
   if (first === 'leaves') return <LeavesPage />;
   if (first === 'reports') return <ReportsPage />;
 
-  return <DashboardPage />;
+  return <EmployeesPage />;
 }

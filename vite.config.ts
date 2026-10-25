@@ -112,8 +112,8 @@ self.addEventListener('fetch', (event) => {
 }
 
 export default defineConfig({
-  // مسارات نسبية: تعمل على النطاق الجذري وعلى أي مسار فرعي لمستودع GitHub Pages
-  base: './',
+  // اسم المستودع على GitHub Pages: https://fadiRamzy.github.io/test/
+  base: '/test/',
   plugins: [react(), serviceWorkerPlugin()],
   build: {
     target: 'es2020',

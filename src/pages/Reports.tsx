@@ -10,13 +10,22 @@ import {
   type BackupPayload,
   type ValidationResult,
 } from '../db/backup';
-import { ENTITY_LABELS, MONTHS_AR, type EntityName } from '../db/schema';
-import { annualSummary, leaveTotals, monthlyTotals } from '../lib/calc';
-import { fmtDate, fmtDateTime, fmtNumber } from '../lib/format';
+import { ENTITY_LABELS, INSPECTION_RESULT_LABELS, MONTHS_AR, type EntityName } from '../db/schema';
+import { annualSummary, leaveTotals, minuteTiming, monthlyTotals, visitTiming } from '../lib/calc';
+import { fmtDate, fmtDateTime, fmtDurationWords, fmtNumber } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
 import { downloadFile, readTextFile, safeJsonParse } from '../lib/utils';
 
-const ENTITIES: EntityName[] = ['employees', 'monthlyEvaluations', 'fieldVisits', 'minutes', 'observations', 'leaves', 'annualNotes'];
+const ENTITIES: EntityName[] = [
+  'employees',
+  'monthlyEvaluations',
+  'fieldVisits',
+  'minutes',
+  'visitTimings',
+  'observations',
+  'leaves',
+  'annualNotes',
+];
 
 export function ReportsPage() {
   const { data, settings, saveSettings, refresh, notify } = useApp();
@@ -81,13 +90,20 @@ export function ReportsPage() {
       data.employees.flatMap((employee) => {
         const monthly = data.evaluations.filter((row) => row.employeeId === employee.id && row.year === year);
         const visits = data.visits.filter((row) => row.employeeId === employee.id && row.visitDate.startsWith(String(year)));
-        const minutes = data.minutes.filter((row) => row.employeeId === employee.id && row.date.startsWith(String(year)));
+        const minutes = data.minutes.filter(
+          (row) => row.employeeId === employee.id && (row.date ?? row.createdAt.slice(0, 10)).startsWith(String(year)),
+        );
         const observations = data.observations.filter((row) => row.employeeId === employee.id && row.date.startsWith(String(year)));
         const leaves = data.leaves.filter((row) => row.employeeId === employee.id && row.startDate.startsWith(String(year)));
         return [
           ...monthly.map((row) => [employee.name, 'تقييم شهري', `${row.month}/${row.year}`, `النقاط: ${monthlyTotals(row.scores, row.visits).total}`]),
           ...visits.map((row) => [employee.name, 'زيارة', row.visitDate, `${row.branch} — ${row.visitType}`]),
-          ...minutes.map((row) => [employee.name, 'دقيقة صرف', row.date, `${row.branch} — ${row.clientRef}`]),
+          ...minutes.map((row) => [
+            employee.name,
+            'محضر يومي',
+            row.date ?? row.createdAt.slice(0, 10),
+            `${row.fileReceivedTime || '—'} → ${row.responseTime || '—'}`,
+          ]),
           ...observations.map((row) => [employee.name, 'ملاحظة', row.date, row.details]),
           ...leaves.map((row) => [employee.name, 'إجازة/إذن', row.startDate, `${row.type} (${row.unit === 'days' ? `${row.days} يوم` : `${row.hours} ساعة`})`]),
         ];
@@ -103,9 +119,41 @@ export function ReportsPage() {
 
   const exportMinutes = () =>
     downloadCsv(
-      csvFileName(`minutes-${year}`),
-      ['التاريخ', 'الفرع', 'الموظف', 'مرجع العميل', 'نوع التمويل', 'المبلغ', 'الاستلام', 'الرد النهائي', 'الحالة'],
-      data.minutes.filter((row) => row.date.startsWith(String(year))).map((row) => [row.date, row.branch, nameOf(row.employeeId), row.clientRef, row.financingType, row.amount ?? '', row.minuteReceivedTime, row.finalResponseTime, row.status === 'open' ? 'قيد الإجراء' : 'منتهية']),
+      csvFileName('minutes'),
+      ['الموظف', 'توقيت طلب الملف', 'توقيت استلام الملف', 'توقيت الرد على الملف', 'نتيجة الفحص', 'المدة', 'حالة التأخير'],
+      data.minutes.map((row) => {
+        const timing = minuteTiming(row);
+        return [
+          nameOf(row.employeeId),
+          row.fileRequestTime || '',
+          row.fileReceivedTime || '',
+          row.responseTime || '',
+          row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : '',
+          timing.minutes === null ? '' : fmtDurationWords(timing.minutes),
+          timing.invalid ? (timing.reason ?? '') : timing.delayed ? 'متأخر' : 'في الوقت',
+        ];
+      }),
+    );
+
+  const exportVisitTimings = () =>
+    downloadCsv(
+      csvFileName(`visit-timings-${year}`),
+      ['الموظف', 'التاريخ', 'الفرع', 'اسم العميل', 'مكان الزيارة', 'توقيت التحرك', 'توقيت الرجوع', 'مدة الزيارة'],
+      data.visitTimings
+        .filter((row) => (row.visitDate ?? '').startsWith(String(year)))
+        .map((row) => {
+          const timing = visitTiming(row);
+          return [
+            nameOf(row.employeeId),
+            row.visitDate,
+            row.branch,
+            row.clientName,
+            row.location,
+            row.departureTime,
+            row.returnTime,
+            timing.minutes === null ? (timing.reason ?? '') : fmtDurationWords(timing.minutes),
+          ];
+        }),
     );
 
   const exportObservations = () =>
@@ -174,7 +222,8 @@ export function ReportsPage() {
           <Button icon="download" onClick={exportAnnual}>التقييم السنوي</Button>
           <Button icon="download" onClick={exportHistory}>سجل الموظفين</Button>
           <Button icon="download" onClick={exportVisits}>الزيارات الميدانية</Button>
-          <Button icon="download" onClick={exportMinutes}>دقائق الصرف</Button>
+          <Button icon="download" onClick={exportMinutes}>محاضر يومية</Button>
+          <Button icon="download" onClick={exportVisitTimings}>توقيت الزيارات</Button>
           <Button icon="download" onClick={exportObservations}>الملاحظات</Button>
           <Button icon="download" onClick={exportLeaves}>الإجازات والأذونات</Button>
         </div>
