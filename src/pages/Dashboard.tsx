@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useApp } from '../state/store';
 import { navigate } from '../state/router';
-import { Button, Card, EmptyState, PageHeader, Select, Stat, Table, TableWrap } from '../components/ui';
+import { Button, Card, EmptyState, ListCard, PageHeader, Select, Stat, Table, TableWrap } from '../components/ui';
 import { MONTHS_AR } from '../db/schema';
 import { dashboardCounts } from '../lib/calc';
 import { fmtDate } from '../lib/format';
@@ -98,7 +98,7 @@ export function DashboardPage() {
         <Stat label="دقائق صرف بدون رد نهائي" value={counts.outstandingMinutes} onClick={() => navigate('/minutes')} />
       </div>
 
-      <Card title="موظفون بدون تقييم شهري" subtitle={`${MONTHS_AR[month - 1]} ${year}`} padded={false}>
+      <ListCard id="dashboard-missing-evaluations" title="موظفون بدون تقييم شهري" subtitle={`${MONTHS_AR[month - 1]} ${year}`} note="القائمة مخفية — اضغط «إظهار البيانات» لعرضها.">
         {counts.employeesWithoutEvaluation.length ? (
           <TableWrap>
             <Table>
@@ -135,9 +135,9 @@ export function DashboardPage() {
         ) : (
           <EmptyState title="كل الموظفين تم تقييمهم هذا الشهر" />
         )}
-      </Card>
+      </ListCard>
 
-      <Card title="أحدث الملاحظات المفتوحة" padded={false}>
+      <ListCard id="dashboard-observations" title="أحدث الملاحظات المفتوحة" note="القائمة مخفية — اضغط «إظهار البيانات» لعرضها.">
         {recentObservations.length ? (
           <TableWrap>
             <Table>
@@ -164,7 +164,7 @@ export function DashboardPage() {
         ) : (
           <EmptyState title="لا ملاحظات مفتوحة" />
         )}
-      </Card>
+      </ListCard>
     </>
   );
 }

@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from './Icon';
 import { cn } from '../lib/utils';
+import { joinTime12, splitTime12 } from '../lib/format';
 
 /* --------------------------------- أزرار --------------------------------- */
 
@@ -74,6 +75,96 @@ export function Card({
       )}
       <div className={cn('card__body', !padded && 'card__body--flush')}>{children}</div>
     </section>
+  );
+}
+
+/* --------------------------- إخفاء/إظهار القوائم ------------------------- */
+
+export interface CollapseSignal {
+  /** يزيد عند الضغط على «إخفاء الكل» أو «إظهار الكل» */
+  version: number;
+  collapsed: boolean;
+}
+
+const CollapseContext = createContext<CollapseSignal>({ version: 0, collapsed: false });
+
+/** يوفّر إشارة عامة لكل بطاقات القوائم في الصفحة الحالية */
+export function CollapseProvider({ signal, children }: { signal: CollapseSignal; children: ReactNode }) {
+  return <CollapseContext.Provider value={signal}>{children}</CollapseContext.Provider>;
+}
+
+/** حالة طي مستقلة لكل قائمة، تتأثر بـ«إخفاء الكل» و«إظهار الكل» */
+export function useCollapse(defaultCollapsed = false) {
+  const signal = useContext(CollapseContext);
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const seen = useRef(signal.version);
+
+  useEffect(() => {
+    if (signal.version === seen.current) return;
+    seen.current = signal.version;
+    setCollapsed(signal.collapsed);
+  }, [signal]);
+
+  const toggle = useCallback(() => setCollapsed((value) => !value), []);
+  return { collapsed, toggle };
+}
+
+/** بطاقة قائمة بيانات مع زر إخفاء/إظهار مستقل */
+export function ListCard({
+  id,
+  title,
+  subtitle,
+  actions,
+  children,
+  padded = false,
+  defaultCollapsed = false,
+  hideLabel = 'إخفاء البيانات',
+  showLabel = 'إظهار البيانات',
+  note,
+  className,
+}: {
+  id: string;
+  title?: ReactNode;
+  subtitle?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+  padded?: boolean;
+  defaultCollapsed?: boolean;
+  hideLabel?: string;
+  showLabel?: string;
+  note?: ReactNode;
+  className?: string;
+}) {
+  const { collapsed, toggle } = useCollapse(defaultCollapsed);
+  return (
+    <Card
+      className={className}
+      title={title}
+      subtitle={subtitle}
+      padded={padded}
+      actions={
+        <>
+          {actions}
+          <Button
+            size="sm"
+            icon={collapsed ? 'list' : 'close'}
+            onClick={toggle}
+            aria-expanded={!collapsed}
+            aria-controls={id}
+          >
+            {collapsed ? showLabel : hideLabel}
+          </Button>
+        </>
+      }
+    >
+      {collapsed ? (
+        <div className="collapsed-note small muted" id={id}>
+          {note ?? 'البيانات مخفية — اضغط «إظهار البيانات» لعرضها. الإخفاء لا يحذف أي سجل.'}
+        </div>
+      ) : (
+        <div id={id}>{children}</div>
+      )}
+    </Card>
   );
 }
 
@@ -171,6 +262,49 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
 
 export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return <select {...props} className={cn('select', props.className)} />;
+}
+
+/** حقل وقت بنظام 12 ساعة (ساعة · دقيقة · ص/م) — يخزّن HH:MM داخليًا دون تغيير الصيغة */
+export function TimeInput({
+  id,
+  value,
+  onChange,
+  disabled,
+}: {
+  id?: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const parts = splitTime12(value);
+  const setHour = (hours: string) => onChange(joinTime12(hours, parts.minutes, parts.period));
+  const setMinutes = (minutes: string) => onChange(joinTime12(parts.hours, minutes, parts.period));
+  const setPeriod = (period: string) => onChange(joinTime12(parts.hours, parts.minutes, period === 'م' ? 'م' : 'ص'));
+  const empty = !parts.hours;
+
+  return (
+    <div className="timefield">
+      <Select id={id} aria-label="الساعة" value={parts.hours} disabled={disabled} onChange={(e) => setHour(e.target.value)}>
+        <option value="">—</option>
+        {Array.from({ length: 12 }, (_, index) => String(index + 1)).map((hour) => (
+          <option key={hour} value={hour}>
+            {hour}
+          </option>
+        ))}
+      </Select>
+      <Select aria-label="الدقيقة" value={parts.minutes} disabled={disabled || empty} onChange={(e) => setMinutes(e.target.value)}>
+        {Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0')).map((minute) => (
+          <option key={minute} value={minute}>
+            {minute}
+          </option>
+        ))}
+      </Select>
+      <Select aria-label="الفترة" value={parts.period} disabled={disabled || empty} onChange={(e) => setPeriod(e.target.value)}>
+        <option value="ص">ص</option>
+        <option value="م">م</option>
+      </Select>
+    </div>
+  );
 }
 
 export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {

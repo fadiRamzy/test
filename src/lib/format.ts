@@ -37,6 +37,39 @@ export const fmtDateTime = (value?: string | Date | null) => {
   return date ? dateTimeFmt.format(date) : '—';
 };
 
+/** وقت HH:MM (نظام 24 ساعة داخليًا) → عرض عربي بنظام 12 ساعة: 14:00 → «2 م» · 09:30 → «9:30 ص» */
+export function fmtTime(value?: string | null): string {
+  if (!value) return '—';
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(value.trim());
+  if (!match) return value;
+  const hours24 = Number(match[1]);
+  const minutes = Number(match[2]);
+  const period = hours24 < 12 ? 'ص' : 'م';
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  return minutes ? `${hours12}:${pad(minutes)} ${period}` : `${hours12} ${period}`;
+}
+
+/** يقسم وقت HH:MM إلى أجزاء نظام 12 ساعة (تُستخدم في حقل الإدخال) */
+export function splitTime12(value?: string | null): { hours: string; minutes: string; period: 'ص' | 'م' } {
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec((value ?? '').trim());
+  if (!match) return { hours: '', minutes: '00', period: 'ص' };
+  const hours24 = Number(match[1]);
+  return {
+    hours: String(hours24 % 12 === 0 ? 12 : hours24 % 12),
+    minutes: match[2],
+    period: hours24 < 12 ? 'ص' : 'م',
+  };
+}
+
+/** يجمع أجزاء نظام 12 ساعة في وقت HH:MM (24 ساعة) — ساعة فارغة تعني بلا وقت */
+export function joinTime12(hours: string, minutes: string, period: 'ص' | 'م'): string {
+  if (!hours) return '';
+  const hours12 = Math.min(12, Math.max(1, Number(hours) || 12));
+  const mins = Math.min(59, Math.max(0, Number(minutes) || 0));
+  const hours24 = (hours12 % 12) + (period === 'م' ? 12 : 0);
+  return `${String(hours24).padStart(2, '0')}:${pad(mins)}`;
+}
+
 export const fmtNumber = (value?: number | null) =>
   value === null || value === undefined || Number.isNaN(value) ? '—' : numberFmt.format(value);
 

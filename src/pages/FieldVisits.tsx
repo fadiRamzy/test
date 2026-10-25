@@ -3,7 +3,7 @@ import { useApp } from '../state/store';
 import {
   Badge,
   Button,
-  Card,
+  ListCard,
   EmptyState,
   Field,
   IconButton,
@@ -68,7 +68,6 @@ export function FieldVisitsPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [confirmDelete, setConfirmDelete] = useState<FieldVisit | null>(null);
-  const [showSummary, setShowSummary] = useState(true);
 
   const nameOf = (id: string) => data.employees.find((row) => row.id === id)?.name ?? '—';
 
@@ -170,18 +169,13 @@ export function FieldVisitsPage() {
         }
       />
 
-      <Card
+      <ListCard
+        id="field-visits-summary"
         title={`ملخص الزيارات ${year}`}
         subtitle="عدد الزيارات لكل شهر ثم الإجمالي السنوي"
-        actions={
-          <Button size="sm" icon={showSummary ? 'chevron-down' : 'chevron-left'} onClick={() => setShowSummary((value) => !value)}>
-            {showSummary ? 'إخفاء' : 'إظهار'}
-          </Button>
-        }
-        padded={false}
+        note="ملخص الزيارات مخفي — اضغط «إظهار البيانات» لعرضه."
       >
-        {showSummary ? (
-          summaryRows.length ? (
+          {summaryRows.length ? (
             <TableWrap>
               <Table>
                 <thead>
@@ -220,11 +214,15 @@ export function FieldVisitsPage() {
             </TableWrap>
           ) : (
             <EmptyState title="لا زيارات مسجلة هذه السنة" />
-          )
-        ) : null}
-      </Card>
+          )}
+      </ListCard>
 
-      <Card padded={false}>
+      <ListCard
+        id="field-visits-records"
+        title="الزيارات الميدانية المسجلة"
+        subtitle={`${rows.length} زيارة`}
+        note={`قائمة الزيارات مخفية (${rows.length} زيارة) — اضغط «إظهار البيانات» لعرضها.`}
+      >
         <Toolbar>
           <Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">
             {YEARS.map((item) => (
@@ -330,7 +328,7 @@ export function FieldVisitsPage() {
             description="أضف زيارة جديدة من الزر أعلى الصفحة."
           />
         )}
-      </Card>
+      </ListCard>
 
       <Modal
         open={Boolean(draft)}

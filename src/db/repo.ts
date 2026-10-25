@@ -299,8 +299,8 @@ export async function listMinutes(): Promise<DailyMinute[]> {
 }
 
 export function validateMinute(input: Partial<DailyMinute>): Record<string, string> {
+  // كل الحقول اختيارية — يُسمح بحفظ محضر ناقص، ولا تُفرض أي قيمة افتراضية
   const errors: Record<string, string> = {};
-  if (!input.employeeId) errors.employeeId = 'الموظف مطلوب';
 
   for (const [field, label] of [
     ['fileRequestTime', 'توقيت طلب الملف'],
@@ -310,9 +310,6 @@ export function validateMinute(input: Partial<DailyMinute>): Record<string, stri
     const value = input[field];
     if (value && !isTime(value)) errors[field] = `${label}: صيغة الوقت غير صحيحة (HH:MM)`;
   }
-
-  if (input.inspectionResult !== 'has_notes' && input.inspectionResult !== 'no_notes')
-    errors.inspectionResult = 'نتيجة الفحص مطلوبة';
 
   const received = input.fileReceivedTime ? parseInputTime(input.fileReceivedTime) : null;
   const response = input.responseTime ? parseInputTime(input.responseTime) : null;
@@ -337,11 +334,11 @@ export async function saveMinute(input: Partial<DailyMinute>): Promise<DailyMinu
     id: input.id ?? uid('min'),
     createdAt: current?.createdAt ?? nowIso(),
     updatedAt: nowIso(),
-    employeeId: input.employeeId as string,
+    employeeId: (input.employeeId ?? '') as string,
     fileRequestTime: (input.fileRequestTime ?? '').trim(),
     fileReceivedTime: (input.fileReceivedTime ?? '').trim(),
     responseTime: (input.responseTime ?? '').trim(),
-    inspectionResult: input.inspectionResult ?? 'no_notes',
+    inspectionResult: (input.inspectionResult ?? current?.inspectionResult ?? '') as DailyMinute['inspectionResult'],
   };
   await putRecord('minutes', record);
   return record;
@@ -367,16 +364,14 @@ export async function listVisitTimings(): Promise<VisitTiming[]> {
 }
 
 export function validateVisitTiming(input: Partial<VisitTiming>): Record<string, string> {
+  // كل الحقول اختيارية — يُسمح بحفظ زيارة ناقصة، وتُفحص الصيغ فقط عند وجود قيمة
   const errors: Record<string, string> = {};
-  if (!input.employeeId) errors.employeeId = 'الموظف مطلوب';
-  if (!trim(input.visitDate)) errors.visitDate = 'تاريخ الزيارة مطلوب';
-  else if (Number.isNaN(new Date(`${input.visitDate}T00:00:00`).getTime())) errors.visitDate = 'تاريخ الزيارة غير صالح';
-  if (!trim(input.branch)) errors.branch = 'الفرع مطلوب';
-  if (!trim(input.clientName)) errors.clientName = 'اسم العميل مطلوب';
-  if (!trim(input.departureTime)) errors.departureTime = 'توقيت التحرك على الزيارة مطلوب';
-  else if (!isTime(input.departureTime)) errors.departureTime = 'توقيت التحرك: صيغة الوقت غير صحيحة (HH:MM)';
-  if (!trim(input.returnTime)) errors.returnTime = 'توقيت الرجوع للفرع مطلوب';
-  else if (!isTime(input.returnTime)) errors.returnTime = 'توقيت الرجوع: صيغة الوقت غير صحيحة (HH:MM)';
+  if (trim(input.visitDate) && Number.isNaN(new Date(`${input.visitDate}T00:00:00`).getTime()))
+    errors.visitDate = 'تاريخ الزيارة غير صالح';
+  if (trim(input.departureTime) && !isTime(input.departureTime))
+    errors.departureTime = 'توقيت التحرك: صيغة الوقت غير صحيحة (HH:MM)';
+  if (trim(input.returnTime) && !isTime(input.returnTime))
+    errors.returnTime = 'توقيت الرجوع: صيغة الوقت غير صحيحة (HH:MM)';
   return errors;
 }
 
@@ -388,7 +383,7 @@ export async function saveVisitTiming(input: Partial<VisitTiming>): Promise<Visi
     id: input.id ?? uid('vt'),
     createdAt: current?.createdAt ?? nowIso(),
     updatedAt: nowIso(),
-    employeeId: input.employeeId as string,
+    employeeId: (input.employeeId ?? '') as string,
     visitDate: trim(input.visitDate).slice(0, 10),
     branch: trim(input.branch),
     clientName: trim(input.clientName),

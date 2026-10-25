@@ -8,20 +8,21 @@ import {
   Field,
   IconButton,
   Input,
+  ListCard,
   Modal,
   PageHeader,
   SearchInput,
   Select,
-  Stat,
   Table,
   TableWrap,
+  TimeInput,
   Toolbar,
 } from '../components/ui';
 import { ValidationError, deleteVisitTiming, saveVisitTiming } from '../db/repo';
 import { MONTHS_AR, type VisitTiming } from '../db/schema';
 import { EmployeePicker } from '../components/EmployeePicker';
-import { monthlyVisitSummary, visitTiming } from '../lib/calc';
-import { fmtDate, fmtDurationWords, todayInputValue } from '../lib/format';
+import { visitTiming } from '../lib/calc';
+import { fmtDate, fmtDurationWords, fmtTime } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
 
 interface Draft {
@@ -35,9 +36,9 @@ interface Draft {
   returnTime: string;
 }
 
-const emptyDraft = (employeeId = ''): Draft => ({
-  employeeId,
-  visitDate: todayInputValue(),
+const emptyDraft = (): Draft => ({
+  employeeId: '',
+  visitDate: '',
   branch: '',
   clientName: '',
   location: '',
@@ -61,19 +62,16 @@ export function VisitTimingsPage() {
   const { data, runAction } = useApp();
   const now = new Date();
   const [query, setQuery] = useState('');
-  const [showRecords, setShowRecords] = useState(false);
   const [listEmployee, setListEmployee] = useState('all');
   const [listBranch, setListBranch] = useState('all');
-  const [summaryBranch, setSummaryBranch] = useState('all');
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [year, setYear] = useState(now.getFullYear());
-  const [employeeFilter, setEmployeeFilter] = useState('all');
+  const [listMonth, setListMonth] = useState('all');
+  const [listYear, setListYear] = useState('all');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [confirmDelete, setConfirmDelete] = useState<VisitTiming | null>(null);
 
   const activeEmployees = data.employees.filter((row) => !row.archived);
-  const nameOf = (id: string) => data.employees.find((row) => row.id === id)?.name ?? 'موظف محذوف';
+  const nameOf = (id: string) => (id ? (data.employees.find((row) => row.id === id)?.name ?? 'موظف محذوف') : '—');
 
   const years = useMemo(() => {
     const set = new Set<number>([now.getFullYear()]);
@@ -91,47 +89,40 @@ export function VisitTimingsPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'ar'));
   }, [data.visitTimings]);
 
+  /** الزيارات المطابقة لكل الفلاتر مجتمعة (الموظف + الشهر + الفرع + السنة + البحث) */
   const rows = useMemo(() => {
     const text = query.trim().toLowerCase();
     return data.visitTimings
       .filter((row) => (listEmployee === 'all' ? true : row.employeeId === listEmployee))
       .filter((row) => (listBranch === 'all' ? true : row.branch === listBranch))
+      .filter((row) => (listMonth === 'all' ? true : Number((row.visitDate ?? '').slice(5, 7)) === Number(listMonth)))
+      .filter((row) => (listYear === 'all' ? true : (row.visitDate ?? '').slice(0, 4) === listYear))
       .filter((row) =>
         !text ? true : `${nameOf(row.employeeId)} ${row.branch} ${row.clientName} ${row.location}`.toLowerCase().includes(text),
       );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.visitTimings, data.employees, query, listEmployee, listBranch]);
+  }, [data.visitTimings, data.employees, query, listEmployee, listBranch, listMonth, listYear]);
+
+  /** عدد الزيارات لكل موظف داخل النتائج المفلترة */
+  const perEmployee = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of rows) counts.set(row.employeeId, (counts.get(row.employeeId) ?? 0) + 1);
+    return Array.from(counts, ([employeeId, count]) => ({ employeeId, name: nameOf(employeeId), count })).sort(
+      (a, b) => b.count - a.count,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, data.employees]);
+
+  const filtersActive =
+    query !== '' || listEmployee !== 'all' || listBranch !== 'all' || listMonth !== 'all' || listYear !== 'all';
 
   const resetListFilters = () => {
     setQuery('');
     setListEmployee('all');
     setListBranch('all');
+    setListMonth('all');
+    setListYear('all');
   };
-
-  const summarySource = useMemo(
-    () => (summaryBranch === 'all' ? data.visitTimings : data.visitTimings.filter((row) => row.branch === summaryBranch)),
-    [data.visitTimings, summaryBranch],
-  );
-
-  const summaries = useMemo(
-    () =>
-      monthlyVisitSummary(
-        summarySource,
-        data.employees,
-        year,
-        month,
-        employeeFilter === 'all' ? null : employeeFilter,
-      ),
-    [summarySource, data.employees, year, month, employeeFilter],
-  );
-
-  const totals = useMemo(() => {
-    const totalVisits = summaries.reduce((sum, row) => sum + row.totalVisits, 0);
-    const validVisits = summaries.reduce((sum, row) => sum + row.validVisits, 0);
-    const invalidVisits = summaries.reduce((sum, row) => sum + row.invalidVisits, 0);
-    const totalMinutes = summaries.reduce((sum, row) => sum + row.totalMinutes, 0);
-    return { totalVisits, validVisits, invalidVisits, totalMinutes };
-  }, [summaries]);
 
   const submit = async () => {
     if (!draft) return;
@@ -160,13 +151,14 @@ export function VisitTimingsPage() {
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
 
-  const exportMonthCsv = () => {
+  const exportCsv = () => {
     downloadCsv(
-      csvFileName(`visits-${year}-${String(month).padStart(2, '0')}`),
+      csvFileName('visits'),
       ['الموظف', 'التاريخ', 'الفرع', 'اسم العميل', 'مكان الزيارة', 'توقيت التحرك', 'توقيت الرجوع', 'مدة الزيارة'],
-      summaries.flatMap((summary) =>
-        summary.visits.map(({ visit, timing }) => [
-          summary.employeeName,
+      rows.map((visit) => {
+        const timing = visitTiming(visit);
+        return [
+          nameOf(visit.employeeId),
           visit.visitDate,
           visit.branch,
           visit.clientName,
@@ -174,8 +166,8 @@ export function VisitTimingsPage() {
           visit.departureTime,
           visit.returnTime,
           timing.minutes === null ? (timing.reason ?? 'مدة غير صالحة') : fmtDurationWords(timing.minutes),
-        ]),
-      ),
+        ];
+      }),
     );
   };
 
@@ -186,7 +178,7 @@ export function VisitTimingsPage() {
       <PageHeader
         eyebrow="العمل الميداني"
         title="توقيت الزيارات"
-        description="تسجيل زيارات الموظفين بتوقيت التحرك والرجوع، مع ملخص شهري تلقائي لكل موظف."
+        description="تسجيل زيارات الموظفين بتوقيت التحرك والرجوع، مع فلاتر وبحث داخل الزيارات المسجلة."
         actions={
           <Button
             variant="primary"
@@ -194,7 +186,7 @@ export function VisitTimingsPage() {
             disabled={!activeEmployees.length}
             onClick={() => {
               setErrors({});
-              setDraft(emptyDraft(activeEmployees[0]?.id ?? ''));
+              setDraft(emptyDraft());
             }}
           >
             إضافة زيارة
@@ -210,48 +202,75 @@ export function VisitTimingsPage() {
           />
         </Card>
       ) : (
-        <>
-          <Card
-            padded={false}
-            title="الزيارات المسجلة"
-            subtitle={`${rows.length} زيارة`}
-            actions={
-              <Button
-                icon={showRecords ? 'close' : 'list'}
-                onClick={() => setShowRecords((value) => !value)}
-                aria-expanded={showRecords}
-                aria-controls="visits-records"
-              >
-                {showRecords ? 'إخفاء الزيارات' : 'إظهار الزيارات'}
-              </Button>
-            }
-          >
-            <Toolbar>
-              <SearchInput value={query} onChange={setQuery} placeholder="بحث بالموظف أو الفرع أو العميل…" />
-              <Select value={listEmployee} onChange={(e) => setListEmployee(e.target.value)} aria-label="الموظف في الزيارات">
-                <option value="all">كل الموظفين</option>
-                {data.employees.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.name}
-                  </option>
-                ))}
-              </Select>
-              <Select value={listBranch} onChange={(e) => setListBranch(e.target.value)} aria-label="الفرع في الزيارات">
-                <option value="all">كل الفروع</option>
-                {branches.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </Select>
-              <Button size="sm" icon="restore" onClick={resetListFilters} disabled={query === '' && listEmployee === 'all' && listBranch === 'all'}>
-                إعادة تعيين
-              </Button>
-              <span className="toolbar__spacer">{rows.length} زيارة</span>
-            </Toolbar>
-            {!showRecords ? (
-              <div className="collapsed-note small muted">قائمة الزيارات مخفية — اضغط «إظهار الزيارات» لعرضها.</div>
-            ) : rows.length ? (
+        <ListCard
+          id="visits-records"
+          padded={false}
+          title="الزيارات المسجلة"
+          subtitle={`${rows.length} زيارة مطابقة`}
+          hideLabel="إخفاء البيانات"
+          showLabel="إظهار البيانات"
+          note={`قائمة الزيارات مخفية (${rows.length} زيارة) — اضغط «إظهار البيانات» لعرضها. الإخفاء لا يحذف أي سجل.`}
+          actions={
+            <Button icon="download" onClick={exportCsv} disabled={!rows.length}>
+              تصدير CSV
+            </Button>
+          }
+        >
+          <Toolbar>
+            <SearchInput value={query} onChange={setQuery} placeholder="بحث بالموظف أو الفرع أو العميل…" />
+            <Select value={listEmployee} onChange={(e) => setListEmployee(e.target.value)} aria-label="الموظف في الزيارات">
+              <option value="all">كل الموظفين</option>
+              {data.employees.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                </option>
+              ))}
+            </Select>
+            <Select value={listMonth} onChange={(e) => setListMonth(e.target.value)} aria-label="شهر الزيارة">
+              <option value="all">كل الشهور</option>
+              {MONTHS_AR.map((label, index) => (
+                <option key={label} value={index + 1}>
+                  {label}
+                </option>
+              ))}
+            </Select>
+            <Select value={listBranch} onChange={(e) => setListBranch(e.target.value)} aria-label="الفرع في الزيارات">
+              <option value="all">كل الفروع</option>
+              {branches.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </Select>
+            <Select value={listYear} onChange={(e) => setListYear(e.target.value)} aria-label="سنة الزيارة">
+              <option value="all">كل السنوات</option>
+              {years.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </Select>
+            <Button size="sm" icon="restore" onClick={resetListFilters} disabled={!filtersActive}>
+              إعادة تعيين
+            </Button>
+            <span className="toolbar__spacer" data-testid="visit-count-total">
+              عدد الزيارات: {rows.length}
+            </span>
+          </Toolbar>
+
+          {rows.length ? (
+            <>
+              <div className="counts" data-testid="visit-employee-counts">
+                <span className="counts__label">الزيارات حسب الموظف</span>
+                <ul className="counts__list">
+                  {perEmployee.map((item) => (
+                    <li key={item.employeeId || 'none'} className="counts__item">
+                      <span>{item.name}</span>
+                      <strong>{item.count}</strong>
+                    </li>
+                  ))}
+                </ul>
+              </div>
               <TableWrap>
                 <Table>
                   <thead>
@@ -271,12 +290,12 @@ export function VisitTimingsPage() {
                     {rows.map((row) => (
                       <tr key={row.id}>
                         <td>{nameOf(row.employeeId)}</td>
-                        <td className="nowrap">{fmtDate(row.visitDate)}</td>
+                        <td className="nowrap">{row.visitDate ? fmtDate(row.visitDate) : '—'}</td>
                         <td>{row.branch || '—'}</td>
                         <td>{row.clientName || '—'}</td>
                         <td>{row.location || '—'}</td>
-                        <td className="mono">{row.departureTime || '—'}</td>
-                        <td className="mono">{row.returnTime || '—'}</td>
+                        <td className="nowrap">{fmtTime(row.departureTime)}</td>
+                        <td className="nowrap">{fmtTime(row.returnTime)}</td>
                         <td>{durationCell(row)}</td>
                         <td>
                           <div className="table__actions">
@@ -305,159 +324,25 @@ export function VisitTimingsPage() {
                   </tbody>
                 </Table>
               </TableWrap>
-            ) : (
-              <EmptyState
-                title={query || listEmployee !== 'all' || listBranch !== 'all' ? 'لا زيارات مطابقة للفلاتر' : 'لا زيارات مسجلة'}
-                description={
-                  query || listEmployee !== 'all' || listBranch !== 'all'
-                    ? 'جرّب تعديل الفلاتر أو إعادة تعيينها.'
-                    : 'اضغط «إضافة زيارة» لتسجيل أول زيارة.'
-                }
-              />
-            )}
-          </Card>
-
-          <Card
-            title="الملخص الشهري للزيارات"
-            subtitle={`${MONTHS_AR[month - 1]} ${year} — يُحدَّث تلقائيًا عند إضافة أو تعديل أو حذف زيارة`}
-            actions={
-              <Button icon="download" onClick={exportMonthCsv} disabled={!summaries.length}>
-                تصدير الشهر
-              </Button>
-            }
-            padded={false}
-          >
-            <Toolbar>
-              <Select value={month} onChange={(e) => setMonth(Number(e.target.value))} aria-label="الشهر">
-                {MONTHS_AR.map((label, index) => (
-                  <option key={label} value={index + 1}>
-                    {label}
-                  </option>
-                ))}
-              </Select>
-              <Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">
-                {years.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </Select>
-              <Select
-                value={employeeFilter}
-                onChange={(e) => setEmployeeFilter(e.target.value)}
-                aria-label="الموظف"
-              >
-                <option value="all">كل الموظفين</option>
-                {data.employees.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.name}
-                  </option>
-                ))}
-              </Select>
-              <Select value={summaryBranch} onChange={(e) => setSummaryBranch(e.target.value)} aria-label="فرع الملخص">
-                <option value="all">كل الفروع</option>
-                {branches.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </Select>
-              <Button
-                size="sm"
-                icon="restore"
-                disabled={employeeFilter === 'all' && summaryBranch === 'all'}
-                onClick={() => {
-                  setEmployeeFilter('all');
-                  setSummaryBranch('all');
-                }}
-              >
-                إعادة تعيين
-              </Button>
-            </Toolbar>
-
-            <div className="stats" data-testid="visit-month-totals">
-              <Stat icon="visits" label="إجمالي الزيارات" value={totals.totalVisits} hint={`${MONTHS_AR[month - 1]} ${year}`} />
-              <Stat
-                icon="check"
-                tone="success"
-                label="زيارات بمدة صالحة"
-                value={totals.validVisits}
-                hint={totals.invalidVisits ? `${totals.invalidVisits} بمدة غير صالحة` : 'كل الزيارات صالحة'}
-              />
-              <Stat
-                icon="clock"
-                label="إجمالي مدة الزيارات"
-                value={totals.validVisits ? fmtDurationWords(totals.totalMinutes) : '—'}
-              />
-            </div>
-
-            {summaries.length ? (
-              <div className="visit-summary">
-                {summaries.map((summary) => (
-                  <section key={summary.employeeId} className="visit-summary__group" data-testid="visit-summary-group">
-                    <header className="visit-summary__head">
-                      <h3>{summary.employeeName}</h3>
-                      <p className="small muted">
-                        عدد الزيارات: <strong>{summary.totalVisits}</strong> · إجمالي المدة:{' '}
-                        <strong>{summary.validVisits ? fmtDurationWords(summary.totalMinutes) : '—'}</strong>
-                        {summary.invalidVisits ? ` · ${summary.invalidVisits} زيارة بمدة غير صالحة (مستبعدة من المجموع)` : ''}
-                      </p>
-                    </header>
-                    <TableWrap>
-                      <Table>
-                        <thead>
-                          <tr>
-                            <th>التاريخ</th>
-                            <th>الموظف</th>
-                            <th>الفرع</th>
-                            <th>اسم العميل</th>
-                            <th>مكان الزيارة</th>
-                            <th>توقيت التحرك</th>
-                            <th>توقيت الرجوع</th>
-                            <th>مدة الزيارة</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {summary.visits.map(({ visit, timing }) => (
-                            <tr key={visit.id}>
-                              <td className="nowrap">{fmtDate(visit.visitDate)}</td>
-                              <td>{summary.employeeName}</td>
-                              <td>{visit.branch || '—'}</td>
-                              <td>{visit.clientName || '—'}</td>
-                              <td>{visit.location || '—'}</td>
-                              <td className="mono">{visit.departureTime || '—'}</td>
-                              <td className="mono">{visit.returnTime || '—'}</td>
-                              <td title={timing.reason ?? undefined}>
-                                {timing.minutes === null ? (
-                                  <span className="small muted">
-                                    — <Badge tone="neutral">{timing.reason ?? 'مدة غير صالحة'}</Badge>
-                                  </span>
-                                ) : (
-                                  fmtDurationWords(timing.minutes)
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </Table>
-                    </TableWrap>
-                  </section>
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                title="لا زيارات في الشهر المحدد"
-                description="لا توجد زيارات مسجلة لهذا الشهر — الإجماليات تظهر صفرًا. جرّب تغيير الشهر أو السنة أو الموظف."
-              />
-            )}
-          </Card>
-        </>
+            </>
+          ) : (
+            <EmptyState
+              title={filtersActive ? 'لا زيارات مطابقة للفلاتر' : 'لا زيارات مسجلة'}
+              description={
+                filtersActive
+                  ? 'جرّب تعديل الفلاتر أو إعادة تعيينها لاستعادة كل الزيارات.'
+                  : 'اضغط «إضافة زيارة» لتسجيل أول زيارة.'
+              }
+            />
+          )}
+        </ListCard>
       )}
 
       <Modal
         open={Boolean(draft)}
         onClose={() => setDraft(null)}
         title={draft?.id ? 'تعديل زيارة' : 'إضافة زيارة'}
+        subtitle="كل الحقول اختيارية — يمكن الحفظ حتى لو لم تُسجّل كل البيانات."
         size="lg"
         footer={
           <>
@@ -472,20 +357,19 @@ export function VisitTimingsPage() {
           <div className="formgrid">
             <EmployeePicker
               id="vt-employee"
-              label="الموظف"
-              required
+              label="الموظف (اختياري)"
               value={draft.employeeId}
               error={errors.employeeId}
               onChange={(value) => set('employeeId', value)}
               options={activeEmployees.map((row) => ({ id: row.id, name: row.name, meta: `رقم ${row.employeeNo}` }))}
             />
-            <Field label="التاريخ" required error={errors.visitDate} htmlFor="vt-date">
+            <Field label="التاريخ (اختياري)" error={errors.visitDate} htmlFor="vt-date">
               <Input id="vt-date" type="date" value={draft.visitDate} onChange={(e) => set('visitDate', e.target.value)} />
             </Field>
-            <Field label="الفرع" required error={errors.branch} htmlFor="vt-branch">
+            <Field label="الفرع (اختياري)" error={errors.branch} htmlFor="vt-branch">
               <Input id="vt-branch" value={draft.branch} onChange={(e) => set('branch', e.target.value)} />
             </Field>
-            <Field label="اسم العميل" required error={errors.clientName} htmlFor="vt-client">
+            <Field label="اسم العميل (اختياري)" error={errors.clientName} htmlFor="vt-client">
               <Input
                 id="vt-client"
                 className="input--client"
@@ -493,35 +377,25 @@ export function VisitTimingsPage() {
                 onChange={(e) => set('clientName', e.target.value)}
               />
             </Field>
-            <Field label="مكان الزيارة" error={errors.location} htmlFor="vt-location">
+            <Field label="مكان الزيارة (اختياري)" error={errors.location} htmlFor="vt-location">
               <Input id="vt-location" value={draft.location} onChange={(e) => set('location', e.target.value)} />
             </Field>
-            <Field label="توقيت التحرك على الزيارة" required error={errors.departureTime} htmlFor="vt-departure">
-              <Input
-                id="vt-departure"
-                type="time"
-                value={draft.departureTime}
-                onChange={(e) => set('departureTime', e.target.value)}
-              />
+            <Field label="توقيت التحرك على الزيارة (اختياري)" error={errors.departureTime} htmlFor="vt-departure">
+              <TimeInput id="vt-departure" value={draft.departureTime} onChange={(value) => set('departureTime', value)} />
             </Field>
-            <Field label="توقيت الرجوع للفرع" required error={errors.returnTime} htmlFor="vt-return">
-              <Input
-                id="vt-return"
-                type="time"
-                value={draft.returnTime}
-                onChange={(e) => set('returnTime', e.target.value)}
-              />
+            <Field label="توقيت الرجوع للفرع (اختياري)" error={errors.returnTime} htmlFor="vt-return">
+              <TimeInput id="vt-return" value={draft.returnTime} onChange={(value) => set('returnTime', value)} />
             </Field>
             <div className="span2 small muted" data-testid="visit-preview">
               {preview && preview.minutes !== null ? (
                 <>
                   مدة الزيارة: <strong>{fmtDurationWords(preview.minutes)}</strong>
-                  {preview.minutes > 0 && (preview.minutes ?? 0) >= 0 && (draft.returnTime < draft.departureTime) ? (
+                  {preview.minutes > 0 && draft.returnTime < draft.departureTime ? (
                     <> — تم احتساب الرجوع بعد منتصف الليل</>
                   ) : null}
                 </>
               ) : (
-                <>أدخل توقيت التحرك والرجوع لحساب مدة الزيارة تلقائيًا.</>
+                <>أدخل توقيت التحرك والرجوع لحساب مدة الزيارة تلقائيًا. بدون توقيتين صالحين لا تُحسب مدة.</>
               )}
             </div>
           </div>
@@ -552,7 +426,7 @@ export function VisitTimingsPage() {
       >
         <p className="small">
           سيتم حذف زيارة {confirmDelete ? `${nameOf(confirmDelete.employeeId)} — ${fmtDate(confirmDelete.visitDate)}` : ''}{' '}
-          نهائيًا، وسيتحدث الملخص الشهري تلقائيًا.
+          نهائيًا، وستُحدَّث القائمة والعدد تلقائيًا.
         </p>
       </Modal>
     </>

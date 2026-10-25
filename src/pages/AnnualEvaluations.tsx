@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useApp } from '../state/store';
-import { Badge, Button, Callout, Card, EmptyState, Input, PageHeader, SearchInput, Select, Table, TableWrap, Toolbar } from '../components/ui';
+import { Badge, Button, Callout, Card, EmptyState, ListCard, Input, PageHeader, SearchInput, Select, Table, TableWrap, Toolbar } from '../components/ui';
 import { saveAnnualNote } from '../db/repo';
 import { MONTHS_AR } from '../db/schema';
 import { annualSummary, monthsLabel } from '../lib/calc';
@@ -111,7 +111,7 @@ export function AnnualEvaluationsPage() {
         <h1>{settings.organizationName} — التقييم السنوي {year}</h1>
       </div>
 
-      <Card padded={false}>
+      <ListCard id="annual-records" title="الملخص السنوي — جدول الإدخال" note="الجدول مخفي — اضغط «إظهار البيانات» لعرضه.">
         <Toolbar>
           <Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">
             {YEARS.map((item) => (
@@ -213,7 +213,7 @@ export function AnnualEvaluationsPage() {
         ) : (
           <EmptyState title="لا نتائج مطابقة" description="غيّر البحث أو القطاع." />
         )}
-      </Card>
+      </ListCard>
 
       {notesFor ? (
         <Card

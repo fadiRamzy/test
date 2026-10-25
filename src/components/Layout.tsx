@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useApp } from '../state/store';
 import { useRoute } from '../state/router';
 import { Icon, type IconName } from './Icon';
+import { CollapseProvider, type CollapseSignal } from './ui';
 import { cn } from '../lib/utils';
 
 interface NavItem {
@@ -19,6 +20,9 @@ const NAV: NavItem[] = [
 export function Layout({ children }: { children: React.ReactNode }) {
   const { settings, ready } = useApp();
   const route = useRoute();
+
+  const [collapse, setCollapse] = useState<CollapseSignal>({ version: 0, collapsed: false });
+  const broadcast = (collapsed: boolean) => setCollapse((prev) => ({ version: prev.version + 1, collapsed }));
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -51,14 +55,26 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </a>
           ))}
         </nav>
-        <a className="btn btn--sm topnav__backup" href="#/reports">
-          <Icon name="database" size={14} />
-          <span>النسخ الاحتياطي</span>
-        </a>
+        <div className="topnav__tools">
+          <button type="button" className="btn btn--sm" onClick={() => broadcast(true)}>
+            <Icon name="close" size={13} />
+            <span>إخفاء الكل</span>
+          </button>
+          <button type="button" className="btn btn--sm" onClick={() => broadcast(false)}>
+            <Icon name="list" size={13} />
+            <span>إظهار الكل</span>
+          </button>
+          <a className="btn btn--sm topnav__backup" href="#/reports">
+            <Icon name="database" size={14} />
+            <span>النسخ الاحتياطي</span>
+          </a>
+        </div>
       </header>
-      <main className="page" id="main-content">
-        {ready ? children : <div className="loading">جارٍ فتح البيانات المحلية…</div>}
-      </main>
+      <CollapseProvider signal={collapse}>
+        <main className="page" id="main-content">
+          {ready ? children : <div className="loading">جارٍ فتح البيانات المحلية…</div>}
+        </main>
+      </CollapseProvider>
       <footer className="appfoot print-hide">
         البيانات محفوظة داخل هذا المتصفح على هذا الجهاز فقط — لا مزامنة بين الأجهزة، ويمكن فقدانها عند حذف بيانات
         المتصفح. <a href="#/reports">صدّر نسخة احتياطية</a> بشكل دوري.

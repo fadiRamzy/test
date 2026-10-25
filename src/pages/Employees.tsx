@@ -4,12 +4,12 @@ import { navigate } from '../state/router';
 import {
   Badge,
   Button,
-  Card,
   Checkbox,
   EmptyState,
   Field,
   IconButton,
   Input,
+  ListCard,
   Modal,
   PageHeader,
   SearchInput,
@@ -186,7 +186,14 @@ export function EmployeesPage() {
         }
       />
 
-      <Card padded={false}>
+      <ListCard
+        id="employees-list"
+        title="قائمة الموظفين"
+        subtitle={`${rows.length} موظف`}
+        hideLabel="إخفاء البيانات"
+        showLabel="إظهار البيانات"
+        note={`قائمة الموظفين مخفية (${rows.length} موظف) — اضغط «إظهار البيانات» لعرضها. الإخفاء لا يحذف أي سجل.`}
+      >
         <Toolbar>
           <SearchInput value={query} onChange={setQuery} placeholder="بحث بالاسم أو الكود…" />
           <Select value={sector} onChange={(e) => setSector(e.target.value)} aria-label="القطاع">
@@ -295,7 +302,7 @@ export function EmployeesPage() {
             }
           />
         )}
-      </Card>
+      </ListCard>
 
       <Modal
         open={Boolean(draft)}

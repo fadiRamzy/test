@@ -24,6 +24,7 @@ import {
   setEmployeeArchived,
 } from '../src/db/repo';
 import { STORE_NAMES } from '../src/db/schema';
+import { visitTiming } from '../src/lib/calc';
 
 beforeEach(async () => {
   await useDatabase(`test-repo-${Math.random().toString(36).slice(2)}`);
@@ -183,11 +184,19 @@ describe('محاضر يومية', () => {
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
-  it('يرفض نتيجة فحص فارغة أو غير معروفة', async () => {
+  it('يقبل محضرًا بكل الحقول اختيارية (بدون نتيجة فحص ولا توقيتات)', async () => {
     const employee = await makeEmployee({ code: 'RO-42' });
-    await expect(saveMinute({ employeeId: employee.id, inspectionResult: '' })).rejects.toMatchObject({
-      errors: { inspectionResult: 'نتيجة الفحص مطلوبة' },
-    });
+    const record = await saveMinute({ employeeId: employee.id, inspectionResult: '' });
+    expect(record.inspectionResult).toBe('');
+    expect(record.fileReceivedTime).toBe('');
+    expect(record.responseTime).toBe('');
+  });
+
+  it('يقبل محضرًا بدون موظف وبدون أي توقيت (لا قيم افتراضية مُختلقة)', async () => {
+    const record = await saveMinute({});
+    expect(record.employeeId).toBe('');
+    expect(record.fileRequestTime).toBe('');
+    expect(record.inspectionResult).toBe('');
   });
 
   it('يرفض ردًا يسبق استلام الملف (مدة سالبة)', async () => {
@@ -231,19 +240,17 @@ describe('توقيت الزيارات', () => {
     expect(rows[0].clientName).toBe('شركة النور');
   });
 
-  it('يرفض الزيارة ناقصة البيانات', async () => {
-    await expect(
-      saveVisitTiming({ employeeId: '', visitDate: '', branch: '', clientName: '', departureTime: '', returnTime: '' }),
-    ).rejects.toMatchObject({
-      errors: {
-        employeeId: 'الموظف مطلوب',
-        visitDate: 'تاريخ الزيارة مطلوب',
-        branch: 'الفرع مطلوب',
-        clientName: 'اسم العميل مطلوب',
-        departureTime: 'توقيت التحرك على الزيارة مطلوب',
-        returnTime: 'توقيت الرجوع للفرع مطلوب',
-      },
+  it('يقبل زيارة بكل الحقول فارغة دون أي قيم افتراضية', async () => {
+    const record = await saveVisitTiming({
+      employeeId: '',
+      visitDate: '',
+      branch: '',
+      clientName: '',
+      departureTime: '',
+      returnTime: '',
     });
+    expect(record).toMatchObject({ employeeId: '', visitDate: '', branch: '', clientName: '', departureTime: '', returnTime: '' });
+    expect(visitTiming(record).minutes).toBeNull();
   });
 
   it('يرفض توقيتًا غير صالح', async () => {

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useApp } from '../state/store';
 import {
   Button,
-  Card,
+  ListCard,
   EmptyState,
   Field,
   IconButton,
@@ -148,7 +148,7 @@ export function LeavesPage() {
         }
       />
 
-      <Card title="إجماليات السجلات المعروضة" subtitle={`${totals.records} سجل · ${fmtNumber(totals.days)} يوم · ${fmtNumber(totals.hours)} ساعة`} padded={false}>
+      <ListCard id="leaves-totals" title="إجماليات السجلات المعروضة" subtitle={`${totals.records} سجل · ${fmtNumber(totals.days)} يوم · ${fmtNumber(totals.hours)} ساعة`} note="إجماليات الإجازات مخفية — اضغط «إظهار البيانات» لعرضها.">
         {perEmployee.length ? (
           <TableWrap>
             <Table>
@@ -179,9 +179,14 @@ export function LeavesPage() {
         ) : (
           <EmptyState title="لا سجلات" description="أضف إجازة أو إذنًا جديدًا." />
         )}
-      </Card>
+      </ListCard>
 
-      <Card padded={false}>
+      <ListCard
+        id="leaves-records"
+        title="سجلات الإجازات والأذونات"
+        subtitle={`${rows.length} سجل`}
+        note={`قائمة السجلات مخفية (${rows.length} سجل) — اضغط «إظهار البيانات» لعرضها.`}
+      >
         <Toolbar>
           <Select value={year} onChange={(e) => setYear(e.target.value)} aria-label="السنة">
             <option value="all">كل السنوات</option>
@@ -265,7 +270,7 @@ export function LeavesPage() {
         ) : (
           <EmptyState title="لا سجلات إجازات" description="أضف أول سجل من الزر أعلى الصفحة." />
         )}
-      </Card>
+      </ListCard>
 
       <Modal
         open={Boolean(draft)}

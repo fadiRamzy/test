@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state/store';
-import { Badge, Button, Callout, Card, EmptyState, PageHeader, SearchInput, Select, TableWrap, Toolbar } from '../components/ui';
+import { Badge, Button, Callout, Card, EmptyState, ListCard, PageHeader, SearchInput, Select, TableWrap, Toolbar } from '../components/ui';
 import { saveMonthlyBatch } from '../db/repo';
 import { EVALUATION_CRITERIA, MONTHS_AR, SCORE_MAX, SCORE_MIN, type CriterionScores } from '../db/schema';
 import { monthlyTotals } from '../lib/calc';
@@ -195,7 +195,7 @@ export function MonthlyEvaluationsPage() {
         </p>
       </div>
 
-      <Card padded={false}>
+      <ListCard id="monthly-records" title="التقييم الشهري — جدول الإدخال" note="جدول التقييم مخفي — اضغط «إظهار البيانات» لعرضه.">
         <Toolbar>
           <Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">
             {YEARS.map((item) => (
@@ -341,7 +341,7 @@ export function MonthlyEvaluationsPage() {
             </tbody>
           </table>
         </TableWrap>
-      </Card>
+      </ListCard>
 
       <Callout tone="info">
         إجمالي الشهر يُحسب تلقائيًا = عدد الزيارات + مجموع الدرجات المسجلة. الخلايا الفارغة تعني «لم يُقيَّم بعد» ولا تُحسب

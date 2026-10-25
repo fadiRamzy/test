@@ -7,13 +7,14 @@ import {
   EmptyState,
   Field,
   IconButton,
-  Input,
+  ListCard,
   Modal,
   PageHeader,
   SearchInput,
   Select,
   Table,
   TableWrap,
+  TimeInput,
   Toolbar,
 } from '../components/ui';
 import { ValidationError, deleteMinute, saveMinute } from '../db/repo';
@@ -25,7 +26,7 @@ import {
 } from '../db/schema';
 import { EmployeePicker } from '../components/EmployeePicker';
 import { minuteTiming } from '../lib/calc';
-import { fmtDurationWords, monthName } from '../lib/format';
+import { fmtDurationWords, fmtTime, monthName } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
 
 interface Draft {
@@ -37,8 +38,8 @@ interface Draft {
   inspectionResult: InspectionResult | '';
 }
 
-const emptyDraft = (employeeId = ''): Draft => ({
-  employeeId,
+const emptyDraft = (): Draft => ({
+  employeeId: '',
   fileRequestTime: '',
   fileReceivedTime: '',
   responseTime: '',
@@ -48,7 +49,6 @@ const emptyDraft = (employeeId = ''): Draft => ({
 export function MinutesPage() {
   const { data, runAction } = useApp();
   const [query, setQuery] = useState('');
-  const [showRecords, setShowRecords] = useState(true);
   const [employeeFilter, setEmployeeFilter] = useState('all');
   const [monthFilter, setMonthFilter] = useState('all');
   const [yearFilter, setYearFilter] = useState('all');
@@ -57,7 +57,7 @@ export function MinutesPage() {
   const [confirmDelete, setConfirmDelete] = useState<DailyMinute | null>(null);
 
   const activeEmployees = data.employees.filter((row) => !row.archived);
-  const nameOf = (id: string) => data.employees.find((row) => row.id === id)?.name ?? 'موظف محذوف';
+  const nameOf = (id: string) => (id ? (data.employees.find((row) => row.id === id)?.name ?? 'موظف محذوف') : '—');
 
   /** تاريخ المحضر: التاريخ المسجل إن وُجد، وإلا تاريخ الإنشاء */
   const dateOf = (row: DailyMinute) => row.date ?? row.createdAt.slice(0, 10);
@@ -154,7 +154,7 @@ export function MinutesPage() {
               disabled={!activeEmployees.length}
               onClick={() => {
                 setErrors({});
-                setDraft(emptyDraft(activeEmployees[0]?.id ?? ''));
+                setDraft(emptyDraft());
               }}
             >
               إضافة محضر
@@ -171,20 +171,14 @@ export function MinutesPage() {
           />
         </Card>
       ) : (
-        <Card
+        <ListCard
+          id="minutes-records"
           padded={false}
           title="المحاضر المسجلة"
           subtitle={`${rows.length} محضر`}
-          actions={
-            <Button
-              icon={showRecords ? 'close' : 'list'}
-              onClick={() => setShowRecords((value) => !value)}
-              aria-expanded={showRecords}
-              aria-controls="minutes-records"
-            >
-              {showRecords ? 'إخفاء المحاضر' : 'إظهار المحاضر'}
-            </Button>
-          }
+          hideLabel="إخفاء المحاضر"
+          showLabel="إظهار المحاضر"
+          note={`قائمة المحاضر مخفية (${rows.length} محضر) — اضغط «إظهار المحاضر» لعرضها.`}
         >
           <Toolbar>
             <SearchInput value={query} onChange={setQuery} placeholder="بحث باسم الموظف…" />
@@ -218,9 +212,7 @@ export function MinutesPage() {
             <span className="toolbar__spacer">{rows.length} محضر</span>
           </Toolbar>
 
-          {!showRecords ? (
-            <div className="collapsed-note small muted">قائمة المحاضر مخفية — اضغط «إظهار المحاضر» لعرضها.</div>
-          ) : rows.length ? (
+          {rows.length ? (
             <TableWrap>
               <Table>
                 <thead>
@@ -241,9 +233,9 @@ export function MinutesPage() {
                     return (
                       <tr key={row.id}>
                         <td>{nameOf(row.employeeId)}</td>
-                        <td className="mono">{row.fileRequestTime || '—'}</td>
-                        <td className="mono">{row.fileReceivedTime || '—'}</td>
-                        <td className="mono">{row.responseTime || '—'}</td>
+                        <td className="nowrap">{fmtTime(row.fileRequestTime)}</td>
+                        <td className="nowrap">{fmtTime(row.fileReceivedTime)}</td>
+                        <td className="nowrap">{fmtTime(row.responseTime)}</td>
                         <td>{row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : '—'}</td>
                         <td className="num" title={timing.reason ?? undefined}>
                           {timing.minutes === null ? '—' : fmtDurationWords(timing.minutes)}
@@ -289,7 +281,7 @@ export function MinutesPage() {
               description={filtersActive ? 'جرّب تعديل الفلاتر أو إعادة تعيينها.' : 'اضغط «إضافة محضر» لتسجيل أول محضر يومي.'}
             />
           )}
-        </Card>
+        </ListCard>
       )}
 
       <Modal
@@ -310,8 +302,7 @@ export function MinutesPage() {
           <div className="formgrid">
             <EmployeePicker
               id="min-employee"
-              label="الموظف"
-              required
+              label="الموظف (اختياري)"
               className="span2"
               value={draft.employeeId}
               error={errors.employeeId}
@@ -320,30 +311,15 @@ export function MinutesPage() {
             />
 
             <Field label="توقيت طلب الملف" error={errors.fileRequestTime} htmlFor="min-request">
-              <Input
-                id="min-request"
-                type="time"
-                value={draft.fileRequestTime}
-                onChange={(e) => set('fileRequestTime', e.target.value)}
-              />
+              <TimeInput id="min-request" value={draft.fileRequestTime} onChange={(value) => set('fileRequestTime', value)} />
             </Field>
             <Field label="توقيت استلام الملف" error={errors.fileReceivedTime} htmlFor="min-received">
-              <Input
-                id="min-received"
-                type="time"
-                value={draft.fileReceivedTime}
-                onChange={(e) => set('fileReceivedTime', e.target.value)}
-              />
+              <TimeInput id="min-received" value={draft.fileReceivedTime} onChange={(value) => set('fileReceivedTime', value)} />
             </Field>
             <Field label="توقيت الرد على الملف" error={errors.responseTime} htmlFor="min-response">
-              <Input
-                id="min-response"
-                type="time"
-                value={draft.responseTime}
-                onChange={(e) => set('responseTime', e.target.value)}
-              />
+              <TimeInput id="min-response" value={draft.responseTime} onChange={(value) => set('responseTime', value)} />
             </Field>
-            <Field label="نتيجة الفحص" required error={errors.inspectionResult} htmlFor="min-result">
+            <Field label="نتيجة الفحص (اختياري)" error={errors.inspectionResult} htmlFor="min-result">
               <Select
                 id="min-result"
                 value={draft.inspectionResult}

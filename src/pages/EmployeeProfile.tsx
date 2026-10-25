@@ -7,6 +7,7 @@ import {
   Card,
   EmptyState,
   IconButton,
+  ListCard,
   PageHeader,
   SearchInput,
   Select,
@@ -25,7 +26,7 @@ import {
   VISIT_STATUS_LABELS,
 } from '../db/schema';
 import { leaveTotals, minuteTiming, monthlyTotals, visitTiming } from '../lib/calc';
-import { fmtDate, fmtDurationWords, fmtNumber, monthName } from '../lib/format';
+import { fmtDate, fmtDurationWords, fmtNumber, fmtTime, monthName } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
 
 /**
@@ -190,7 +191,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
           return [
             'محضر يومي',
             row.date ?? row.createdAt.slice(0, 10),
-            `طلب ${row.fileRequestTime || '—'} · استلام ${row.fileReceivedTime || '—'} · رد ${row.responseTime || '—'}`,
+            `طلب ${fmtTime(row.fileRequestTime)} · استلام ${fmtTime(row.fileReceivedTime)} · رد ${fmtTime(row.responseTime)}`,
             `${row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : '—'} · ${
               timing.minutes === null ? '—' : fmtDurationWords(timing.minutes)
             } · ${timing.invalid ? 'بيانات غير مكتملة' : timing.delayed ? 'متأخر' : 'في الوقت'}`,
@@ -202,7 +203,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
             'زيارة موقوتة',
             row.visitDate,
             `${row.branch} — ${row.clientName}${row.location ? ` — ${row.location}` : ''}`,
-            `تحرك ${row.departureTime} · رجوع ${row.returnTime} · ${
+            `تحرك ${fmtTime(row.departureTime)} · رجوع ${fmtTime(row.returnTime)} · ${
               timing.minutes === null ? 'مدة غير صالحة' : fmtDurationWords(timing.minutes)
             }`,
           ];
@@ -243,9 +244,14 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
         }
       />
 
-      <Card
+      <ListCard
+        id="profile-details"
         title="بيانات الموظف"
         subtitle="البيانات المسجلة في قسم الموظفين — لا تُعدَّل من هنا"
+        padded
+        hideLabel="إخفاء البيانات"
+        showLabel="إظهار البيانات"
+        note="بيانات الموظف مخفية — اضغط «إظهار البيانات» لعرضها."
         actions={
           <>
             <Badge tone={employee.status === 'active' ? 'success' : 'neutral'}>{EMPLOYEE_STATUS_LABELS[employee.status]}</Badge>
@@ -289,7 +295,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
           </div>
         </dl>
         {employee.notes ? <p className="small muted note-block">ملاحظات: {employee.notes}</p> : null}
-      </Card>
+      </ListCard>
 
       <div className="stats">
         <Stat icon="minutes" label="عدد المحاضر اليومية" value={totals.minutesCount} hint={`إجمالي مدد المحاضر: ${totals.minutesCount ? fmtDurationWords(totals.minuteMinutes) : '—'}`} />
@@ -342,10 +348,13 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
         </Toolbar>
       </Card>
 
-      <Card
+      <ListCard
+        id="profile-minutes"
         title="محاضر يومية"
         subtitle={`محاضر ${employee.name} — ${totals.minutesCount} من ${allMinutes.length}`}
-        padded={false}
+        hideLabel="إخفاء البيانات"
+        showLabel="إظهار البيانات"
+        note={`قائمة محاضر ${employee.name} مخفية — اضغط «إظهار البيانات» لعرضها.`}
       >
         {minutes.length ? (
           <TableWrap>
@@ -365,9 +374,9 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
                   const timing = minuteTiming(row);
                   return (
                     <tr key={row.id}>
-                      <td className="mono">{row.fileRequestTime || '—'}</td>
-                      <td className="mono">{row.fileReceivedTime || '—'}</td>
-                      <td className="mono">{row.responseTime || '—'}</td>
+                      <td className="nowrap">{fmtTime(row.fileRequestTime)}</td>
+                      <td className="nowrap">{fmtTime(row.fileReceivedTime)}</td>
+                      <td className="nowrap">{fmtTime(row.responseTime)}</td>
                       <td>
                         {row.inspectionResult ? (
                           <Badge tone={row.inspectionResult === 'has_notes' ? 'warning' : 'success'}>
@@ -402,12 +411,15 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
             description={filtersActive ? 'جرّب تعديل الفلاتر أو إعادة تعيينها.' : 'سجّل المحاضر من قسم «محاضر يومية».'}
           />
         )}
-      </Card>
+      </ListCard>
 
-      <Card
+      <ListCard
+        id="profile-visits"
         title="توقيت الزيارات"
         subtitle={`زيارات ${employee.name} — ${totals.visitsCount} من ${allVisitTimings.length}`}
-        padded={false}
+        hideLabel="إخفاء البيانات"
+        showLabel="إظهار البيانات"
+        note={`قائمة زيارات ${employee.name} مخفية — اضغط «إظهار البيانات» لعرضها.`}
         actions={
           <span className="small muted">
             إجمالي المدة: <strong>{totals.validVisits ? fmtDurationWords(totals.visitMinutes) : '—'}</strong>
@@ -437,8 +449,8 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
                       <td>{row.branch || '—'}</td>
                       <td>{row.clientName || '—'}</td>
                       <td>{row.location || '—'}</td>
-                      <td className="mono">{row.departureTime || '—'}</td>
-                      <td className="mono">{row.returnTime || '—'}</td>
+                      <td className="nowrap">{fmtTime(row.departureTime)}</td>
+                      <td className="nowrap">{fmtTime(row.returnTime)}</td>
                       <td className="nowrap" title={timing.reason ?? undefined}>
                         {timing.minutes === null ? (
                           <Badge tone="neutral">{timing.reason ?? 'مدة غير صالحة'}</Badge>
@@ -459,10 +471,10 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
             description={filtersActive ? 'جرّب تعديل الفلاتر أو إعادة تعيينها.' : 'سجّل الزيارات من قسم «توقيت الزيارات».'}
           />
         )}
-      </Card>
+      </ListCard>
 
       {evaluations.length ? (
-        <Card title="التقييمات الشهرية" subtitle={`${evaluations.length} تقييم مسجل`} padded={false}>
+        <ListCard id="profile-evaluations" title="التقييمات الشهرية" subtitle={`${evaluations.length} تقييم مسجل`} note="قائمة التقييمات مخفية — اضغط «إظهار البيانات» لعرضها.">
           <TableWrap>
             <Table>
               <thead>
@@ -502,11 +514,11 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
               </tbody>
             </Table>
           </TableWrap>
-        </Card>
+        </ListCard>
       ) : null}
 
       {observations.length ? (
-        <Card title="الملاحظات" subtitle={`${observations.length} ملاحظة`} padded={false}>
+        <ListCard id="profile-observations" title="الملاحظات" subtitle={`${observations.length} ملاحظة`} note="قائمة الملاحظات مخفية — اضغط «إظهار البيانات» لعرضها.">
           <TableWrap>
             <Table>
               <thead>
@@ -541,14 +553,15 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
               </tbody>
             </Table>
           </TableWrap>
-        </Card>
+        </ListCard>
       ) : null}
 
       {leaves.length ? (
-        <Card
+        <ListCard
+          id="profile-leaves"
           title="الإجازات والأذونات"
           subtitle={`${leaveSum.records} سجل · ${fmtNumber(leaveSum.days)} يوم · ${fmtNumber(leaveSum.hours)} ساعة`}
-          padded={false}
+          note="قائمة الإجازات مخفية — اضغط «إظهار البيانات» لعرضها."
         >
           <TableWrap>
             <Table>
@@ -574,11 +587,11 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
               </tbody>
             </Table>
           </TableWrap>
-        </Card>
+        </ListCard>
       ) : null}
 
       {legacyVisits.length ? (
-        <Card title="زيارات ميدانية (سجلات سابقة)" subtitle={`${legacyVisits.length} سجل`} padded={false}>
+        <ListCard id="profile-legacy-visits" title="زيارات ميدانية (سجلات سابقة)" subtitle={`${legacyVisits.length} سجل`} note="القائمة مخفية — اضغط «إظهار البيانات» لعرضها.">
           <TableWrap>
             <Table>
               <thead>
@@ -609,7 +622,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
               </tbody>
             </Table>
           </TableWrap>
-        </Card>
+        </ListCard>
       ) : null}
     </>
   );

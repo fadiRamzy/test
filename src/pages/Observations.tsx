@@ -3,7 +3,7 @@ import { useApp } from '../state/store';
 import {
   Badge,
   Button,
-  Card,
+  ListCard,
   Checkbox,
   EmptyState,
   Field,
@@ -174,7 +174,7 @@ export function ObservationsPage() {
         }
       />
 
-      <Card padded={false}>
+      <ListCard id="observations-records" title="الملاحظات المسجلة" note="قائمة الملاحظات مخفية — اضغط «إظهار البيانات» لعرضها.">
         <Toolbar>
           <Select value={employee} onChange={(e) => setEmployee(e.target.value)} aria-label="الموظف">
             <option value="all">كل الموظفين</option>
@@ -285,7 +285,7 @@ export function ObservationsPage() {
         ) : (
           <EmptyState title="لا ملاحظات مطابقة" description="أضف ملاحظة جديدة أو غيّر الفلاتر." />
         )}
-      </Card>
+      </ListCard>
 
       <Modal
         open={Boolean(draft)}
