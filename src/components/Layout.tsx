@@ -29,9 +29,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="shell">
       <header className="topnav print-hide">
-        <a className="topnav__brand" href="#/employees">
+        <a className="topnav__brand" href="#/employees" aria-label="الصفحة الرئيسية — الموظفون">
           <span className="topnav__logo">
-            <Icon name="shield" size={17} />
+            <Icon name="shield" size={18} />
           </span>
           <span>
             <strong>نظام إدارة المخاطر</strong>
@@ -40,14 +40,25 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </a>
         <nav className="topnav__nav" aria-label="التنقل الرئيسي">
           {NAV.map((item) => (
-            <a key={item.path} href={`#${item.path}`} className={cn('topnav__link', isActive(item.path) && 'is-active')}>
-              <Icon name={item.icon} size={15} />
+            <a
+              key={item.path}
+              href={`#${item.path}`}
+              className={cn('topnav__link', isActive(item.path) && 'is-active')}
+              aria-current={isActive(item.path) ? 'page' : undefined}
+            >
+              <Icon name={item.icon} size={16} />
               <span>{item.label}</span>
             </a>
           ))}
         </nav>
+        <a className="btn btn--sm topnav__backup" href="#/reports">
+          <Icon name="database" size={14} />
+          <span>النسخ الاحتياطي</span>
+        </a>
       </header>
-      <main className="page">{ready ? children : <div className="loading">جارٍ فتح البيانات المحلية…</div>}</main>
+      <main className="page" id="main-content">
+        {ready ? children : <div className="loading">جارٍ فتح البيانات المحلية…</div>}
+      </main>
       <footer className="appfoot print-hide">
         البيانات محفوظة داخل هذا المتصفح على هذا الجهاز فقط — لا مزامنة بين الأجهزة، ويمكن فقدانها عند حذف بيانات
         المتصفح. <a href="#/reports">صدّر نسخة احتياطية</a> بشكل دوري.

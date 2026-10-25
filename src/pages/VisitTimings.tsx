@@ -19,6 +19,7 @@ import {
 } from '../components/ui';
 import { ValidationError, deleteVisitTiming, saveVisitTiming } from '../db/repo';
 import { MONTHS_AR, type VisitTiming } from '../db/schema';
+import { EmployeePicker } from '../components/EmployeePicker';
 import { monthlyVisitSummary, visitTiming } from '../lib/calc';
 import { fmtDate, fmtDurationWords, todayInputValue } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
@@ -106,13 +107,7 @@ export function VisitTimingsPage() {
     const validVisits = summaries.reduce((sum, row) => sum + row.validVisits, 0);
     const invalidVisits = summaries.reduce((sum, row) => sum + row.invalidVisits, 0);
     const totalMinutes = summaries.reduce((sum, row) => sum + row.totalMinutes, 0);
-    return {
-      totalVisits,
-      validVisits,
-      invalidVisits,
-      totalMinutes,
-      averageMinutes: validVisits ? totalMinutes / validVisits : null,
-    };
+    return { totalVisits, validVisits, invalidVisits, totalMinutes };
   }, [summaries]);
 
   const submit = async () => {
@@ -166,6 +161,7 @@ export function VisitTimingsPage() {
   return (
     <>
       <PageHeader
+        eyebrow="العمل الميداني"
         title="توقيت الزيارات"
         description="تسجيل زيارات الموظفين بتوقيت التحرك والرجوع، مع ملخص شهري تلقائي لكل موظف."
         actions={
@@ -295,19 +291,18 @@ export function VisitTimingsPage() {
             </Toolbar>
 
             <div className="stats" data-testid="visit-month-totals">
-              <Stat label="إجمالي الزيارات" value={totals.totalVisits} hint={`${MONTHS_AR[month - 1]} ${year}`} />
+              <Stat icon="visits" label="إجمالي الزيارات" value={totals.totalVisits} hint={`${MONTHS_AR[month - 1]} ${year}`} />
               <Stat
+                icon="check"
+                tone="success"
                 label="زيارات بمدة صالحة"
                 value={totals.validVisits}
                 hint={totals.invalidVisits ? `${totals.invalidVisits} بمدة غير صالحة` : 'كل الزيارات صالحة'}
               />
               <Stat
+                icon="clock"
                 label="إجمالي مدة الزيارات"
                 value={totals.validVisits ? fmtDurationWords(totals.totalMinutes) : '—'}
-              />
-              <Stat
-                label="متوسط مدة الزيارة"
-                value={totals.averageMinutes === null ? '—' : fmtDurationWords(totals.averageMinutes)}
               />
             </div>
 
@@ -319,8 +314,7 @@ export function VisitTimingsPage() {
                       <h3>{summary.employeeName}</h3>
                       <p className="small muted">
                         عدد الزيارات: <strong>{summary.totalVisits}</strong> · إجمالي المدة:{' '}
-                        <strong>{summary.validVisits ? fmtDurationWords(summary.totalMinutes) : '—'}</strong> · المتوسط:{' '}
-                        <strong>{summary.averageMinutes === null ? '—' : fmtDurationWords(summary.averageMinutes)}</strong>
+                        <strong>{summary.validVisits ? fmtDurationWords(summary.totalMinutes) : '—'}</strong>
                         {summary.invalidVisits ? ` · ${summary.invalidVisits} زيارة بمدة غير صالحة (مستبعدة من المجموع)` : ''}
                       </p>
                     </header>
@@ -391,16 +385,15 @@ export function VisitTimingsPage() {
       >
         {draft ? (
           <div className="formgrid">
-            <Field label="الموظف" required error={errors.employeeId} htmlFor="vt-employee">
-              <Select id="vt-employee" value={draft.employeeId} onChange={(e) => set('employeeId', e.target.value)}>
-                <option value="">— اختر الموظف —</option>
-                {activeEmployees.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.employeeNo} — {row.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+            <EmployeePicker
+              id="vt-employee"
+              label="الموظف"
+              required
+              value={draft.employeeId}
+              error={errors.employeeId}
+              onChange={(value) => set('employeeId', value)}
+              options={activeEmployees.map((row) => ({ id: row.id, name: row.name, meta: `رقم ${row.employeeNo}` }))}
+            />
             <Field label="التاريخ" required error={errors.visitDate} htmlFor="vt-date">
               <Input id="vt-date" type="date" value={draft.visitDate} onChange={(e) => set('visitDate', e.target.value)} />
             </Field>

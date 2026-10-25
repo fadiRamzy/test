@@ -23,6 +23,7 @@ import {
   type DailyMinute,
   type InspectionResult,
 } from '../db/schema';
+import { EmployeePicker } from '../components/EmployeePicker';
 import { minuteTiming } from '../lib/calc';
 import { fmtDurationWords } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
@@ -112,6 +113,7 @@ export function MinutesPage() {
   return (
     <>
       <PageHeader
+        eyebrow="العمليات اليومية"
         title="محاضر يومية"
         description="محضر لكل موظف: توقيت طلب الملف واستلامه والرد عليه ونتيجة الفحص. المدة تُحسب من استلام الملف إلى الرد عليه."
         actions={
@@ -233,16 +235,16 @@ export function MinutesPage() {
       >
         {draft ? (
           <div className="formgrid">
-            <Field label="الموظف" required error={errors.employeeId} htmlFor="min-employee" className="span2">
-              <Select id="min-employee" value={draft.employeeId} onChange={(e) => set('employeeId', e.target.value)}>
-                <option value="">— اختر الموظف —</option>
-                {activeEmployees.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.employeeNo} — {row.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+            <EmployeePicker
+              id="min-employee"
+              label="الموظف"
+              required
+              className="span2"
+              value={draft.employeeId}
+              error={errors.employeeId}
+              onChange={(value) => set('employeeId', value)}
+              options={activeEmployees.map((row) => ({ id: row.id, name: row.name, meta: `رقم ${row.employeeNo}` }))}
+            />
 
             <Field label="توقيت طلب الملف" error={errors.fileRequestTime} htmlFor="min-request">
               <Input

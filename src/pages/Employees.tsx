@@ -20,7 +20,7 @@ import {
   Toolbar,
 } from '../components/ui';
 import { ValidationError, deleteEmployee, nextEmployeeNo, saveEmployee, setEmployeeArchived } from '../db/repo';
-import { EMPLOYEE_STATUS_LABELS, type Employee, type EmployeeStatus } from '../db/schema';
+import { EMPLOYEE_STATUS_LABELS, EMPLOYEE_STATUS_OPTIONS, type Employee, type EmployeeStatus } from '../db/schema';
 import { fmtDate, toDateInputValue, todayInputValue } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
 
@@ -155,6 +155,7 @@ export function EmployeesPage() {
   return (
     <>
       <PageHeader
+        eyebrow="السجلات الأساسية"
         title="الموظفون"
         description="قائمة ضباط المخاطر — كل موظف يُدخل مرة واحدة ثم يظهر تلقائيًا في التقييمات والزيارات والدقائق."
         actions={
@@ -188,10 +189,13 @@ export function EmployeesPage() {
               </option>
             ))}
           </Select>
-          <Select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="الحالة">
-            <option value="all">كل الحالات</option>
-            <option value="active">على رأس العمل</option>
-            <option value="inactive">غير نشط</option>
+          <Select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="حالة الموظف">
+            <option value="all">كل حالات الموظفين</option>
+            {EMPLOYEE_STATUS_OPTIONS.map((value) => (
+              <option key={value} value={value}>
+                {EMPLOYEE_STATUS_LABELS[value]}
+              </option>
+            ))}
           </Select>
           <Checkbox label="إظهار المؤرشفين" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
           <span className="toolbar__spacer">{rows.length} موظف</span>
@@ -210,7 +214,7 @@ export function EmployeesPage() {
                   <th>المسمى الوظيفي</th>
                   <th>تاريخ التعيين</th>
                   <th>الفروع</th>
-                  <th>الحالة</th>
+                  <th>حالة الموظف</th>
                   <th>إجراءات</th>
                 </tr>
               </thead>
@@ -321,10 +325,13 @@ export function EmployeesPage() {
             <Field label="الفرع / الفروع المكلف بها" hint="افصل بين الفروع بفاصلة" htmlFor="emp-branches">
               <Input id="emp-branches" value={draft.branches} onChange={(e) => set('branches', e.target.value)} />
             </Field>
-            <Field label="الحالة" htmlFor="emp-status">
+            <Field label="حالة الموظف" htmlFor="emp-status">
               <Select id="emp-status" value={draft.status} onChange={(e) => set('status', e.target.value as EmployeeStatus)}>
-                <option value="active">على رأس العمل</option>
-                <option value="inactive">غير نشط</option>
+                {EMPLOYEE_STATUS_OPTIONS.map((value) => (
+                  <option key={value} value={value}>
+                    {EMPLOYEE_STATUS_LABELS[value]}
+                  </option>
+                ))}
               </Select>
             </Field>
             <Field label="ملاحظات عامة" htmlFor="emp-notes" className="span2">

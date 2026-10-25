@@ -275,7 +275,7 @@ describe('توقيت الزيارات', () => {
     expect(result.reason).toContain('الرجوع');
   });
 
-  it('يلخص الشهر لكل موظف ويستبعد المدد غير الصالحة', () => {
+  it('يلخص الشهر لكل موظف (بلا متوسط) ويستبعد المدد غير الصالحة', () => {
     const summaries = monthlyVisitSummary(
       [
         visit({ id: 'v1', employeeId: 'e1', visitDate: '2026-03-02', departureTime: '09:00', returnTime: '09:35' }),
@@ -297,7 +297,6 @@ describe('توقيت الزيارات', () => {
     expect(first.validVisits).toBe(2);
     expect(first.invalidVisits).toBe(1);
     expect(first.totalMinutes).toBe(155);
-    expect(first.averageMinutes).toBe(77.5);
     expect(first.visits.map((row) => row.visit.id)).toEqual(['v2', 'v1', 'v3']);
 
     const second = summaries.find((row) => row.employeeId === 'e2')!;

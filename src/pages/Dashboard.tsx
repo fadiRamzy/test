@@ -77,7 +77,7 @@ export function DashboardPage() {
       />
 
       <div className="stats">
-        <Stat label="موظفون على رأس العمل" value={counts.activeEmployees} onClick={() => navigate('/employees')} />
+        <Stat label="موظفون بحالة تعيين" value={counts.activeEmployees} onClick={() => navigate('/employees')} />
         <Stat
           label={`زيارات ${MONTHS_AR[month - 1]}`}
           value={counts.visitsInPeriod}

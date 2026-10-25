@@ -32,10 +32,23 @@ export interface Employee extends BaseRecord {
   notes: string;
 }
 
+/**
+ * حالة الموظف — الخيارات المعتمدة: «تعيين» و«مستقيل».
+ * القيم الداخلية (active / inactive) بقيت كما هي عن قصد حتى لا تُفقد أو تُعاد كتابة
+ * أي سجلات موظفين محفوظة في المتصفح؛ التغيير في التسميات فقط.
+ */
 export const EMPLOYEE_STATUS_LABELS: Record<EmployeeStatus, string> = {
-  active: 'على رأس العمل',
-  inactive: 'غير نشط',
+  active: 'تعيين',
+  inactive: 'مستقيل',
 };
+
+export const EMPLOYEE_STATUS_OPTIONS: EmployeeStatus[] = ['active', 'inactive'];
+
+/** يحوّل أي قيمة قديمة/غير معروفة إلى حالة صالحة دون فقدان السجل */
+export function normalizeEmployeeStatus(value: unknown): EmployeeStatus {
+  if (value === 'inactive' || value === 'resigned' || value === 'terminated') return 'inactive';
+  return 'active';
+}
 
 /* --------------------------- معايير التقييم ---------------------------- */
 

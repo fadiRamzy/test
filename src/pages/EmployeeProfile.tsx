@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useApp } from '../state/store';
 import { navigate } from '../state/router';
-import { Badge, Button, Card, EmptyState, PageHeader, Select, Table, TableWrap } from '../components/ui';
+import { Badge, Button, Card, EmptyState, IconButton, PageHeader, Stat, Table, TableWrap } from '../components/ui';
 import {
   EMPLOYEE_STATUS_LABELS,
   EVALUATION_CRITERIA,
@@ -11,78 +11,145 @@ import {
   SEVERITY_LABELS,
   VISIT_STATUS_LABELS,
 } from '../db/schema';
-import { annualSummary, leaveTotals, minuteTiming, monthlyTotals, visitsByMonth } from '../lib/calc';
+import { leaveTotals, minuteTiming, monthlyTotals, visitTiming } from '../lib/calc';
 import { fmtDate, fmtDurationWords, fmtNumber } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
 
-const YEARS = (() => {
-  const current = new Date().getFullYear();
-  return Array.from({ length: 8 }, (_, index) => current + 1 - index);
-})();
-
+/**
+ * ملف الموظف: كل ما يخص هذا الموظف فقط.
+ * - بياناته وحالته
+ * - محاضر يومية (كل التوقيتات + النتيجة + المدة + التأخير)
+ * - توقيت الزيارات (كل الحقول + المدة)
+ * - إجماليات: عدد المحاضر، عدد الزيارات، إجمالي مدة الزيارات
+ * - سجلات أخرى مرتبطة به (تقييمات/ملاحظات/إجازات/زيارات ميدانية) عند وجودها فقط
+ * لا تظهر أي سجلات أو مؤشرات تخص موظفين آخرين أو لوحة متابعة عامة.
+ */
 export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
-  const { data, settings } = useApp();
-  const [year, setYear] = useState(new Date().getFullYear());
+  const { data } = useApp();
 
   const employee = data.employees.find((row) => row.id === employeeId);
+
+  const minutes = useMemo(
+    () =>
+      data.minutes
+        .filter((row) => row.employeeId === employeeId)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+    [data.minutes, employeeId],
+  );
+
+  const visitTimings = useMemo(
+    () =>
+      data.visitTimings
+        .filter((row) => row.employeeId === employeeId)
+        .sort((a, b) => {
+          const dateA = a.visitDate ?? '';
+          const dateB = b.visitDate ?? '';
+          if (dateA !== dateB) return dateA < dateB ? 1 : -1;
+          return (a.departureTime ?? '') < (b.departureTime ?? '') ? 1 : -1;
+        }),
+    [data.visitTimings, employeeId],
+  );
 
   const evaluations = useMemo(
     () =>
       data.evaluations
-        .filter((row) => row.employeeId === employeeId && row.year === year)
-        .sort((a, b) => a.month - b.month),
-    [data.evaluations, employeeId, year],
+        .filter((row) => row.employeeId === employeeId)
+        .sort((a, b) => b.year - a.year || b.month - a.month),
+    [data.evaluations, employeeId],
   );
-  const visits = useMemo(
-    () => data.visits.filter((row) => row.employeeId === employeeId && row.visitDate.startsWith(String(year))),
-    [data.visits, employeeId, year],
-  );
-  const minutes = useMemo(
-    () =>
-      data.minutes.filter(
-        (row) => row.employeeId === employeeId && (row.date ?? row.createdAt.slice(0, 10)).startsWith(String(year)),
-      ),
-    [data.minutes, employeeId, year],
-  );
+
   const observations = useMemo(
-    () => data.observations.filter((row) => row.employeeId === employeeId && row.date.startsWith(String(year))),
-    [data.observations, employeeId, year],
+    () => data.observations.filter((row) => row.employeeId === employeeId).sort((a, b) => (a.date < b.date ? 1 : -1)),
+    [data.observations, employeeId],
   );
+
   const leaves = useMemo(
-    () => data.leaves.filter((row) => row.employeeId === employeeId && row.startDate.startsWith(String(year))),
-    [data.leaves, employeeId, year],
+    () => data.leaves.filter((row) => row.employeeId === employeeId).sort((a, b) => (a.startDate < b.startDate ? 1 : -1)),
+    [data.leaves, employeeId],
   );
+
+  const legacyVisits = useMemo(
+    () => data.visits.filter((row) => row.employeeId === employeeId).sort((a, b) => (a.visitDate < b.visitDate ? 1 : -1)),
+    [data.visits, employeeId],
+  );
+
+  const totals = useMemo(() => {
+    const validTimings = visitTimings.map((row) => visitTiming(row));
+    const visitMinutes = validTimings.reduce((sum, row) => sum + (row.valid ? (row.minutes ?? 0) : 0), 0);
+    const minuteRows = minutes.map((row) => minuteTiming(row));
+    const minuteMinutes = minuteRows.reduce((sum, row) => sum + (row.minutes ?? 0), 0);
+    return {
+      minutesCount: minutes.length,
+      visitsCount: visitTimings.length,
+      validVisits: validTimings.filter((row) => row.valid).length,
+      invalidVisits: validTimings.filter((row) => !row.valid).length,
+      visitMinutes,
+      minuteMinutes,
+      lateMinutes: minuteRows.filter((row) => row.delayed).length,
+      incompleteMinutes: minuteRows.filter((row) => row.invalid).length,
+    };
+  }, [minutes, visitTimings]);
+
+  const leaveSum = leaveTotals(leaves);
 
   if (!employee) {
     return (
-      <Card>
-        <EmptyState title="الموظف غير موجود" description="ربما حُذف أو أن الرابط غير صحيح." />
-      </Card>
+      <>
+        <PageHeader title="ملف الموظف" eyebrow="الموظفون" />
+        <Card>
+          <EmptyState
+            icon="user"
+            title="الموظف غير موجود"
+            description="ربما حُذف الموظف أو أن الرابط غير صحيح."
+            action={
+              <Button icon="arrow-left" onClick={() => navigate('/employees')}>
+                رجوع لقائمة الموظفين
+              </Button>
+            }
+          />
+        </Card>
+      </>
     );
   }
 
-  const summary = annualSummary(data.evaluations, employee, year, settings.ratingThresholds);
-  const totals = leaveTotals(leaves);
-  const visitSummary = visitsByMonth(data.visits, year, employeeId);
-
-  const exportHistory = () => {
+  const exportProfile = () => {
     downloadCsv(
-      csvFileName(`history-${employee.code}-${year}`),
+      csvFileName(`employee-${employee.code}`),
       ['القسم', 'التاريخ', 'التفاصيل', 'القيمة'],
       [
+        ...minutes.map((row) => {
+          const timing = minuteTiming(row);
+          return [
+            'محضر يومي',
+            row.date ?? row.createdAt.slice(0, 10),
+            `طلب ${row.fileRequestTime || '—'} · استلام ${row.fileReceivedTime || '—'} · رد ${row.responseTime || '—'}`,
+            `${row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : '—'} · ${
+              timing.minutes === null ? '—' : fmtDurationWords(timing.minutes)
+            } · ${timing.invalid ? 'بيانات غير مكتملة' : timing.delayed ? 'متأخر' : 'في الوقت'}`,
+          ];
+        }),
+        ...visitTimings.map((row) => {
+          const timing = visitTiming(row);
+          return [
+            'زيارة موقوتة',
+            row.visitDate,
+            `${row.branch} — ${row.clientName}${row.location ? ` — ${row.location}` : ''}`,
+            `تحرك ${row.departureTime} · رجوع ${row.returnTime} · ${
+              timing.minutes === null ? 'مدة غير صالحة' : fmtDurationWords(timing.minutes)
+            }`,
+          ];
+        }),
         ...evaluations.map((row) => {
           const monthly = monthlyTotals(row.scores, row.visits);
-          return ['التقييم الشهري', `${row.month}/${row.year}`, `زيارات: ${monthly.visits} · مجموع الدرجات: ${monthly.scoresSum}`, monthly.total];
+          return ['تقييم شهري', `${MONTHS_AR[row.month - 1]} ${row.year}`, `زيارات: ${monthly.visits} · درجات: ${monthly.scoresSum}`, monthly.total];
         }),
-        ...visits.map((row) => ['زيارة ميدانية', row.visitDate, `${row.branch} — ${row.visitType}`, row.finalAssessment]),
-        ...minutes.map((row) => [
-          'محضر يومي',
-          row.date ?? row.createdAt.slice(0, 10),
-          `${row.fileRequestTime || '—'} / ${row.fileReceivedTime || '—'} / ${row.responseTime || '—'}`,
-          row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : '—',
-        ]),
         ...observations.map((row) => ['ملاحظة', row.date, row.details, OBSERVATION_STATUS_LABELS[row.status]]),
-        ...leaves.map((row) => ['إجازة/إذن', row.startDate, `${row.type} حتى ${row.endDate}`, row.unit === 'days' ? `${row.days} يوم` : `${row.hours} ساعة`]),
+        ...leaves.map((row) => [
+          'إجازة/إذن',
+          row.startDate,
+          `${row.type} حتى ${row.endDate}`,
+          row.unit === 'days' ? `${fmtNumber(row.days)} يوم` : `${fmtNumber(row.hours)} ساعة`,
+        ]),
       ],
     );
   };
@@ -90,15 +157,16 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
   return (
     <>
       <PageHeader
+        eyebrow="ملف الموظف"
         title={employee.name}
-        description={`${employee.jobTitle} · كود ${employee.code} · ${employee.sector} / ${employee.governorate} · تعيين ${fmtDate(employee.employmentDate)}`}
+        description={`${employee.jobTitle} · ${employee.sector} — ${employee.governorate}`}
         actions={
           <>
             <Button icon="arrow-left" onClick={() => navigate('/employees')}>
-              رجوع للقائمة
+              قائمة الموظفين
             </Button>
-            <Button icon="download" onClick={exportHistory}>
-              تصدير السجل CSV
+            <Button icon="download" onClick={exportProfile}>
+              تصدير CSV
             </Button>
             <Button icon="print" onClick={() => window.print()}>
               طباعة
@@ -108,61 +176,184 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
       />
 
       <Card
-        title="البيانات الأساسية"
+        title="بيانات الموظف"
+        subtitle="البيانات المسجلة في قسم الموظفين — لا تُعدَّل من هنا"
         actions={
-          <Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">
-            {YEARS.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </Select>
+          <>
+            <Badge tone={employee.status === 'active' ? 'success' : 'neutral'}>{EMPLOYEE_STATUS_LABELS[employee.status]}</Badge>
+            {employee.archived ? <Badge>مؤرشف</Badge> : null}
+            <IconButton icon="edit" label="تعديل البيانات" onClick={() => navigate('/employees')} />
+          </>
         }
       >
-        <div className="stats" style={{ marginBottom: 0 }}>
-          <div className="stat">
-            <span className="stat__label">الرقم</span>
-            <strong className="stat__value">{employee.employeeNo}</strong>
+        <dl className="deflist">
+          <div>
+            <dt>رقم الموظف</dt>
+            <dd>{employee.employeeNo}</dd>
           </div>
-          <div className="stat">
-            <span className="stat__label">الحالة</span>
-            <strong className="stat__value" style={{ fontSize: 14 }}>
-              <Badge tone={employee.status === 'active' ? 'success' : 'neutral'}>{EMPLOYEE_STATUS_LABELS[employee.status]}</Badge>
-              {employee.archived ? <Badge> مؤرشف</Badge> : null}
-            </strong>
+          <div>
+            <dt>كود الموظف</dt>
+            <dd className="mono">{employee.code}</dd>
           </div>
-          <div className="stat">
-            <span className="stat__label">الزيارات المسجلة {year}</span>
-            <strong className="stat__value">{visitSummary.total}</strong>
+          <div>
+            <dt>المسمى الوظيفي</dt>
+            <dd>{employee.jobTitle}</dd>
           </div>
-          <div className="stat">
-            <span className="stat__label">أشهر مقيَّمة {year}</span>
-            <strong className="stat__value">{summary.evaluatedMonths.length}</strong>
+          <div>
+            <dt>القطاع</dt>
+            <dd>{employee.sector}</dd>
           </div>
-          <div className="stat">
-            <span className="stat__label">مجموع نقاط {year}</span>
-            <strong className="stat__value">{summary.points}</strong>
+          <div>
+            <dt>المحافظة</dt>
+            <dd>{employee.governorate}</dd>
           </div>
-          <div className="stat">
-            <span className="stat__label">التقدير السنوي {year}</span>
-            <strong className="stat__value" style={{ fontSize: 16 }}>
-              {summary.rating ?? '—'}
-            </strong>
+          <div>
+            <dt>تاريخ التعيين</dt>
+            <dd>{fmtDate(employee.employmentDate)}</dd>
           </div>
-          <div className="stat">
-            <span className="stat__label">إجازات (أيام)</span>
-            <strong className="stat__value">{fmtNumber(totals.days)}</strong>
+          <div>
+            <dt>الفرع / الفروع</dt>
+            <dd>{employee.branches || '—'}</dd>
           </div>
-          <div className="stat">
-            <span className="stat__label">أذونات (ساعات)</span>
-            <strong className="stat__value">{fmtNumber(totals.hours)}</strong>
+          <div>
+            <dt>حالة الموظف</dt>
+            <dd>{EMPLOYEE_STATUS_LABELS[employee.status]}</dd>
           </div>
-        </div>
-        {employee.notes ? <p className="small muted" style={{ marginTop: 8 }}>ملاحظات: {employee.notes}</p> : null}
+        </dl>
+        {employee.notes ? <p className="small muted note-block">ملاحظات: {employee.notes}</p> : null}
       </Card>
 
-      <Card title={`التقييمات الشهرية ${year}`} subtitle={`مجموع النقاط السنوي: ${summary.points} · الزيارات: ${summary.visits} · الأشهر الناقصة: ${summary.missingMonths.length}`} padded={false}>
-        {evaluations.length ? (
+      <div className="stats">
+        <Stat icon="minutes" label="عدد المحاضر اليومية" value={totals.minutesCount} hint={`إجمالي مدد المحاضر: ${totals.minutesCount ? fmtDurationWords(totals.minuteMinutes) : '—'}`} />
+        <Stat icon="visits" label="عدد الزيارات" value={totals.visitsCount} hint={totals.invalidVisits ? `${totals.invalidVisits} زيارة بمدة غير صالحة` : 'كل الزيارات بمدة صالحة'} />
+        <Stat
+          icon="clock"
+          label="إجمالي مدة الزيارات"
+          value={totals.validVisits ? fmtDurationWords(totals.visitMinutes) : '—'}
+          hint={`محسوبة من ${totals.validVisits} زيارة`}
+        />
+        <Stat
+          icon="alert"
+          tone={totals.lateMinutes ? 'warning' : 'neutral'}
+          label="محاضر متأخرة"
+          value={totals.lateMinutes}
+          hint={totals.incompleteMinutes ? `${totals.incompleteMinutes} محضر ناقص التوقيتات` : 'تجاوزت 60 دقيقة'}
+        />
+      </div>
+
+      <Card
+        title="محاضر يومية"
+        subtitle={`كل المحاضر المسجلة باسم ${employee.name} — ${totals.minutesCount} محضر`}
+        padded={false}
+      >
+        {minutes.length ? (
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <th>توقيت طلب الملف</th>
+                  <th>توقيت استلام الملف</th>
+                  <th>توقيت الرد على الملف</th>
+                  <th>نتيجة الفحص</th>
+                  <th>المدة</th>
+                  <th>حالة التأخير</th>
+                </tr>
+              </thead>
+              <tbody>
+                {minutes.map((row) => {
+                  const timing = minuteTiming(row);
+                  return (
+                    <tr key={row.id}>
+                      <td className="mono">{row.fileRequestTime || '—'}</td>
+                      <td className="mono">{row.fileReceivedTime || '—'}</td>
+                      <td className="mono">{row.responseTime || '—'}</td>
+                      <td>
+                        {row.inspectionResult ? (
+                          <Badge tone={row.inspectionResult === 'has_notes' ? 'warning' : 'success'}>
+                            {INSPECTION_RESULT_LABELS[row.inspectionResult]}
+                          </Badge>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="nowrap" title={timing.reason ?? undefined}>
+                        {timing.minutes === null ? '—' : fmtDurationWords(timing.minutes)}
+                      </td>
+                      <td>
+                        {timing.invalid ? (
+                          <Badge tone="neutral">بيانات غير مكتملة</Badge>
+                        ) : timing.delayed ? (
+                          <Badge tone="danger">متأخر</Badge>
+                        ) : (
+                          <Badge tone="success">في الوقت</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+          </TableWrap>
+        ) : (
+          <EmptyState icon="minutes" title="لا محاضر لهذا الموظف" description="سجّل المحاضر من قسم «محاضر يومية»." />
+        )}
+      </Card>
+
+      <Card
+        title="توقيت الزيارات"
+        subtitle={`كل الزيارات المسجلة باسم ${employee.name} — ${totals.visitsCount} زيارة`}
+        padded={false}
+        actions={
+          <span className="small muted">
+            إجمالي المدة: <strong>{totals.validVisits ? fmtDurationWords(totals.visitMinutes) : '—'}</strong>
+          </span>
+        }
+      >
+        {visitTimings.length ? (
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <th>التاريخ</th>
+                  <th>الفرع</th>
+                  <th>اسم العميل</th>
+                  <th>مكان الزيارة</th>
+                  <th>توقيت التحرك</th>
+                  <th>توقيت الرجوع</th>
+                  <th>مدة الزيارة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visitTimings.map((row) => {
+                  const timing = visitTiming(row);
+                  return (
+                    <tr key={row.id}>
+                      <td className="nowrap">{fmtDate(row.visitDate)}</td>
+                      <td>{row.branch || '—'}</td>
+                      <td>{row.clientName || '—'}</td>
+                      <td>{row.location || '—'}</td>
+                      <td className="mono">{row.departureTime || '—'}</td>
+                      <td className="mono">{row.returnTime || '—'}</td>
+                      <td className="nowrap" title={timing.reason ?? undefined}>
+                        {timing.minutes === null ? (
+                          <Badge tone="neutral">{timing.reason ?? 'مدة غير صالحة'}</Badge>
+                        ) : (
+                          fmtDurationWords(timing.minutes)
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+          </TableWrap>
+        ) : (
+          <EmptyState icon="visits" title="لا زيارات لهذا الموظف" description="سجّل الزيارات من قسم «توقيت الزيارات»." />
+        )}
+      </Card>
+
+      {evaluations.length ? (
+        <Card title="التقييمات الشهرية" subtitle={`${evaluations.length} تقييم مسجل`} padded={false}>
           <TableWrap>
             <Table>
               <thead>
@@ -183,7 +374,9 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
                   const monthly = monthlyTotals(row.scores, row.visits);
                   return (
                     <tr key={row.id}>
-                      <td className="nowrap">{MONTHS_AR[row.month - 1]}</td>
+                      <td className="nowrap">
+                        {MONTHS_AR[row.month - 1]} {row.year}
+                      </td>
                       <td className="num">{monthly.visits}</td>
                       {EVALUATION_CRITERIA.map((criterion) => (
                         <td key={criterion.id} className="num">
@@ -200,100 +393,11 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
               </tbody>
             </Table>
           </TableWrap>
-        ) : (
-          <EmptyState title={`لا تقييمات في ${year}`} description="سجّلها من صفحة التقييم الشهري." />
-        )}
-      </Card>
+        </Card>
+      ) : null}
 
-      <Card title={`الزيارات الميدانية ${year}`} subtitle={`الإجمالي ${visitSummary.total} زيارة`} padded={false}>
-        {visits.length ? (
-          <TableWrap>
-            <Table>
-              <thead>
-                <tr>
-                  <th>التاريخ</th>
-                  <th>المنطقة</th>
-                  <th>الفرع</th>
-                  <th>النوع</th>
-                  <th>المرجع</th>
-                  <th>الحالة</th>
-                  <th>التقدير</th>
-                  <th>ملاحظات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visits.map((row) => (
-                  <tr key={row.id}>
-                    <td className="nowrap">{fmtDate(row.visitDate)}</td>
-                    <td>{row.region || '—'}</td>
-                    <td>{row.branch}</td>
-                    <td>{row.visitType}</td>
-                    <td>{row.reference || '—'}</td>
-                    <td>
-                      <Badge tone={row.status === 'completed' ? 'success' : row.status === 'cancelled' ? 'neutral' : 'warning'}>
-                        {VISIT_STATUS_LABELS[row.status]}
-                      </Badge>
-                    </td>
-                    <td>{row.finalAssessment || '—'}</td>
-                    <td className="wrap small">{row.notes || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </TableWrap>
-        ) : (
-          <EmptyState title={`لا زيارات في ${year}`} description="سجّلها من صفحة الزيارات الميدانية." />
-        )}
-      </Card>
-
-      <Card title={`محاضر يومية ${year}`} subtitle={`${minutes.length} محضر`} padded={false}>
-        {minutes.length ? (
-          <TableWrap>
-            <Table>
-              <thead>
-                <tr>
-                  <th>طلب الملف</th>
-                  <th>استلام الملف</th>
-                  <th>الرد على الملف</th>
-                  <th>نتيجة الفحص</th>
-                  <th>المدة</th>
-                  <th>حالة التأخير</th>
-                </tr>
-              </thead>
-              <tbody>
-                {minutes.map((row) => {
-                  const timing = minuteTiming(row);
-                  return (
-                    <tr key={row.id}>
-                      <td className="mono">{row.fileRequestTime || '—'}</td>
-                      <td className="mono">{row.fileReceivedTime || '—'}</td>
-                      <td className="mono">{row.responseTime || '—'}</td>
-                      <td>{row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : '—'}</td>
-                      <td title={timing.reason ?? undefined}>
-                        {timing.minutes === null ? '—' : fmtDurationWords(timing.minutes)}
-                      </td>
-                      <td>
-                        {timing.invalid ? (
-                          <Badge tone="neutral">بيانات غير مكتملة</Badge>
-                        ) : timing.delayed ? (
-                          <Badge tone="danger">متأخر</Badge>
-                        ) : (
-                          <Badge tone="success">في الوقت</Badge>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </Table>
-          </TableWrap>
-        ) : (
-          <EmptyState title={`لا محاضر في ${year}`} description="سجّلها من صفحة «محاضر يومية»." />
-        )}
-      </Card>
-
-      <Card title={`الملاحظات ${year}`} subtitle={`${observations.length} ملاحظة`} padded={false}>
-        {observations.length ? (
+      {observations.length ? (
+        <Card title="الملاحظات" subtitle={`${observations.length} ملاحظة`} padded={false}>
           <TableWrap>
             <Table>
               <thead>
@@ -328,13 +432,15 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
               </tbody>
             </Table>
           </TableWrap>
-        ) : (
-          <EmptyState title={`لا ملاحظات في ${year}`} />
-        )}
-      </Card>
+        </Card>
+      ) : null}
 
-      <Card title={`الإجازات والأذونات ${year}`} subtitle={`${totals.records} سجل · ${fmtNumber(totals.days)} يوم · ${fmtNumber(totals.hours)} ساعة`} padded={false}>
-        {leaves.length ? (
+      {leaves.length ? (
+        <Card
+          title="الإجازات والأذونات"
+          subtitle={`${leaveSum.records} سجل · ${fmtNumber(leaveSum.days)} يوم · ${fmtNumber(leaveSum.hours)} ساعة`}
+          padded={false}
+        >
           <TableWrap>
             <Table>
               <thead>
@@ -359,10 +465,43 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
               </tbody>
             </Table>
           </TableWrap>
-        ) : (
-          <EmptyState title={`لا إجازات في ${year}`} />
-        )}
-      </Card>
+        </Card>
+      ) : null}
+
+      {legacyVisits.length ? (
+        <Card title="زيارات ميدانية (سجلات سابقة)" subtitle={`${legacyVisits.length} سجل`} padded={false}>
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <th>التاريخ</th>
+                  <th>الفرع</th>
+                  <th>النوع</th>
+                  <th>المرجع</th>
+                  <th>الحالة</th>
+                  <th>التقدير</th>
+                </tr>
+              </thead>
+              <tbody>
+                {legacyVisits.map((row) => (
+                  <tr key={row.id}>
+                    <td className="nowrap">{fmtDate(row.visitDate)}</td>
+                    <td>{row.branch}</td>
+                    <td>{row.visitType}</td>
+                    <td>{row.reference || '—'}</td>
+                    <td>
+                      <Badge tone={row.status === 'completed' ? 'success' : row.status === 'cancelled' ? 'neutral' : 'warning'}>
+                        {VISIT_STATUS_LABELS[row.status]}
+                      </Badge>
+                    </td>
+                    <td>{row.finalAssessment || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableWrap>
+        </Card>
+      ) : null}
     </>
   );
 }

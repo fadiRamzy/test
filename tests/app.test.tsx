@@ -47,6 +47,14 @@ async function seedEmployee(overrides: Partial<Parameters<typeof saveEmployee>[0
 
 const byId = (id: string) => document.getElementById(id) as HTMLInputElement;
 
+/** يختار موظفًا من قائمة الاختيار المخصّصة (بدل <select>) */
+async function pickEmployee(user: ReturnType<typeof userEvent.setup>, controlId: string, name: string) {
+  await user.click(document.getElementById(controlId) as HTMLElement);
+  const list = await screen.findByRole('listbox', { name: 'الموظف' });
+  const option = await within(list).findByRole('option', { name: new RegExp(name) });
+  await user.click(option);
+}
+
 describe('إضافة موظف', () => {
   it('يحفظ موظفًا جديدًا ويظهره في الجدول', async () => {
     const user = userEvent.setup();
@@ -128,11 +136,11 @@ describe('التقييم الشهري', () => {
     window.location.hash = '#/monthly';
     renderApp();
 
-    const visits = await screen.findByLabelText(`عدد الزيارات — ${employee.name}`);
-    expect((visits as HTMLInputElement).value).toBe('2');
+    // 24 + 2 = 26 — ننتظر تحميل البيانات المحلية أولًا
+    expect(await screen.findByText('26')).toBeInTheDocument();
+    const visits = screen.getByLabelText(`عدد الزيارات — ${employee.name}`) as HTMLInputElement;
+    expect(visits.value).toBe('2');
     expect(screen.getByDisplayValue('ملاحظة محفوظة')).toBeInTheDocument();
-    // 24 + 2 = 26
-    expect(screen.getByText('26')).toBeInTheDocument();
   });
 });
 
@@ -184,7 +192,7 @@ describe('سجلات الإدخال اليدوي', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: /إضافة محضر/ })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: /إضافة محضر/ }));
-    await user.selectOptions(byId('min-employee'), employee.id);
+    await pickEmployee(user, 'min-employee', employee.name);
     await user.type(byId('min-request'), '09:00');
     await user.type(byId('min-received'), '09:30');
     await user.type(byId('min-response'), '10:45');
@@ -259,7 +267,8 @@ describe('ملف الموظف ولوحة المتابعة', () => {
 
     expect((await screen.findAllByText(employee.name)).length).toBeGreaterThan(0);
     expect(await screen.findByText('ملاحظة الشهر')).toBeInTheDocument();
-    expect(screen.getByText('التقييمات الشهرية ' + new Date().getFullYear())).toBeInTheDocument();
+    expect(screen.getByText('التقييمات الشهرية')).toBeInTheDocument();
+    expect(screen.getByText('بيانات الموظف')).toBeInTheDocument();
   });
 
   it('تعرض لوحة المتابعة مؤشرات حقيقية وتحيل إلى السجلات', async () => {
@@ -267,7 +276,7 @@ describe('ملف الموظف ولوحة المتابعة', () => {
     window.location.hash = '#/dashboard';
     renderApp();
 
-    expect(await screen.findByText('موظفون على رأس العمل')).toBeInTheDocument();
+    expect(await screen.findByText('موظفون بحالة تعيين')).toBeInTheDocument();
     expect(screen.getByText('موظفون بدون تقييم هذا الشهر')).toBeInTheDocument();
     expect(screen.getByText('موظفون بدون تقييم شهري')).toBeInTheDocument();
   });
@@ -285,7 +294,7 @@ describe('توقيت الزيارات', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: /إضافة زيارة/ })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: /إضافة زيارة/ }));
-    await user.selectOptions(byId('vt-employee'), employee.id);
+    await pickEmployee(user, 'vt-employee', employee.name);
     await user.clear(byId('vt-date'));
     await user.type(byId('vt-date'), iso);
     await user.type(byId('vt-branch'), 'فرع المعادي');
@@ -314,7 +323,7 @@ describe('توقيت الزيارات', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: /إضافة زيارة/ })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: /إضافة زيارة/ }));
-    await user.selectOptions(byId('vt-employee'), employee.id);
+    await pickEmployee(user, 'vt-employee', employee.name);
     await user.type(byId('vt-branch'), 'فرع أ');
     await user.type(byId('vt-client'), 'عميل');
     await user.type(byId('vt-departure'), '23:30');
@@ -367,5 +376,147 @@ describe('التنقل الرئيسي', () => {
     const nav = await screen.findByRole('navigation', { name: 'التنقل الرئيسي' });
     const links = within(nav).getAllByRole('link');
     expect(links.map((link) => link.textContent)).toEqual(['الموظفون', 'محاضر يومية', 'توقيت الزيارات']);
+  });
+});
+
+describe('ملف الموظف — بيانات الموظف فقط', () => {
+  it('يعرض محاضر وزيارات الموظف المحدد فقط مع الإجماليات الصحيحة', async () => {
+    const first = await seedEmployee({ name: 'أحمد سالم', code: 'RO-801' });
+    const second = await saveEmployee({
+      employeeNo: await nextEmployeeNo(),
+      name: 'منى فتحي',
+      code: 'RO-802',
+      sector: 'قطاع الدلتا',
+      governorate: 'الغربية',
+      jobTitle: 'ضابط مخاطر',
+      employmentDate: '2024-02-01',
+      branches: 'فرع طنطا',
+      status: 'inactive',
+      notes: '',
+    });
+
+    // سجلات الموظف الأول: محضران + زيارتان (70 + 45 = 115 دقيقة)
+    await saveMinute({ employeeId: first.id, fileRequestTime: '08:00', fileReceivedTime: '09:00', responseTime: '10:01', inspectionResult: 'has_notes' });
+    await saveMinute({ employeeId: first.id, fileReceivedTime: '09:00', responseTime: '09:45', inspectionResult: 'no_notes' });
+    await saveVisitTiming({
+      employeeId: first.id,
+      visitDate: '2026-03-02',
+      branch: 'فرع المعادي',
+      clientName: 'عميل الموظف الأول',
+      location: 'المعادي',
+      departureTime: '09:00',
+      returnTime: '10:10',
+    });
+    await saveVisitTiming({
+      employeeId: first.id,
+      visitDate: '2026-03-03',
+      branch: 'فرع حلوان',
+      clientName: 'عميل ثانٍ للأول',
+      location: 'حلوان',
+      departureTime: '23:30',
+      returnTime: '00:15',
+    });
+
+    // سجلات موظف آخر — يجب ألا تظهر في ملف الأول
+    await saveMinute({ employeeId: second.id, fileReceivedTime: '11:00', responseTime: '11:20', inspectionResult: 'no_notes' });
+    await saveVisitTiming({
+      employeeId: second.id,
+      visitDate: '2026-03-04',
+      branch: 'فرع طنطا',
+      clientName: 'عميل الموظف الثاني',
+      location: 'طنطا',
+      departureTime: '08:00',
+      returnTime: '09:00',
+    });
+
+    window.location.hash = `#/employees/${first.id}`;
+    renderApp();
+
+    expect(await screen.findByRole('heading', { name: 'أحمد سالم' })).toBeInTheDocument();
+    // كل تفاصيل سجلات الموظف ظاهرة
+    expect(await screen.findByText('عميل الموظف الأول')).toBeInTheDocument();
+    expect(screen.getByText('عميل ثانٍ للأول')).toBeInTheDocument();
+    expect(screen.getByText('يوجد ملاحظات')).toBeInTheDocument();
+    expect(screen.getByText('متأخر')).toBeInTheDocument();
+    // لا تظهر سجلات الموظف الآخر
+    expect(screen.queryByText('عميل الموظف الثاني')).toBeNull();
+
+    // الإجماليات: محضران، زيارتان، إجمالي مدة الزيارات 115 دقيقة
+    const metrics = Array.from(document.querySelectorAll('.stat')).map((node) => node.textContent ?? '');
+    const minutesCard = metrics.find((text) => text.includes('عدد المحاضر اليومية'));
+    const visitsCard = metrics.find((text) => text.includes('عدد الزيارات'));
+    const durationCard = metrics.find((text) => text.includes('إجمالي مدة الزيارات'));
+    expect(minutesCard).toContain('2');
+    expect(visitsCard).toContain('2');
+    expect(durationCard).toContain('ساعة و55 دقيقة');
+  });
+
+  it('يعرض حالة الموظف «مستقيل» للسجلات القديمة دون فقدانها', async () => {
+    const employee = await seedEmployee({ name: 'سعيد كامل', code: 'RO-803', status: 'inactive' });
+    window.location.hash = `#/employees/${employee.id}`;
+    renderApp();
+
+    expect(await screen.findByRole('heading', { name: 'سعيد كامل' })).toBeInTheDocument();
+    expect(screen.getAllByText('مستقيل').length).toBeGreaterThan(0);
+  });
+});
+
+describe('حالة الموظف', () => {
+  it('يستخدم «حالة الموظف» بخياري تعيين ومستقيل فقط', async () => {
+    await seedEmployee();
+    const user = userEvent.setup();
+    window.location.hash = '#/employees';
+    renderApp();
+
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /إضافة موظف/ })[0]).toBeEnabled());
+    await user.click(screen.getAllByRole('button', { name: /إضافة موظف/ })[0]);
+    const dialog = await screen.findByRole('dialog');
+
+    expect(within(dialog).getByText('حالة الموظف')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/على رأس العمل|غير نشط/)).toBeNull();
+    const select = within(dialog).getByLabelText('حالة الموظف') as HTMLSelectElement;
+    const options = Array.from(select.options).map((option) => option.textContent);
+    expect(options).toEqual(['تعيين', 'مستقيل']);
+  });
+});
+
+describe('الملخص الشهري للزيارات', () => {
+  it('لا يعرض متوسط مدة الزيارة', async () => {
+    const employee = await seedEmployee();
+    await saveVisitTiming({
+      employeeId: employee.id,
+      visitDate: '2026-03-02',
+      branch: 'فرع أ',
+      clientName: 'عميل',
+      location: 'مكان',
+      departureTime: '09:00',
+      returnTime: '10:00',
+    });
+    window.location.hash = '#/visit-times';
+    renderApp();
+
+    await waitFor(() => expect(screen.getAllByText('عميل').length).toBeGreaterThan(0));
+    expect(screen.queryByText(/متوسط مدة الزيارة/)).toBeNull();
+    expect(screen.queryByText(/المتوسط/)).toBeNull();
+    expect(screen.getByText('إجمالي مدة الزيارات')).toBeInTheDocument();
+  });
+});
+
+describe('قائمة اختيار الموظف', () => {
+  it('تعرض اسم الموظف كاملًا في «إضافة محضر»', async () => {
+    const longName = 'عبد الرحمن محمد إبراهيم السيد الشافعي';
+    await seedEmployee({ name: longName, code: 'RO-990' });
+    const user = userEvent.setup();
+    window.location.hash = '#/minutes';
+    renderApp();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة محضر/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة محضر/ }));
+
+    const control = document.getElementById('min-employee') as HTMLElement;
+    await pickEmployee(user, 'min-employee', longName);
+    expect(control.textContent).toContain(longName);
+    // لا نقاط حذف ولا اقتصاص
+    expect(control.textContent).not.toContain('…');
   });
 });

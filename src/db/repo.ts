@@ -2,6 +2,7 @@ import { deleteRecord, getAll, getById, putRecord } from './database';
 import { nowIso, uid } from '../lib/utils';
 import {
   EVALUATION_CRITERIA,
+  normalizeEmployeeStatus,
   SCORE_MAX,
   SCORE_MIN,
   type AnnualNote,
@@ -36,6 +37,7 @@ const isDate = (value?: string | null) => Boolean(value) && !Number.isNaN(new Da
 export async function listEmployees(includeArchived = false): Promise<Employee[]> {
   const rows = await getAll<Employee>('employees');
   return rows
+    .map((row) => ({ ...row, status: normalizeEmployeeStatus(row.status) }))
     .filter((row) => (includeArchived ? true : !row.archived))
     .sort((a, b) => a.employeeNo - b.employeeNo || a.name.localeCompare(b.name, 'ar'));
 }
@@ -80,7 +82,7 @@ export async function saveEmployee(input: Partial<Employee>): Promise<Employee> 
     jobTitle: trim(input.jobTitle),
     employmentDate: input.employmentDate ?? '',
     branches: input.branches ?? '',
-    status: input.status ?? 'active',
+    status: normalizeEmployeeStatus(input.status),
     archived: input.archived ?? current?.archived ?? false,
     notes: input.notes ?? '',
   };

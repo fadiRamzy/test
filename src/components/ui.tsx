@@ -77,15 +77,26 @@ export function Card({
   );
 }
 
-export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
+export function PageHeader({
+  title,
+  eyebrow,
+  description,
+  actions,
+}: {
+  title: string;
+  eyebrow?: string;
+  description?: ReactNode;
+  actions?: ReactNode;
+}) {
   return (
-    <div className="pagehead">
-      <div>
+    <header className="pagehead">
+      <div className="pagehead__text">
+        {eyebrow ? <span className="pagehead__eyebrow">{eyebrow}</span> : null}
         <h1>{title}</h1>
         {description ? <p>{description}</p> : null}
       </div>
       {actions ? <div className="pagehead__actions">{actions}</div> : null}
-    </div>
+    </header>
   );
 }
 
@@ -93,9 +104,24 @@ export function Toolbar({ children }: { children: ReactNode }) {
   return <div className="toolbar print-hide">{children}</div>;
 }
 
-export function EmptyState({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
+export function EmptyState({
+  title,
+  description,
+  action,
+  icon,
+}: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+  icon?: IconName;
+}) {
   return (
     <div className="empty">
+      {icon ? (
+        <span className="empty__icon">
+          <Icon name={icon} size={20} />
+        </span>
+      ) : null}
       <strong>{title}</strong>
       {description ? <p>{description}</p> : null}
       {action ? <div className="empty__action">{action}</div> : null}
@@ -244,9 +270,28 @@ export function Table({ children, className }: { children: ReactNode; className?
   return <table className={cn('table', className)}>{children}</table>;
 }
 
-export function Stat({ label, value, hint, onClick }: { label: string; value: ReactNode; hint?: string; onClick?: () => void }) {
+export function Stat({
+  label,
+  value,
+  hint,
+  icon,
+  tone = 'neutral',
+  onClick,
+}: {
+  label: string;
+  value: ReactNode;
+  hint?: string;
+  icon?: IconName;
+  tone?: Tone;
+  onClick?: () => void;
+}) {
   const content = (
     <>
+      {icon ? (
+        <span className={cn('stat__icon', `stat__icon--${tone}`)}>
+          <Icon name={icon} size={17} />
+        </span>
+      ) : null}
       <span className="stat__label">{label}</span>
       <strong className="stat__value">{value}</strong>
       {hint ? <span className="stat__hint">{hint}</span> : null}

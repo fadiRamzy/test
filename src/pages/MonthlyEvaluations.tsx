@@ -237,8 +237,8 @@ export function MonthlyEvaluationsPage() {
             ))}
           </Select>
           <Select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="الحالة الوظيفية">
-            <option value="active">على رأس العمل</option>
-            <option value="inactive">غير نشط</option>
+            <option value="active">تعيين</option>
+            <option value="inactive">مستقيل</option>
             <option value="all">الكل</option>
           </Select>
           <span className="toolbar__spacer">

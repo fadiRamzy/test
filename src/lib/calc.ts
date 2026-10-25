@@ -323,8 +323,6 @@ export interface EmployeeVisitSummary {
   invalidVisits: number;
   /** مجموع المدد الصالحة بالدقائق */
   totalMinutes: number;
-  /** متوسط المدة = مجموع المدد الصالحة ÷ عدد الزيارات الصالحة */
-  averageMinutes: number | null;
   /** كل زيارات الشهر مرتبة زمنيًا */
   visits: Array<{ visit: import('../db/schema').VisitTiming; timing: VisitTimingResult }>;
 }
@@ -356,8 +354,8 @@ export function visitsInMonth<T extends { visitDate?: string | null }>(
 }
 
 /**
- * ملخص شهري للزيارات لكل موظف: العدد، مجموع المدد، المتوسط، وكل تفاصيل الزيارات.
- * الزيارات ذات المدة غير الصالحة تبقى ظاهرة لكنها مستبعدة من المجموع والمتوسط.
+ * ملخص شهري للزيارات لكل موظف: العدد، مجموع المدد، وكل تفاصيل الزيارات.
+ * الزيارات ذات المدة غير الصالحة تبقى ظاهرة لكنها مستبعدة من مجموع المدد.
  */
 export function monthlyVisitSummary(
   visits: Array<{ id: string; employeeId: string; visitDate?: string | null; departureTime?: string | null; returnTime?: string | null }>,
@@ -394,7 +392,6 @@ export function monthlyVisitSummary(
       validVisits: valid.length,
       invalidVisits: details.length - valid.length,
       totalMinutes,
-      averageMinutes: valid.length ? totalMinutes / valid.length : null,
       visits: details,
     });
   }
