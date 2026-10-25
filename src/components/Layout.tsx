@@ -1,129 +1,63 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useApp } from '../state/store';
-import { navigate, useRoute } from '../state/router';
+import { useRoute } from '../state/router';
 import { Icon, type IconName } from './Icon';
 import { cn } from '../lib/utils';
-import { Badge } from './ui';
 
-export interface NavItem {
+interface NavItem {
   path: string;
   label: string;
   icon: IconName;
-  match: (path: string) => boolean;
 }
 
 const NAV: NavItem[] = [
-  { path: '/', label: 'لوحة المعلومات', icon: 'dashboard', match: (p) => p === '/' || p === '/dashboard' },
-  { path: '/employees', label: 'الموظفون', icon: 'employees', match: (p) => p.startsWith('/employees') },
-  { path: '/minutes', label: 'دقائق الصرف', icon: 'minutes', match: (p) => p.startsWith('/minutes') },
-  { path: '/visits', label: 'الزيارات والتقارير', icon: 'visits', match: (p) => p.startsWith('/visits') },
-  { path: '/observations', label: 'سجل الملاحظات', icon: 'observations', match: (p) => p.startsWith('/observations') },
-  { path: '/evaluations', label: 'التقييمات', icon: 'evaluations', match: (p) => p.startsWith('/evaluations') },
-  { path: '/reports', label: 'تقارير الموظفين', icon: 'reports', match: (p) => p.startsWith('/reports') },
-  { path: '/settings', label: 'الإعدادات', icon: 'settings', match: (p) => p.startsWith('/settings') },
+  { path: '/', label: 'لوحة المتابعة', icon: 'dashboard' },
+  { path: '/employees', label: 'الموظفون', icon: 'employees' },
+  { path: '/monthly', label: 'التقييم الشهري', icon: 'chart' },
+  { path: '/annual', label: 'التقييم السنوي', icon: 'flag' },
+  { path: '/visits', label: 'الزيارات الميدانية', icon: 'visits' },
+  { path: '/minutes', label: 'دقائق الصرف', icon: 'minutes' },
+  { path: '/observations', label: 'الملاحظات', icon: 'observations' },
+  { path: '/leaves', label: 'الإجازات والأذونات', icon: 'calendar' },
+  { path: '/reports', label: 'التقارير والنسخ', icon: 'database' },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { settings } = useApp();
+  const { settings, ready } = useApp();
   const route = useRoute();
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
-  const [printMode, setPrintMode] = useState(false);
 
   useEffect(() => {
-    setMobileOpen(false);
+    window.scrollTo({ top: 0 });
   }, [route.path]);
 
-  useEffect(() => {
-    const on = () => setOnline(true);
-    const off = () => setOnline(false);
-    window.addEventListener('online', on);
-    window.addEventListener('offline', off);
-    return () => {
-      window.removeEventListener('online', on);
-      window.removeEventListener('offline', off);
-    };
-  }, []);
-
-  useEffect(() => {
-    const body = document.body;
-    const check = () => setPrintMode(body.classList.contains('print-mode'));
-    check();
-    const observer = new MutationObserver(check);
-    observer.observe(body, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, []);
-
-  if (printMode) return <>{children}</>;
+  const isActive = (path: string) => (path === '/' ? route.path === '/' : route.path.startsWith(path));
 
   return (
-    <div className="app-shell">
-      <aside className={cn('sidebar', mobileOpen && 'is-open')} aria-label="التنقل الرئيسي">
-        <div className="sidebar__brand">
-          <span className="sidebar__logo" aria-hidden="true">
-            <Icon name="shield" size={20} />
+    <div className="shell">
+      <header className="topnav print-hide">
+        <a className="topnav__brand" href="#/">
+          <span className="topnav__logo">
+            <Icon name="shield" size={17} />
           </span>
-          <div>
-            <strong>إدارة ضباط المخاطر</strong>
-            <span>{settings.teamLeaderName || 'قائد الفريق'}</span>
-          </div>
-        </div>
-        <nav className="sidebar__nav">
+          <span>
+            <strong>نظام إدارة المخاطر</strong>
+            <em>{settings.organizationName}</em>
+          </span>
+        </a>
+        <nav className="topnav__nav" aria-label="التنقل الرئيسي">
           {NAV.map((item) => (
-            <a
-              key={item.path}
-              href={`#${item.path}`}
-              className={cn('nav-item', item.match(route.path) && 'is-active')}
-              onClick={() => setMobileOpen(false)}
-            >
-              <Icon name={item.icon} size={18} />
+            <a key={item.path} href={`#${item.path}`} className={cn('topnav__link', isActive(item.path) && 'is-active')}>
+              <Icon name={item.icon} size={15} />
               <span>{item.label}</span>
             </a>
           ))}
         </nav>
-        <div className="sidebar__foot">
-          <div className="sidebar__note">
-            <Icon name="database" size={15} />
-            <span>البيانات محفوظة في هذا المتصفح فقط</span>
-          </div>
-        </div>
-      </aside>
-
-      {mobileOpen ? <div className="scrim" onClick={() => setMobileOpen(false)} role="presentation" /> : null}
-
-      <div className="main">
-        <header className="topbar">
-          <div className="topbar__start">
-            <button
-              type="button"
-              className="icon-btn icon-btn--ghost mobile-only"
-              onClick={() => setMobileOpen((v) => !v)}
-              aria-label="القائمة"
-            >
-              <Icon name="menu" size={19} />
-            </button>
-            <div className="topbar__org">
-              <Icon name="building" size={16} />
-              <span>{settings.organizationName}</span>
-            </div>
-          </div>
-          <div className="topbar__end">
-            {!online ? (
-              <Badge tone="neutral">
-                <Icon name="info" size={12} /> غير متصل — التطبيق يعمل محليًا
-              </Badge>
-            ) : null}
-            <button type="button" className="icon-btn icon-btn--ghost" onClick={() => navigate('/settings')} aria-label="الإعدادات">
-              <Icon name="settings" size={18} />
-            </button>
-          </div>
-        </header>
-        <main className="content">{children}</main>
-        <footer className="app-footer">
-          <span>جميع البيانات محلية على هذا الجهاز — لا يتم إرسال أي بيانات لأي خادم.</span>
-          <span>التخزين في المتصفح ليس نسخة احتياطية دائمة؛ صدّر نسخة JSON دوريًا.</span>
-        </footer>
-      </div>
+      </header>
+      <main className="page">{ready ? children : <div className="loading">جارٍ فتح البيانات المحلية…</div>}</main>
+      <footer className="appfoot print-hide">
+        البيانات محفوظة داخل هذا المتصفح على هذا الجهاز فقط — لا مزامنة بين الأجهزة، ويمكن فقدانها عند حذف بيانات
+        المتصفح. صدّر نسخة احتياطية من صفحة «التقارير والنسخ».
+      </footer>
     </div>
   );
 }

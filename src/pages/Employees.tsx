@@ -19,47 +19,49 @@ import {
   Textarea,
   Toolbar,
 } from '../components/ui';
-import { ValidationError, deleteEmployee, nextSerial, saveEmployee, setEmployeeArchived } from '../db/repo';
-import type { Employee } from '../db/schema';
-import { fmtDate, fmtNumber, todayInputValue, fromDateInputValue, toDateInputValue } from '../lib/format';
+import { ValidationError, deleteEmployee, nextEmployeeNo, saveEmployee, setEmployeeArchived } from '../db/repo';
+import { EMPLOYEE_STATUS_LABELS, type Employee, type EmployeeStatus } from '../db/schema';
+import { fmtDate, toDateInputValue, todayInputValue } from '../lib/format';
+import { downloadCsv, csvFileName } from '../lib/csv';
 
 interface Draft {
   id?: string;
-  serial: string;
-  sector: string;
-  governorate: string;
+  employeeNo: string;
   name: string;
   code: string;
+  sector: string;
+  governorate: string;
   jobTitle: string;
-  joiningDate: string;
-  visitCount: string;
+  employmentDate: string;
+  branches: string;
+  status: EmployeeStatus;
   notes: string;
-  archived: boolean;
 }
 
-const emptyDraft = (serial: number): Draft => ({
-  serial: String(serial),
-  sector: '',
-  governorate: '',
+const emptyDraft = (employeeNo: number): Draft => ({
+  employeeNo: String(employeeNo),
   name: '',
   code: '',
+  sector: '',
+  governorate: '',
   jobTitle: 'ضابط مخاطر',
-  joiningDate: todayInputValue(),
-  visitCount: '',
+  employmentDate: todayInputValue(),
+  branches: '',
+  status: 'active',
   notes: '',
-  archived: false,
 });
 
 export function EmployeesPage() {
-  const { data, settings, runAction, notify } = useApp();
+  const { data, settings, runAction } = useApp();
   const [query, setQuery] = useState('');
   const [sector, setSector] = useState('all');
   const [governorate, setGovernorate] = useState('all');
+  const [status, setStatus] = useState('all');
   const [showArchived, setShowArchived] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState<Employee | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Employee | null>(null);
 
   const rows = useMemo(() => {
     const text = query.trim().toLowerCase();
@@ -67,46 +69,35 @@ export function EmployeesPage() {
       .filter((row) => (showArchived ? true : !row.archived))
       .filter((row) => (sector === 'all' ? true : row.sector === sector))
       .filter((row) => (governorate === 'all' ? true : row.governorate === governorate))
+      .filter((row) => (status === 'all' ? true : row.status === status))
       .filter((row) =>
-        !text
-          ? true
-          : [row.name, row.code, row.sector, row.governorate, row.jobTitle]
-              .join(' ')
-              .toLowerCase()
-              .includes(text),
+        !text ? true : [row.name, row.code, row.sector, row.governorate, row.jobTitle, row.branches].join(' ').toLowerCase().includes(text),
       )
-      .sort((a, b) => a.serial - b.serial);
-  }, [data.employees, query, sector, governorate, showArchived]);
+      .sort((a, b) => a.employeeNo - b.employeeNo);
+  }, [data.employees, query, sector, governorate, status, showArchived]);
 
-  const sectors = useMemo(
-    () => Array.from(new Set([...settings.sectors, ...data.employees.map((row) => row.sector)].filter(Boolean))).sort(),
-    [settings.sectors, data.employees],
-  );
-  const governorates = useMemo(
-    () =>
-      Array.from(new Set([...settings.governorates, ...data.employees.map((row) => row.governorate)].filter(Boolean))).sort(),
-    [settings.governorates, data.employees],
-  );
+  const sectors = Array.from(new Set([...settings.sectors, ...data.employees.map((row) => row.sector)].filter(Boolean)));
+  const governorates = Array.from(new Set([...settings.governorates, ...data.employees.map((row) => row.governorate)].filter(Boolean)));
 
   const openNew = async () => {
     setErrors({});
-    setDraft(emptyDraft(await nextSerial()));
+    setDraft(emptyDraft(await nextEmployeeNo()));
   };
 
   const openEdit = (employee: Employee) => {
     setErrors({});
     setDraft({
       id: employee.id,
-      serial: String(employee.serial),
-      sector: employee.sector,
-      governorate: employee.governorate,
+      employeeNo: String(employee.employeeNo),
       name: employee.name,
       code: employee.code,
+      sector: employee.sector,
+      governorate: employee.governorate,
       jobTitle: employee.jobTitle,
-      joiningDate: toDateInputValue(employee.joiningDate),
-      visitCount: employee.visitCount === null ? '' : String(employee.visitCount),
+      employmentDate: toDateInputValue(employee.employmentDate),
+      branches: employee.branches,
+      status: employee.status,
       notes: employee.notes,
-      archived: Boolean(employee.archived),
     });
   };
 
@@ -119,18 +110,18 @@ export function EmployeesPage() {
         () =>
           saveEmployee({
             id: draft.id,
-            serial: Number(draft.serial),
-            sector: draft.sector,
-            governorate: draft.governorate,
+            employeeNo: Number(draft.employeeNo),
             name: draft.name,
             code: draft.code,
+            sector: draft.sector,
+            governorate: draft.governorate,
             jobTitle: draft.jobTitle,
-            joiningDate: fromDateInputValue(draft.joiningDate) ?? '',
-            visitCount: draft.visitCount === '' ? null : Number(draft.visitCount),
+            employmentDate: draft.employmentDate,
+            branches: draft.branches,
+            status: draft.status,
             notes: draft.notes,
-            archived: draft.archived,
           }),
-        draft.id ? 'تم تحديث بيانات الموظف.' : 'تمت إضافة الموظف.',
+        draft.id ? 'تم حفظ تعديلات الموظف.' : 'تمت إضافة الموظف.',
       );
       setDraft(null);
     } catch (error) {
@@ -140,34 +131,48 @@ export function EmployeesPage() {
     }
   };
 
-  const confirmDelete = async () => {
-    if (!deleting) return;
-    try {
-      await runAction(() => deleteEmployee(deleting.id), 'تم حذف الموظف نهائيًا.');
-      setDeleting(null);
-    } catch {
-      setDeleting(null);
-    }
-  };
-
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+
+  const exportCsv = () => {
+    downloadCsv(
+      csvFileName('employees'),
+      ['الرقم', 'الاسم', 'الكود', 'القطاع', 'المحافظة', 'المسمى الوظيفي', 'تاريخ التعيين', 'الفروع', 'الحالة', 'ملاحظات'],
+      rows.map((row) => [
+        row.employeeNo,
+        row.name,
+        row.code,
+        row.sector,
+        row.governorate,
+        row.jobTitle,
+        row.employmentDate,
+        row.branches,
+        EMPLOYEE_STATUS_LABELS[row.status],
+        row.notes,
+      ]),
+    );
+  };
 
   return (
     <>
       <PageHeader
         title="الموظفون"
-        description="إدارة ضباط المخاطر المسؤولين عن دقائق الصرف والزيارات والتقييمات."
+        description="قائمة ضباط المخاطر — كل موظف يُدخل مرة واحدة ثم يظهر تلقائيًا في التقييمات والزيارات والدقائق."
         actions={
-          <Button variant="primary" icon="plus" onClick={openNew}>
-            إضافة موظف
-          </Button>
+          <>
+            <Button icon="download" onClick={exportCsv} disabled={!rows.length}>
+              تصدير CSV
+            </Button>
+            <Button variant="primary" icon="plus" onClick={openNew}>
+              إضافة موظف
+            </Button>
+          </>
         }
       />
 
       <Card padded={false}>
         <Toolbar>
           <SearchInput value={query} onChange={setQuery} placeholder="بحث بالاسم أو الكود…" />
-          <Select value={sector} onChange={(e) => setSector(e.target.value)} aria-label="تصفية بالقطاع">
+          <Select value={sector} onChange={(e) => setSector(e.target.value)} aria-label="القطاع">
             <option value="all">كل القطاعات</option>
             {sectors.map((item) => (
               <option key={item} value={item}>
@@ -175,7 +180,7 @@ export function EmployeesPage() {
               </option>
             ))}
           </Select>
-          <Select value={governorate} onChange={(e) => setGovernorate(e.target.value)} aria-label="تصفية بالمحافظة">
+          <Select value={governorate} onChange={(e) => setGovernorate(e.target.value)} aria-label="المحافظة">
             <option value="all">كل المحافظات</option>
             {governorates.map((item) => (
               <option key={item} value={item}>
@@ -183,10 +188,13 @@ export function EmployeesPage() {
               </option>
             ))}
           </Select>
+          <Select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="الحالة">
+            <option value="all">كل الحالات</option>
+            <option value="active">على رأس العمل</option>
+            <option value="inactive">غير نشط</option>
+          </Select>
           <Checkbox label="إظهار المؤرشفين" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
-          <span className="toolbar__count">
-            {rows.length} من {data.employees.length}
-          </span>
+          <span className="toolbar__spacer">{rows.length} موظف</span>
         </Toolbar>
 
         {rows.length ? (
@@ -194,55 +202,61 @@ export function EmployeesPage() {
             <Table>
               <thead>
                 <tr>
-                  <th>م</th>
+                  <th className="num">الرقم</th>
                   <th>الاسم</th>
                   <th>الكود</th>
-                  <th>المسمى الوظيفي</th>
                   <th>القطاع</th>
                   <th>المحافظة</th>
-                  <th>تاريخ الالتحاق</th>
-                  <th>عدد الزيارات</th>
-                  <th>دقائق مفتوحة</th>
+                  <th>المسمى الوظيفي</th>
+                  <th>تاريخ التعيين</th>
+                  <th>الفروع</th>
+                  <th>الحالة</th>
                   <th>إجراءات</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((employee) => {
-                  const openMinutes = data.minutes.filter(
-                    (minute) => minute.employeeId === employee.id && minute.status === 'open',
-                  ).length;
-                  return (
-                    <tr key={employee.id} className={employee.archived ? 'row--muted' : undefined}>
-                      <td className="num">{employee.serial}</td>
-                      <td>
-                        <a href={`#/employees/${employee.id}`} className="link">
-                          {employee.name}
-                        </a>
-                        {employee.archived ? <Badge tone="neutral"> مؤرشف</Badge> : null}
-                      </td>
-                      <td className="mono">{employee.code}</td>
-                      <td>{employee.jobTitle}</td>
-                      <td>{employee.sector}</td>
-                      <td>{employee.governorate}</td>
-                      <td>{fmtDate(employee.joiningDate)}</td>
-                      <td className="num">{fmtNumber(employee.visitCount)}</td>
-                      <td className="num">{openMinutes}</td>
-                      <td className="cell-actions">
-                        <IconButton icon="user" label="الملف الشخصي" onClick={() => navigate(`/employees/${employee.id}`)} />
+                {rows.map((employee) => (
+                  <tr key={employee.id}>
+                    <td className="num">{employee.employeeNo}</td>
+                    <td>
+                      <a href={`#/employees/${employee.id}`}>{employee.name}</a>
+                      {employee.archived ? <Badge> مؤرشف</Badge> : null}
+                    </td>
+                    <td className="mono">{employee.code}</td>
+                    <td>{employee.sector}</td>
+                    <td>{employee.governorate}</td>
+                    <td>{employee.jobTitle}</td>
+                    <td className="nowrap">{fmtDate(employee.employmentDate)}</td>
+                    <td>{employee.branches || '—'}</td>
+                    <td>
+                      <Badge tone={employee.status === 'active' ? 'success' : 'neutral'}>{EMPLOYEE_STATUS_LABELS[employee.status]}</Badge>
+                    </td>
+                    <td>
+                      <div className="table__actions">
+                        <IconButton icon="user" label="عرض الملف" onClick={() => navigate(`/employees/${employee.id}`)} />
                         <IconButton icon="edit" label="تعديل" onClick={() => openEdit(employee)} />
-                        <IconButton icon="trash" label="حذف" variant="danger" onClick={() => setDeleting(employee)} />
-                      </td>
-                    </tr>
-                  );
-                })}
+                        <IconButton
+                          icon="archive"
+                          label={employee.archived ? 'إلغاء الأرشفة' : 'أرشفة'}
+                          onClick={() =>
+                            runAction(
+                              () => setEmployeeArchived(employee.id, !employee.archived),
+                              employee.archived ? 'تم إلغاء الأرشفة.' : 'تمت أرشفة الموظف.',
+                            )
+                          }
+                        />
+                        <IconButton icon="trash" tone="danger" label="حذف" onClick={() => setConfirmDelete(employee)} />
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </Table>
           </TableWrap>
         ) : (
           <EmptyState
-            icon="employees"
-            title="لا توجد نتائج"
-            description="أضف موظفًا جديدًا أو عدّل معايير التصفية."
+            title="لا يوجد موظفون"
+            description="ابدأ بإضافة أول ضابط مخاطر."
             action={
               <Button variant="primary" icon="plus" onClick={openNew}>
                 إضافة موظف
@@ -255,120 +269,97 @@ export function EmployeesPage() {
       <Modal
         open={Boolean(draft)}
         onClose={() => setDraft(null)}
-        title={draft?.id ? 'تعديل بيانات الموظف' : 'إضافة موظف جديد'}
-        subtitle="كل الحقول الأساسية مطلوبة. تُدخل البيانات يدويًا بالكامل."
+        title={draft?.id ? 'تعديل موظف' : 'إضافة موظف'}
+        size="lg"
         footer={
           <>
             <Button onClick={() => setDraft(null)}>إلغاء</Button>
-            <Button variant="primary" icon="save" loading={saving} onClick={submit}>
+            <Button variant="primary" icon="save" onClick={submit} disabled={saving}>
               حفظ
             </Button>
           </>
         }
       >
         {draft ? (
-          <div className="form-grid">
-            <Field label="الرقم التسلسلي" required error={errors.serial} htmlFor="emp-serial">
-              <Input
-                id="emp-serial"
-                type="number"
-                min={1}
-                value={draft.serial}
-                onChange={(e) => set('serial', e.target.value)}
-              />
+          <div className="formgrid">
+            <Field label="رقم الموظف" required error={errors.employeeNo} htmlFor="emp-no">
+              <Input id="emp-no" type="number" min={1} value={draft.employeeNo} onChange={(e) => set('employeeNo', e.target.value)} />
             </Field>
             <Field label="كود الموظف" required error={errors.code} htmlFor="emp-code">
-              <Input id="emp-code" value={draft.code} onChange={(e) => set('code', e.target.value)} placeholder="مثال: RO-1024" />
+              <Input id="emp-code" value={draft.code} onChange={(e) => set('code', e.target.value)} placeholder="RO-1001" />
             </Field>
-            <Field label="اسم الموظف" required error={errors.name} htmlFor="emp-name" className="span-2">
+            <Field label="اسم الموظف" required error={errors.name} htmlFor="emp-name" className="span2">
               <Input id="emp-name" value={draft.name} onChange={(e) => set('name', e.target.value)} />
             </Field>
-            <Field label="المسمى الوظيفي" required error={errors.jobTitle} htmlFor="emp-title">
-              <Input id="emp-title" value={draft.jobTitle} onChange={(e) => set('jobTitle', e.target.value)} />
-            </Field>
-            <Field label="تاريخ الالتحاق" required error={errors.joiningDate} htmlFor="emp-joining">
-              <Input id="emp-joining" type="date" value={draft.joiningDate} onChange={(e) => set('joiningDate', e.target.value)} />
-            </Field>
             <Field label="القطاع" required error={errors.sector} htmlFor="emp-sector">
-              <Input
-                id="emp-sector"
-                list="sector-options"
-                value={draft.sector}
-                onChange={(e) => set('sector', e.target.value)}
-              />
-              <datalist id="sector-options">
+              <Input id="emp-sector" list="sectors-list" value={draft.sector} onChange={(e) => set('sector', e.target.value)} />
+              <datalist id="sectors-list">
                 {settings.sectors.map((item) => (
                   <option key={item} value={item} />
                 ))}
               </datalist>
             </Field>
             <Field label="المحافظة" required error={errors.governorate} htmlFor="emp-gov">
-              <Input
-                id="emp-gov"
-                list="gov-options"
-                value={draft.governorate}
-                onChange={(e) => set('governorate', e.target.value)}
-              />
-              <datalist id="gov-options">
+              <Input id="emp-gov" list="govs-list" value={draft.governorate} onChange={(e) => set('governorate', e.target.value)} />
+              <datalist id="govs-list">
                 {settings.governorates.map((item) => (
                   <option key={item} value={item} />
                 ))}
               </datalist>
             </Field>
-            <Field
-              label="عدد الزيارات"
-              error={errors.visitCount}
-              hint="إدخال يدوي — اتركه فارغًا إن لم يكن محددًا."
-              htmlFor="emp-visits"
-            >
-              <Input
-                id="emp-visits"
-                type="number"
-                min={0}
-                value={draft.visitCount}
-                onChange={(e) => set('visitCount', e.target.value)}
-              />
+            <Field label="المسمى الوظيفي" required error={errors.jobTitle} htmlFor="emp-title">
+              <Input id="emp-title" list="jobs-list" value={draft.jobTitle} onChange={(e) => set('jobTitle', e.target.value)} />
+              <datalist id="jobs-list">
+                {settings.jobTitles.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
             </Field>
-            <Field label="ملاحظات عامة" htmlFor="emp-notes" className="span-2">
-              <Textarea id="emp-notes" rows={3} value={draft.notes} onChange={(e) => set('notes', e.target.value)} />
+            <Field label="تاريخ التعيين" required error={errors.employmentDate} htmlFor="emp-hire">
+              <Input id="emp-hire" type="date" value={draft.employmentDate} onChange={(e) => set('employmentDate', e.target.value)} />
             </Field>
-            <div className="span-2">
-              <Checkbox label="موظف مؤرشف (يُخفى من القوائم)" checked={draft.archived} onChange={(e) => set('archived', e.target.checked)} />
-            </div>
+            <Field label="الفرع / الفروع المكلف بها" hint="افصل بين الفروع بفاصلة" htmlFor="emp-branches">
+              <Input id="emp-branches" value={draft.branches} onChange={(e) => set('branches', e.target.value)} />
+            </Field>
+            <Field label="الحالة" htmlFor="emp-status">
+              <Select id="emp-status" value={draft.status} onChange={(e) => set('status', e.target.value as EmployeeStatus)}>
+                <option value="active">على رأس العمل</option>
+                <option value="inactive">غير نشط</option>
+              </Select>
+            </Field>
+            <Field label="ملاحظات عامة" htmlFor="emp-notes" className="span2">
+              <Textarea id="emp-notes" rows={2} value={draft.notes} onChange={(e) => set('notes', e.target.value)} />
+            </Field>
           </div>
         ) : null}
       </Modal>
 
       <Modal
-        open={Boolean(deleting)}
-        onClose={() => setDeleting(null)}
+        open={Boolean(confirmDelete)}
+        onClose={() => setConfirmDelete(null)}
         title="حذف موظف"
         size="sm"
         footer={
           <>
-            <Button onClick={() => setDeleting(null)}>إلغاء</Button>
-            <Button variant="danger" onClick={confirmDelete} icon="trash">
-              حذف نهائي
+            <Button onClick={() => setConfirmDelete(null)}>إلغاء</Button>
+            <Button
+              variant="danger"
+              icon="trash"
+              onClick={async () => {
+                if (!confirmDelete) return;
+                await runAction(() => deleteEmployee(confirmDelete.id), 'تم حذف الموظف.').catch(() => undefined);
+                setConfirmDelete(null);
+              }}
+            >
+              حذف
             </Button>
           </>
         }
       >
-        <p className="confirm-text">
-          سيتم حذف «{deleting?.name}» نهائيًا. لا يمكن الحذف إذا كان لديه دقائق أو زيارات أو ملاحظات أو تقييمات مسجلة —
-          استخدم الأرشفة في هذه الحالة.
+        <p className="small">
+          سيُحذف «{confirmDelete?.name}» نهائيًا. لا يمكن الحذف إذا كان لديه تقييمات أو زيارات أو دقائق أو ملاحظات أو إجازات —
+          استخدم «أرشفة» في هذه الحالة.
         </p>
-        <Button
-          variant="secondary"
-          icon="archive"
-          onClick={async () => {
-            if (!deleting) return;
-            await runAction(() => setEmployeeArchived(deleting.id, true), 'تم أرشفة الموظف.');
-            setDeleting(null);
-            notify('يمكنك إظهار المؤرشفين من خيار «إظهار المؤرشفين».', 'info');
-          }}
-        >
-          أرشفة بدلًا من الحذف
-        </Button>
       </Modal>
     </>
   );

@@ -2,17 +2,39 @@ import { clearStore, countRecords, getAll, putMany, readSettings, writeSettings,
 import { nowIso } from '../lib/utils';
 import {
   ENTITY_LABELS,
+  type AnnualNote,
   type AppSettings,
+  type DisbursementMinute,
   type Employee,
   type EntityName,
-  type Evaluation,
-  type Minute,
+  type FieldVisit,
+  type Leave,
+  type MonthlyEvaluation,
   type Observation,
-  type Visit,
 } from './schema';
 
-export const BACKUP_APP = 'risk-officer-tracker';
+export const BACKUP_APP = 'risk-officer-suite';
 export const BACKUP_FORMAT = 1;
+
+export const ENTITIES: EntityName[] = [
+  'employees',
+  'monthlyEvaluations',
+  'fieldVisits',
+  'minutes',
+  'observations',
+  'leaves',
+  'annualNotes',
+];
+
+export interface BackupData {
+  employees: Employee[];
+  monthlyEvaluations: MonthlyEvaluation[];
+  fieldVisits: FieldVisit[];
+  minutes: DisbursementMinute[];
+  observations: Observation[];
+  leaves: Leave[];
+  annualNotes: AnnualNote[];
+}
 
 export interface BackupPayload {
   app: string;
@@ -20,43 +42,23 @@ export interface BackupPayload {
   exportedAt: string;
   counts: Record<EntityName, number>;
   settings: AppSettings;
-  data: {
-    employees: Employee[];
-    minutes: Minute[];
-    visits: Visit[];
-    observations: Observation[];
-    evaluations: Evaluation[];
-  };
-  checksum?: string;
-}
-
-const ENTITIES: EntityName[] = ['employees', 'minutes', 'visits', 'observations', 'evaluations'];
-
-async function checksumOf(data: unknown): Promise<string | null> {
-  if (typeof crypto === 'undefined' || !crypto.subtle) return null;
-  try {
-    const buffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(data)));
-    return Array.from(new Uint8Array(buffer))
-      .map((byte) => byte.toString(16).padStart(2, '0'))
-      .join('');
-  } catch {
-    return null;
-  }
+  data: BackupData;
 }
 
 export async function createBackup(): Promise<BackupPayload> {
   const settings = await readSettings();
-  const data = {
+  const data: BackupData = {
     employees: await getAll<Employee>('employees'),
-    minutes: await getAll<Minute>('minutes'),
-    visits: await getAll<Visit>('visits'),
+    monthlyEvaluations: await getAll<MonthlyEvaluation>('monthlyEvaluations'),
+    fieldVisits: await getAll<FieldVisit>('fieldVisits'),
+    minutes: await getAll<DisbursementMinute>('minutes'),
     observations: await getAll<Observation>('observations'),
-    evaluations: await getAll<Evaluation>('evaluations'),
+    leaves: await getAll<Leave>('leaves'),
+    annualNotes: await getAll<AnnualNote>('annualNotes'),
   };
   const counts = {} as Record<EntityName, number>;
   for (const entity of ENTITIES) counts[entity] = data[entity].length;
-  const checksum = (await checksumOf(data)) ?? undefined;
-  return { app: BACKUP_APP, formatVersion: BACKUP_FORMAT, exportedAt: nowIso(), counts, settings, data, checksum };
+  return { app: BACKUP_APP, formatVersion: BACKUP_FORMAT, exportedAt: nowIso(), counts, settings, data };
 }
 
 export interface ValidationResult {
@@ -71,14 +73,14 @@ export interface ValidationResult {
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-export async function validateBackup(raw: unknown): Promise<ValidationResult> {
+export function validateBackup(raw: unknown): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
   if (!isObject(raw)) return { ok: false, errors: ['الملف لا يحتوي على كائن JSON صالح.'], warnings };
   if (raw.app !== BACKUP_APP) errors.push('هذا الملف ليس نسخة احتياطية من هذا النظام.');
   if (typeof raw.formatVersion !== 'number') errors.push('إصدار صيغة النسخة الاحتياطية مفقود.');
-  else if (raw.formatVersion > BACKUP_FORMAT) errors.push('النسخة أُنشئت بإصدار أحدث من التطبيق. حدّث التطبيق أولًا.');
+  else if (raw.formatVersion > BACKUP_FORMAT) errors.push('النسخة أُنشئت بإصدار أحدث من التطبيق.');
   if (!isObject(raw.data)) errors.push('قسم البيانات (data) مفقود أو غير صالح.');
 
   const data = isObject(raw.data) ? raw.data : {};
@@ -86,43 +88,30 @@ export async function validateBackup(raw: unknown): Promise<ValidationResult> {
 
   for (const entity of ENTITIES) {
     const rows = data[entity];
-    if (rows === undefined) {
-      errors.push(`قسم «${ENTITY_LABELS[entity]}» مفقود.`);
-      continue;
-    }
     if (!Array.isArray(rows)) {
-      errors.push(`قسم «${ENTITY_LABELS[entity]}» يجب أن يكون قائمة.`);
+      errors.push(`قسم «${ENTITY_LABELS[entity]}» مفقود أو ليس قائمة.`);
       continue;
     }
     counts[entity] = rows.length;
     const ids = new Set<string>();
     rows.forEach((row, index) => {
-      if (!isObject(row)) {
+      if (!isObject(row) || typeof row.id !== 'string' || !row.id) {
         errors.push(`${ENTITY_LABELS[entity]}: السجل ${index + 1} غير صالح.`);
         return;
       }
-      if (typeof row.id !== 'string' || !row.id) errors.push(`${ENTITY_LABELS[entity]}: السجل ${index + 1} بلا معرّف.`);
-      else if (ids.has(row.id)) errors.push(`${ENTITY_LABELS[entity]}: معرّف مكرر (${row.id}).`);
-      else ids.add(row.id);
+      if (ids.has(row.id)) errors.push(`${ENTITY_LABELS[entity]}: معرّف مكرر (${row.id}).`);
+      ids.add(row.id);
     });
   }
 
   if (!errors.length) {
-    if (typeof raw.checksum === 'string') {
-      const expected = await checksumOf(data);
-      if (expected && expected !== raw.checksum) errors.push('بصمة التحقق غير مطابقة — الملف قد يكون معدّلًا أو تالفًا.');
-    } else {
-      warnings.push('لا تحتوي النسخة على بصمة تحقق؛ تم التحقق من البنية فقط.');
-    }
     const employeeIds = new Set((data.employees as Employee[]).map((row) => row.id));
-    const orphan = (rows: Array<Record<string, unknown>>, field: string, label: string) => {
-      const count = rows.filter((row) => row[field] && !employeeIds.has(String(row[field]))).length;
-      if (count) warnings.push(`${label}: ${count} سجلًا يشير إلى موظف غير موجود.`);
-    };
-    orphan(data.minutes as Array<Record<string, unknown>>, 'employeeId', 'دقائق الصرف');
-    orphan(data.visits as Array<Record<string, unknown>>, 'employeeId', 'الزيارات');
-    orphan(data.observations as Array<Record<string, unknown>>, 'employeeId', 'الملاحظات');
-    orphan(data.evaluations as Array<Record<string, unknown>>, 'employeeId', 'التقييمات');
+    for (const entity of ENTITIES.filter((name) => name !== 'employees')) {
+      const orphan = (data[entity] as Array<{ employeeId?: string }>).filter(
+        (row) => row.employeeId && !employeeIds.has(row.employeeId),
+      ).length;
+      if (orphan) warnings.push(`${ENTITY_LABELS[entity]}: ${orphan} سجلًا يشير إلى موظف غير موجود.`);
+    }
   }
 
   return {
@@ -141,9 +130,8 @@ export interface RestoreResult {
   safetyBackup: BackupPayload;
 }
 
-/** استعادة مع إنشاء نسخة أمان من البيانات الحالية قبل أي استبدال */
 export async function restoreBackup(payload: BackupPayload, mode: 'replace' | 'merge'): Promise<RestoreResult> {
-  const validation = await validateBackup(payload);
+  const validation = validateBackup(payload);
   if (!validation.ok) throw new Error(validation.errors[0] ?? 'نسخة غير صالحة');
 
   const safetyBackup = await createBackup();
@@ -175,7 +163,6 @@ export async function restoreBackup(payload: BackupPayload, mode: 'replace' | 'm
 
   if (payload.settings) await writeSettings(payload.settings);
   await writeMeta('lastRestoreAt', nowIso());
-  await writeMeta('lastRestoreMode', mode);
   return { mode, imported, safetyBackup };
 }
 
@@ -187,12 +174,12 @@ export async function dataCounts(): Promise<Record<EntityName, number>> {
 
 export function backupFileName(date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `risk-tracker-backup-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(
+  return `risk-suite-backup-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(
     date.getHours(),
   )}${pad(date.getMinutes())}.json`;
 }
 
-/** حذف كل البيانات مع إرجاع نسخة أمان */
+/** حذف كل البيانات بعد أخذ نسخة أمان */
 export async function resetAllData(): Promise<BackupPayload> {
   const safety = await createBackup();
   for (const entity of ENTITIES) await clearStore(entity);

@@ -1,438 +1,359 @@
-import { useMemo, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useApp } from '../state/store';
-import { useRoute } from '../state/router';
-import { Badge, Button, Callout, Card, EmptyState, Field, Input, PageHeader, Select, Table, TableWrap } from '../components/ui';
-import { EVALUATION_CRITERIA, OBSERVATION_STATUS_LABELS, REVIEW_OUTCOME_LABELS, VISIT_STATUS_LABELS } from '../db/schema';
-import { countNoun, fmtAvg, fmtDate, fmtDateTime, fmtDurationShort, fmtNumber, monthLabel, NOUNS, toDateInputValue } from '../lib/format';
-import { minuteState, visitState } from '../lib/tracking';
-import { summarizeScores } from '../lib/evaluation';
+import { Badge, Button, Callout, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Table, TableWrap, Textarea } from '../components/ui';
+import {
+  backupFileName,
+  createBackup,
+  dataCounts,
+  restoreBackup,
+  validateBackup,
+  type BackupPayload,
+  type ValidationResult,
+} from '../db/backup';
+import { ENTITY_LABELS, MONTHS_AR, type EntityName } from '../db/schema';
+import { annualSummary, leaveTotals, monthlyTotals } from '../lib/calc';
+import { fmtDate, fmtDateTime, fmtNumber } from '../lib/format';
+import { downloadCsv, csvFileName } from '../lib/csv';
+import { downloadFile, readTextFile, safeJsonParse } from '../lib/utils';
+
+const ENTITIES: EntityName[] = ['employees', 'monthlyEvaluations', 'fieldVisits', 'minutes', 'observations', 'leaves', 'annualNotes'];
 
 export function ReportsPage() {
-  const route = useRoute();
-  const { data, settings } = useApp();
-  const [selectedId, setSelectedId] = useState(route.query.get('employee') ?? '');
-  // البيانات تُحمَّل بعد أول رسم، لذا نستنتج الاختيار الافتراضي بدل تثبيته في الحالة
-  const employeeId = selectedId || data.employees[0]?.id || '';
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const { data, settings, saveSettings, refresh, notify } = useApp();
+  const [counts, setCounts] = useState<Record<EntityName, number> | null>(null);
+  const [pending, setPending] = useState<{ payload: BackupPayload; validation: ValidationResult; name: string } | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
 
-  const employee = data.employees.find((row) => row.id === employeeId);
+  const [org, setOrg] = useState(settings.organizationName);
+  const [sectors, setSectors] = useState(settings.sectors.join('\n'));
+  const [governorates, setGovernorates] = useState(settings.governorates.join('\n'));
+  const [branches, setBranches] = useState(settings.branches.join('\n'));
+  const [leaveTypes, setLeaveTypes] = useState(settings.leaveTypes.join('\n'));
+  const [categories, setCategories] = useState(settings.observationCategories.join('\n'));
 
-  const inRange = (value?: string | null) => {
-    if (!value) return false;
-    const day = value.slice(0, 10);
-    if (from && day < from) return false;
-    if (to && day > to) return false;
-    return true;
+  const nameOf = (id: string) => data.employees.find((row) => row.id === id)?.name ?? '—';
+  const rowsFor = (text: string) => Math.min(14, Math.max(3, text.split('\n').length + 1));
+  const lines = (text: string) => Array.from(new Set(text.split('\n').map((line) => line.trim()).filter(Boolean)));
+
+  /* ------------------------------ تصدير CSV ------------------------------ */
+
+  const exportMonthly = () =>
+    downloadCsv(
+      csvFileName(`monthly-${year}`),
+      ['الموظف', 'الكود', 'الشهر', 'الزيارات', 'مجموع الدرجات', 'إجمالي النقاط', 'ملاحظات'],
+      data.evaluations
+        .filter((row) => row.year === year)
+        .sort((a, b) => a.month - b.month)
+        .map((row) => {
+          const totals = monthlyTotals(row.scores, row.visits);
+          return [nameOf(row.employeeId), data.employees.find((e) => e.id === row.employeeId)?.code ?? '', MONTHS_AR[row.month - 1], totals.visits, totals.scoresSum, totals.total, row.notes];
+        }),
+    );
+
+  const exportAnnual = () =>
+    downloadCsv(
+      csvFileName(`annual-${year}`),
+      ['الرقم', 'الموظف', 'الكود', 'الزيارات السنوية', 'مجموع النقاط', 'التقدير', 'أشهر مقيَّمة', 'مدة الخدمة (شهر)'],
+      data.employees
+        .filter((row) => !row.archived)
+        .map((employee) => {
+          const summary = annualSummary(data.evaluations, employee, year, settings.ratingThresholds);
+          return [
+            employee.employeeNo,
+            employee.name,
+            employee.code,
+            summary.visits,
+            summary.points,
+            summary.rating ?? 'لم يُقيَّم',
+            summary.evaluatedMonths.length,
+            summary.employmentMonths ?? '',
+          ];
+        }),
+    );
+
+  const exportHistory = () =>
+    downloadCsv(
+      csvFileName(`employee-history-${year}`),
+      ['الموظف', 'القسم', 'التاريخ', 'التفاصيل'],
+      data.employees.flatMap((employee) => {
+        const monthly = data.evaluations.filter((row) => row.employeeId === employee.id && row.year === year);
+        const visits = data.visits.filter((row) => row.employeeId === employee.id && row.visitDate.startsWith(String(year)));
+        const minutes = data.minutes.filter((row) => row.employeeId === employee.id && row.date.startsWith(String(year)));
+        const observations = data.observations.filter((row) => row.employeeId === employee.id && row.date.startsWith(String(year)));
+        const leaves = data.leaves.filter((row) => row.employeeId === employee.id && row.startDate.startsWith(String(year)));
+        return [
+          ...monthly.map((row) => [employee.name, 'تقييم شهري', `${row.month}/${row.year}`, `النقاط: ${monthlyTotals(row.scores, row.visits).total}`]),
+          ...visits.map((row) => [employee.name, 'زيارة', row.visitDate, `${row.branch} — ${row.visitType}`]),
+          ...minutes.map((row) => [employee.name, 'دقيقة صرف', row.date, `${row.branch} — ${row.clientRef}`]),
+          ...observations.map((row) => [employee.name, 'ملاحظة', row.date, row.details]),
+          ...leaves.map((row) => [employee.name, 'إجازة/إذن', row.startDate, `${row.type} (${row.unit === 'days' ? `${row.days} يوم` : `${row.hours} ساعة`})`]),
+        ];
+      }),
+    );
+
+  const exportVisits = () =>
+    downloadCsv(
+      csvFileName(`visits-${year}`),
+      ['التاريخ', 'الموظف', 'المنطقة', 'الفرع', 'النوع', 'المرجع', 'التقدير'],
+      data.visits.filter((row) => row.visitDate.startsWith(String(year))).map((row) => [row.visitDate, nameOf(row.employeeId), row.region, row.branch, row.visitType, row.reference, row.finalAssessment]),
+    );
+
+  const exportMinutes = () =>
+    downloadCsv(
+      csvFileName(`minutes-${year}`),
+      ['التاريخ', 'الفرع', 'الموظف', 'مرجع العميل', 'نوع التمويل', 'المبلغ', 'الاستلام', 'الرد النهائي', 'الحالة'],
+      data.minutes.filter((row) => row.date.startsWith(String(year))).map((row) => [row.date, row.branch, nameOf(row.employeeId), row.clientRef, row.financingType, row.amount ?? '', row.minuteReceivedTime, row.finalResponseTime, row.status === 'open' ? 'قيد الإجراء' : 'منتهية']),
+    );
+
+  const exportObservations = () =>
+    downloadCsv(
+      csvFileName('observations'),
+      ['التاريخ', 'الموظف', 'المصدر', 'التصنيف', 'الخطورة', 'التفاصيل', 'الإجراء التصحيحي', 'الحالة'],
+      data.observations.map((row) => [row.date, nameOf(row.employeeId), row.source, row.category, row.severity, row.details, row.correctiveAction, row.status === 'open' ? 'مفتوحة' : 'مغلقة']),
+    );
+
+  const exportLeaves = () => {
+    downloadCsv(
+      csvFileName('leaves'),
+      ['الموظف', 'النوع', 'من', 'إلى', 'الوحدة', 'القيمة', 'ملاحظات'],
+      data.leaves.map((row) => [nameOf(row.employeeId), row.type, row.startDate, row.endDate, row.unit === 'days' ? 'أيام' : 'ساعات', row.unit === 'days' ? row.days : row.hours, row.notes]),
+    );
+    const totals = leaveTotals(data.leaves);
+    notify(`إجمالي الإجازات: ${fmtNumber(totals.days)} يوم · الأذونات: ${fmtNumber(totals.hours)} ساعة.`, 'info');
   };
 
-  const minutes = useMemo(
-    () => data.minutes.filter((row) => row.employeeId === employeeId && inRange(row.receivedAt)).sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data.minutes, employeeId, from, to],
-  );
-  const visits = useMemo(
-    () => data.visits.filter((row) => row.employeeId === employeeId && inRange(row.departureAt ?? row.createdAt)).sort((a, b) => ((a.departureAt ?? '') < (b.departureAt ?? '') ? 1 : -1)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data.visits, employeeId, from, to],
-  );
-  const observations = useMemo(
-    () => data.observations.filter((row) => row.employeeId === employeeId && inRange(row.date)).sort((a, b) => (a.date < b.date ? 1 : -1)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data.observations, employeeId, from, to],
-  );
-  const evaluations = useMemo(
-    () =>
-      data.evaluations
-        .filter((row) => row.employeeId === employeeId)
-        .filter((row) => (from || to ? (row.month ? inRange(`${row.year}-${String(row.month).padStart(2, '0')}-01`) : row.year.toString() >= (from ? from.slice(0, 4) : '0000')) : true))
-        .sort((a, b) => (a.year === b.year ? (b.month ?? 13) - (a.month ?? 13) : b.year - a.year)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data.evaluations, employeeId, from, to],
-  );
+  /* --------------------------- النسخ الاحتياطي --------------------------- */
 
-  const periodLabel = `${from ? fmtDate(from) : 'البداية'} — ${to ? fmtDate(to) : 'اليوم'}`;
+  const exportBackup = async () => {
+    const payload = await createBackup();
+    downloadFile(backupFileName(), JSON.stringify(payload, null, 2));
+    setCounts(payload.counts);
+    notify('تم تصدير النسخة الاحتياطية (JSON).', 'success');
+  };
 
-  const summary = useMemo(() => {
-    const minuteStates = minutes.map((row) => minuteState(row, settings.deadlineMinutes));
-    const visitStates = visits.map((row) => visitState(row, settings.deadlineMinutes));
-    return {
-      minutes: minutes.length,
-      completedMinutes: minuteStates.filter((row) => !row.isOpen).length,
-      overdueMinutes: minuteStates.filter((row) => row.overdue).length,
-      visits: visits.length,
-      completedVisits: visits.filter((row) => row.status === 'completed').length,
-      reportCycles: visits.reduce((total, row) => total + (row.reviewCycles?.length ?? 0), 0),
-      pendingReviews: visitStates.filter((row) => row.reportAwaitingReview).length,
-      observations: observations.length,
-      openObservations: observations.filter((row) => row.status === 'open').length,
-      evaluations: evaluations.length,
-    };
-  }, [minutes, visits, observations, evaluations, settings.deadlineMinutes]);
+  const pickFile = async (file: File) => {
+    const text = await readTextFile(file);
+    const parsed = safeJsonParse<unknown>(text);
+    if (!parsed.ok) {
+      notify(parsed.error, 'error');
+      return;
+    }
+    setPending({ payload: parsed.value as BackupPayload, validation: validateBackup(parsed.value), name: file.name });
+  };
 
-  if (!data.employees.length) {
-    return (
-      <Card>
-        <EmptyState icon="employees" title="لا يوجد موظفون" description="أضف موظفًا أولًا لتتمكن من توليد تقريره." />
-      </Card>
-    );
-  }
+  const doRestore = async (mode: 'replace' | 'merge') => {
+    if (!pending) return;
+    setRestoring(true);
+    try {
+      await restoreBackup(pending.payload, mode);
+      await refresh();
+      downloadFile(`safety-${backupFileName()}`, JSON.stringify(await createBackup(), null, 2));
+      notify(mode === 'replace' ? 'تم استبدال البيانات، ونُزّلت نسخة أمان.' : 'تم دمج البيانات، ونُزّلت نسخة أمان.', 'success');
+      setPending(null);
+      setCounts(await dataCounts());
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'تعذّرت الاستعادة.', 'error');
+    } finally {
+      setRestoring(false);
+    }
+  };
 
   return (
     <>
       <PageHeader
-        title="تقرير الموظف"
-        description="تقرير عربي جاهز للطباعة أو الحفظ PDF لفترة محددة، يشمل الدقائق والزيارات ودورات المراجعة والملاحظات والتقييمات."
-        actions={
-          <Button variant="primary" icon="print" onClick={() => window.print()} disabled={!employee}>
-            طباعة / حفظ PDF
-          </Button>
-        }
+        title="التقارير والنسخ"
+        description="تصدير CSV لكل وحدة، ونسخ احتياطي كامل بصيغة JSON، والقوائم المرجعية المستخدمة في القوائم المنسدلة."
       />
 
-      <Card className="print-hide" title="نطاق التقرير">
-        <div className="form-grid">
-          <Field label="الموظف" htmlFor="rep-employee">
-            <Select id="rep-employee" value={employeeId} onChange={(e) => setSelectedId(e.target.value)}>
-              {data.employees.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.serial} — {row.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="من تاريخ" htmlFor="rep-from">
-            <Input id="rep-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </Field>
-          <Field label="إلى تاريخ" htmlFor="rep-to">
-            <Input id="rep-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-          </Field>
-          <div className="form-actions">
-            <Button
-              onClick={() => {
-                const year = new Date().getFullYear();
-                setFrom(`${year}-01-01`);
-                setTo(`${year}-12-31`);
-              }}
-            >
-              السنة الحالية
-            </Button>
-            <Button
-              onClick={() => {
-                const now = new Date();
-                setFrom(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`);
-                setTo(toDateInputValue(new Date(now.getFullYear(), now.getMonth() + 1, 0)));
-              }}
-            >
-              الشهر الحالي
-            </Button>
-            <Button
-              onClick={() => {
-                setFrom('');
-                setTo('');
-              }}
-            >
-              كل الفترات
-            </Button>
-          </div>
+      <Card title="تصدير CSV" subtitle={`السنة: ${year} حيث ينطبق`} actions={<Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">{Array.from({ length: 6 }, (_, index) => now.getFullYear() + 1 - index).map((item) => <option key={item} value={item}>{item}</option>)}</Select>}>
+        <div className="rowactions">
+          <Button icon="download" onClick={exportMonthly}>التقييم الشهري</Button>
+          <Button icon="download" onClick={exportAnnual}>التقييم السنوي</Button>
+          <Button icon="download" onClick={exportHistory}>سجل الموظفين</Button>
+          <Button icon="download" onClick={exportVisits}>الزيارات الميدانية</Button>
+          <Button icon="download" onClick={exportMinutes}>دقائق الصرف</Button>
+          <Button icon="download" onClick={exportObservations}>الملاحظات</Button>
+          <Button icon="download" onClick={exportLeaves}>الإجازات والأذونات</Button>
         </div>
       </Card>
 
-      {employee ? (
-        <article className="report-page" dir="rtl">
-          <header className="report-page__head">
-            <div>
-              <h1>{settings.organizationName}</h1>
-              <p>إدارة المخاطر — تقرير أداء ضابط مخاطر</p>
-            </div>
-            <div className="report-page__meta">
-              <span>تاريخ الإصدار: {fmtDate(new Date())}</span>
-              <span>قائد الفريق: {settings.teamLeaderName || '—'}</span>
-            </div>
-          </header>
+      <Card title="النسخ الاحتياطي والاستعادة" subtitle="ملف JSON واحد يحتوي كل السجلات والإعدادات.">
+        <div className="rowactions">
+          <Button variant="primary" icon="download" onClick={exportBackup}>
+            تصدير نسخة كاملة
+          </Button>
+          <Button icon="upload" onClick={() => fileRef.current?.click()}>
+            استيراد نسخة
+          </Button>
+          <Button icon="database" onClick={async () => setCounts(await dataCounts())}>
+            عرض عدد السجلات
+          </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void pickFile(file);
+              e.target.value = '';
+            }}
+          />
+        </div>
 
-          <section className="report-page__section">
-            <h2>بيانات الموظف</h2>
-            <div className="report-page__grid">
-              <div>
-                <span>الاسم</span>
-                <strong>{employee.name}</strong>
-              </div>
-              <div>
-                <span>كود الموظف</span>
-                <strong>{employee.code}</strong>
-              </div>
-              <div>
-                <span>الرقم التسلسلي</span>
-                <strong>{fmtNumber(employee.serial)}</strong>
-              </div>
-              <div>
-                <span>المسمى الوظيفي</span>
-                <strong>{employee.jobTitle}</strong>
-              </div>
-              <div>
-                <span>القطاع</span>
-                <strong>{employee.sector}</strong>
-              </div>
-              <div>
-                <span>المحافظة</span>
-                <strong>{employee.governorate}</strong>
-              </div>
-              <div>
-                <span>تاريخ الالتحاق</span>
-                <strong>{fmtDate(employee.joiningDate)}</strong>
-              </div>
-              <div>
-                <span>فترة التقرير</span>
-                <strong>{periodLabel}</strong>
-              </div>
-            </div>
-          </section>
+        {counts ? (
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <th>الجدول</th>
+                  <th className="num">عدد السجلات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ENTITIES.map((entity) => (
+                  <tr key={entity}>
+                    <td>{ENTITY_LABELS[entity]}</td>
+                    <td className="num">{counts[entity]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableWrap>
+        ) : (
+          <EmptyState title="لم يُعرض العدد بعد" description="اضغط «عرض عدد السجلات»." />
+        )}
+      </Card>
 
-          <section className="report-page__section">
-            <h2>ملخص الفترة</h2>
-            <div className="report-page__stats">
-              <div>
-                <span>دقائق الصرف</span>
-                <strong>{summary.minutes}</strong>
-                <em>مكتملة {summary.completedMinutes} · متأخرة {summary.overdueMinutes}</em>
-              </div>
-              <div>
-                <span>الزيارات</span>
-                <strong>{summary.visits}</strong>
-                <em>مكتملة {summary.completedVisits}</em>
-              </div>
-              <div>
-                <span>دورات مراجعة التقارير</span>
-                <strong>{summary.reportCycles}</strong>
-                <em>بانتظار المراجعة {summary.pendingReviews}</em>
-              </div>
-              <div>
-                <span>الملاحظات</span>
-                <strong>{summary.observations}</strong>
-                <em>مفتوحة {summary.openObservations}</em>
-              </div>
-              <div>
-                <span>التقييمات</span>
-                <strong>{summary.evaluations}</strong>
-              </div>
-            </div>
-          </section>
-
-          <section className="report-page__section">
-            <h2>دقائق الصرف ({countNoun(minutes.length, NOUNS.minute)})</h2>
-            {minutes.length ? (
-              <TableWrap>
-                <Table className="report-table">
-                  <thead>
-                    <tr>
-                      <th>المرجع</th>
-                      <th>الفرع / العميل</th>
-                      <th>الورود</th>
-                      <th>طلب الملف</th>
-                      <th>استلام الملف</th>
-                      <th>بدء المراجعة</th>
-                      <th>الرد النهائي</th>
-                      <th>انتظار الملف</th>
-                      <th>زمن المراجعة</th>
-                      <th>الحالة / التأخير</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {minutes.map((row) => {
-                      const state = minuteState(row, settings.deadlineMinutes);
-                      return (
-                        <tr key={row.id}>
-                          <td className="mono">{row.refNo}</td>
-                          <td>{row.branchRef}</td>
-                          <td>{fmtDateTime(row.receivedAt)}</td>
-                          <td>{fmtDateTime(row.fileRequestedAt)}</td>
-                          <td>{fmtDateTime(row.fileReceivedAt)}</td>
-                          <td>{fmtDateTime(row.reviewStartedAt)}</td>
-                          <td>{fmtDateTime(row.finalResponseAt)}</td>
-                          <td>{fmtDurationShort(state.waitingMinutes)}</td>
-                          <td>{fmtDurationShort(state.reviewMinutes)}</td>
-                          <td>
-                            {row.status === 'completed' ? 'مكتملة' : row.status === 'cancelled' ? 'ملغاة' : 'قيد المتابعة'}
-                            {state.overdue ? ` — تجاوز ${fmtDurationShort(state.overdueBy)}` : ''}
-                            {row.delayReason ? ` — سبب: ${row.delayReason}` : ''}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </Table>
-              </TableWrap>
-            ) : (
-              <p className="report-page__none">لا دقائق مسجلة في هذه الفترة.</p>
-            )}
-          </section>
-
-          <section className="report-page__section">
-            <h2>الزيارات ودورات مراجعة التقارير ({countNoun(visits.length, NOUNS.visit)})</h2>
-            {visits.length ? (
-              visits.map((visit) => {
-                const state = visitState(visit, settings.deadlineMinutes);
-                return (
-                  <div key={visit.id} className="report-visit">
-                    <div className="report-visit__head">
-                      <strong>
-                        {visit.refNo} — {visit.branchRef}
-                      </strong>
-                      <Badge tone={visit.status === 'completed' ? 'success' : 'info'}>{VISIT_STATUS_LABELS[visit.status]}</Badge>
-                    </div>
-                    <div className="report-visit__times">
-                      <span>التحرك: {fmtDateTime(visit.departureAt)}</span>
-                      <span>الوصول: {fmtDateTime(visit.arrivalAt)}</span>
-                      <span>الإتمام: {fmtDateTime(visit.completedAt)}</span>
-                      <span>العودة: {fmtDateTime(visit.returnAt)}</span>
-                      <span>تسليم التقرير: {fmtDateTime(visit.reportSubmittedAt)}</span>
-                      <span>مراجعة التقرير: {fmtDateTime(visit.reportReviewedAt)}</span>
-                      <span>البريد النهائي: {fmtDateTime(visit.finalEmailAt)}</span>
-                      <span>زمن التقرير: {fmtDurationShort(state.reportDelayMinutes)}</span>
-                    </div>
-                    {visit.reviewCycles?.length ? (
-                      <TableWrap>
-                        <Table className="report-table">
-                          <thead>
-                            <tr>
-                              <th>الدورة</th>
-                              <th>وقت المراجعة</th>
-                              <th>الملاحظات</th>
-                              <th>التصحيحات</th>
-                              <th>النتيجة</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {visit.reviewCycles.map((cycle) => (
-                              <tr key={cycle.id}>
-                                <td className="num">{cycle.seq}</td>
-                                <td>{fmtDateTime(cycle.reviewedAt)}</td>
-                                <td className="wrap">{cycle.observations || '—'}</td>
-                                <td className="wrap">{cycle.corrections || '—'}</td>
-                                <td>{REVIEW_OUTCOME_LABELS[cycle.outcome]}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </Table>
-                      </TableWrap>
-                    ) : (
-                      <p className="report-page__none">لا دورات مراجعة مسجلة لهذه الزيارة.</p>
-                    )}
-                    {visit.observations ? <p className="report-page__note">ملاحظات الزيارة: {visit.observations}</p> : null}
-                  </div>
-                );
+      <Card title="القوائم المرجعية" subtitle="سطر واحد لكل قيمة — تُستخدم في القوائم المنسدلة داخل النماذج.">
+        <div className="formgrid">
+          <Field label="اسم الإدارة / الجهة" htmlFor="set-org" className="span2">
+            <Input id="set-org" value={org} onChange={(e) => setOrg(e.target.value)} />
+          </Field>
+          <Field label="القطاعات" htmlFor="set-sectors">
+            <Textarea id="set-sectors" rows={rowsFor(sectors)} value={sectors} onChange={(e) => setSectors(e.target.value)} />
+          </Field>
+          <Field label="المحافظات" htmlFor="set-govs">
+            <Textarea id="set-govs" rows={rowsFor(governorates)} value={governorates} onChange={(e) => setGovernorates(e.target.value)} />
+          </Field>
+          <Field label="الفروع" htmlFor="set-branches">
+            <Textarea id="set-branches" rows={rowsFor(branches)} value={branches} onChange={(e) => setBranches(e.target.value)} />
+          </Field>
+          <Field label="أنواع الإجازات والأذونات" htmlFor="set-leaves">
+            <Textarea id="set-leaves" rows={rowsFor(leaveTypes)} value={leaveTypes} onChange={(e) => setLeaveTypes(e.target.value)} />
+          </Field>
+          <Field label="تصنيفات الملاحظات" htmlFor="set-categories" className="span2">
+            <Textarea id="set-categories" rows={rowsFor(categories)} value={categories} onChange={(e) => setCategories(e.target.value)} />
+          </Field>
+        </div>
+        <div className="rowactions" style={{ marginTop: 10 }}>
+          <Button
+            variant="primary"
+            icon="save"
+            onClick={() =>
+              saveSettings({
+                organizationName: org.trim(),
+                sectors: lines(sectors),
+                governorates: lines(governorates),
+                branches: lines(branches),
+                leaveTypes: lines(leaveTypes),
+                observationCategories: lines(categories),
               })
-            ) : (
-              <p className="report-page__none">لا زيارات مسجلة في هذه الفترة.</p>
-            )}
-          </section>
+            }
+          >
+            حفظ القوائم
+          </Button>
+        </div>
+      </Card>
 
-          <section className="report-page__section">
-            <h2>الملاحظات ({countNoun(observations.length, NOUNS.observation)})</h2>
-            {observations.length ? (
-              <TableWrap>
-                <Table className="report-table">
-                  <thead>
-                    <tr>
-                      <th>التاريخ</th>
-                      <th>النوع</th>
-                      <th>الملاحظة</th>
-                      <th>الحالة</th>
-                      <th>المعالجة</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {observations.map((row) => (
-                      <tr key={row.id}>
-                        <td>{fmtDate(row.date)}</td>
-                        <td>{row.type}</td>
-                        <td className="wrap">{row.text}</td>
-                        <td>{OBSERVATION_STATUS_LABELS[row.status]}</td>
-                        <td className="wrap">{row.resolution || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              </TableWrap>
-            ) : (
-              <p className="report-page__none">لا ملاحظات في هذه الفترة.</p>
-            )}
-          </section>
+      <Card title="عتبات التقدير السنوي" subtitle="كما هي في ملف الإكسل — تُطبَّق على مجموع نقاط الشهور المسجلة.">
+        <TableWrap>
+          <Table>
+            <thead>
+              <tr>
+                <th>من (نقطة)</th>
+                <th>التقدير</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...settings.ratingThresholds]
+                .sort((a, b) => b.min - a.min)
+                .map((threshold) => (
+                  <tr key={threshold.label}>
+                    <td className="num">{threshold.min}</td>
+                    <td>
+                      <Badge tone={threshold.label === 'ممتاز' ? 'success' : threshold.label === 'ضعيف' ? 'danger' : 'info'}>{threshold.label}</Badge>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </Table>
+        </TableWrap>
+      </Card>
 
-          <section className="report-page__section">
-            <h2>التقييمات</h2>
-            {evaluations.length ? (
-              <TableWrap>
-                <Table className="report-table">
-                  <thead>
-                    <tr>
-                      <th>الفترة</th>
-                      <th>النوع</th>
-                      {EVALUATION_CRITERIA.map((criterion, index) => (
-                        <th key={criterion.id} title={criterion.name}>
-                          {index + 1}
-                        </th>
-                      ))}
-                      <th>المجموع</th>
-                      <th>المتوسط</th>
-                      <th>تعليق عام</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {evaluations.map((row) => {
-                      const rowSummary = summarizeScores(row.scores);
-                      return (
-                        <tr key={row.id}>
-                          <td>{monthLabel(row.year, row.month)}</td>
-                          <td>{row.periodType === 'monthly' ? 'شهري' : 'سنوي'}</td>
-                          {EVALUATION_CRITERIA.map((criterion) => (
-                            <td key={criterion.id} className="num">
-                              {row.scores?.[criterion.id] ?? '—'}
-                            </td>
-                          ))}
-                          <td className="num">
-                            {rowSummary.sum} / {rowSummary.count}
-                          </td>
-                          <td className="num">{fmtAvg(rowSummary.average)}</td>
-                          <td className="wrap small">{row.overallComment || '—'}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </Table>
-              </TableWrap>
-            ) : (
-              <p className="report-page__none">لا تقييمات مسجلة.</p>
-            )}
-            <p className="report-page__note">
-              المجموع محسوب من الدرجات المسجلة فقط، والمتوسط = المجموع ÷ عدد المعايير المسجلة. لا تُستخدم أوزان ولا
-              تصنيفات تقديرية. المعايير بالترتيب: {EVALUATION_CRITERIA.map((criterion, index) => `${index + 1}) ${criterion.name}`).join(' — ')}.
-            </p>
-          </section>
-
-          <footer className="report-page__foot">
-            <div>
-              <span>توقيع قائد الفريق</span>
-              <strong>{settings.teamLeaderName || '—'}</strong>
-            </div>
-            <div>
-              <span>توقيع الموظف</span>
-              <strong>{employee.name}</strong>
-            </div>
-            <div className="report-page__stamp">
-              <span>عدد سجلات الفترة</span>
-              <strong>{summary.minutes + summary.visits + summary.observations + summary.evaluations}</strong>
-            </div>
-          </footer>
-        </article>
-      ) : null}
-
-      <div className="print-hide">
-      <Callout tone="info" title="حفظ PDF">
-        اضغط «طباعة / حفظ PDF» ثم اختر «الوجهة: حفظ كملف PDF». التقرير مُهيأ لمقاس A4 مع اتجاه من اليمين لليسار.
+      <Callout tone="warning">
+        البيانات محلية في هذا المتصفح فقط: لا مزامنة بين الأجهزة، وتُفقد عند حذف بيانات المتصفح. صدّر نسخة كاملة دوريًا
+        واحفظها خارج المتصفح. آخر تحديث للإعدادات: {fmtDateTime(settings.updatedAt)} — تاريخ اليوم: {fmtDate(new Date())}.
       </Callout>
-      </div>
+
+      <Modal
+        open={Boolean(pending)}
+        onClose={() => setPending(null)}
+        title="استيراد نسخة احتياطية"
+        subtitle={pending?.name}
+        footer={
+          <>
+            <Button onClick={() => setPending(null)}>إلغاء</Button>
+            <Button variant="danger" disabled={!pending?.validation.ok || restoring} onClick={() => doRestore('replace')}>
+              استبدال البيانات
+            </Button>
+            <Button variant="primary" disabled={!pending?.validation.ok || restoring} onClick={() => doRestore('merge')}>
+              دمج
+            </Button>
+          </>
+        }
+      >
+        {pending ? (
+          <>
+            <p className="small muted">تاريخ التصدير: {fmtDateTime(pending.validation.exportedAt)}</p>
+            {pending.validation.counts ? (
+              <Table>
+                <tbody>
+                  {ENTITIES.map((entity) => (
+                    <tr key={entity}>
+                      <td>{ENTITY_LABELS[entity]}</td>
+                      <td className="num">{pending.validation.counts?.[entity] ?? 0}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            ) : null}
+            {pending.validation.errors.length ? (
+              <Callout tone="danger">
+                <ul>
+                  {pending.validation.errors.map((error) => (
+                    <li key={error}>{error}</li>
+                  ))}
+                </ul>
+              </Callout>
+            ) : (
+              <Callout tone="success">الملف صالح. سيتم تنزيل نسخة أمان من بياناتك الحالية قبل التنفيذ.</Callout>
+            )}
+            {pending.validation.warnings.length ? (
+              <Callout tone="warning">
+                <ul>
+                  {pending.validation.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </Callout>
+            ) : null}
+          </>
+        ) : null}
+      </Modal>
     </>
   );
 }

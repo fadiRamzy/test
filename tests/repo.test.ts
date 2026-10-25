@@ -2,19 +2,21 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { clearStore, useDatabase } from '../src/db/database';
 import {
   ValidationError,
-  addReviewCycle,
   deleteEmployee,
-  deleteMinute,
-  listEvaluations,
+  listFieldVisits,
+  listLeaves,
   listMinutes,
+  listMonthlyEvaluations,
   listObservations,
-  listVisits,
-  nextSerial,
+  nextEmployeeNo,
+  saveAnnualNote,
   saveEmployee,
-  saveEvaluation,
+  saveFieldVisit,
+  saveLeave,
   saveMinute,
+  saveMonthlyBatch,
+  saveMonthlyEvaluation,
   saveObservation,
-  saveVisit,
   setEmployeeArchived,
 } from '../src/db/repo';
 import { STORE_NAMES } from '../src/db/schema';
@@ -26,173 +28,195 @@ beforeEach(async () => {
 
 async function makeEmployee(overrides: Partial<Parameters<typeof saveEmployee>[0]> = {}) {
   return saveEmployee({
-    serial: await nextSerial(),
-    sector: 'قطاع القاهرة',
-    governorate: 'القاهرة',
+    employeeNo: await nextEmployeeNo(),
     name: 'أحمد محمد',
     code: `RO-${Math.random().toString(16).slice(2, 6)}`,
+    sector: 'قطاع القاهرة',
+    governorate: 'القاهرة',
     jobTitle: 'ضابط مخاطر',
-    joiningDate: '2024-03-01T00:00:00.000Z',
-    visitCount: 5,
+    employmentDate: '2024-03-01',
+    branches: 'فرع أ',
+    status: 'active',
     notes: '',
     ...overrides,
   });
 }
 
 describe('الموظفون', () => {
-  it('يحفظ موظفًا ويولّد رقمًا تسلسليًا تصاعديًا', async () => {
+  it('يحفظ موظفًا ويُرجع رقمًا تسلسليًا تصاعديًا', async () => {
     const first = await makeEmployee({ code: 'RO-1' });
-    expect(first.serial).toBe(1);
-    const second = await makeEmployee({ code: 'RO-2' });
-    expect(second.serial).toBe(2);
+    expect(first.employeeNo).toBe(1);
+    expect((await makeEmployee({ code: 'RO-2' })).employeeNo).toBe(2);
   });
 
-  it('يرفض الكود المكرر', async () => {
-    await makeEmployee({ code: 'RO-9' });
+  it('يرفض الكود أو الرقم المكرر', async () => {
+    await makeEmployee({ code: 'RO-9', employeeNo: 9 });
     await expect(makeEmployee({ code: 'RO-9' })).rejects.toBeInstanceOf(ValidationError);
+    await expect(makeEmployee({ code: 'RO-10', employeeNo: 9 })).rejects.toBeInstanceOf(ValidationError);
   });
 
   it('يرفض الحقول المطلوبة الناقصة', async () => {
-    await expect(makeEmployee({ name: '  ', sector: '' })).rejects.toMatchObject({
-      errors: { name: 'اسم الموظف مطلوب', sector: 'القطاع مطلوب' },
+    await expect(makeEmployee({ name: '  ', sector: '', employmentDate: '' })).rejects.toMatchObject({
+      errors: {
+        name: 'اسم الموظف مطلوب',
+        sector: 'القطاع مطلوب',
+        employmentDate: 'تاريخ التعيين مطلوب',
+      },
     });
   });
 
-  it('يمنع الحذف النهائي عند وجود سجلات مرتبطة ويسمح بالأرشفة', async () => {
+  it('يمنع الحذف عند وجود سجلات ويسمح بالأرشفة', async () => {
     const employee = await makeEmployee({ code: 'RO-3' });
-    await saveMinute({
-      employeeId: employee.id,
-      branchRef: 'فرع 1',
-      receivedAt: '2026-10-01T08:00:00.000Z',
-    });
+    await saveMonthlyEvaluation({ employeeId: employee.id, year: 2026, month: 3, visits: 2, scores: { c1: 4 } });
     await expect(deleteEmployee(employee.id)).rejects.toBeInstanceOf(ValidationError);
     await setEmployeeArchived(employee.id, true);
     const { listEmployees } = await import('../src/db/repo');
-    expect((await listEmployees()).length).toBe(0);
-    expect((await listEmployees(true)).length).toBe(1);
+    expect(await listEmployees()).toHaveLength(0);
+    expect(await listEmployees(true)).toHaveLength(1);
+  });
+
+  it('يدعم تعديل بيانات الموظف نفسه دون تغيير رقمه', async () => {
+    const employee = await makeEmployee({ code: 'RO-11' });
+    const updated = await saveEmployee({ ...employee, name: 'اسم محدّث', branches: 'فرع ب' });
+    expect(updated.id).toBe(employee.id);
+    expect(updated.name).toBe('اسم محدّث');
+    expect(updated.branches).toBe('فرع ب');
+    const { listEmployees } = await import('../src/db/repo');
+    expect(await listEmployees()).toHaveLength(1);
+  });
+});
+
+describe('التقييم الشهري', () => {
+  it('يحفظ صفوف الشهر دفعة واحدة ثم يقرأها مرة أخرى', async () => {
+    const first = await makeEmployee({ code: 'RO-20' });
+    const second = await makeEmployee({ code: 'RO-21' });
+
+    await saveMonthlyBatch(2026, 4, [
+      { employeeId: first.id, visits: 5, scores: { c1: 5, c2: 4, c3: 3, c4: 4, c5: 5, c6: 4, c7: 3, c8: 5 }, notes: 'ملاحظة أولى' },
+      { employeeId: second.id, visits: 2, scores: { c1: 3, c2: 3, c3: 3, c4: 3, c5: 3, c6: 3, c7: 3, c8: 3 }, notes: '' },
+    ]);
+
+    const rows = await listMonthlyEvaluations();
+    expect(rows).toHaveLength(2);
+    const saved = rows.find((row) => row.employeeId === first.id);
+    expect(saved?.visits).toBe(5);
+    expect(saved?.notes).toBe('ملاحظة أولى');
+    expect(saved?.scores.c2).toBe(4);
+
+    // الحفظ مرة ثانية يحدّث ولا يكرّر
+    await saveMonthlyBatch(2026, 4, [
+      { employeeId: first.id, visits: 6, scores: { c1: 5, c2: 4, c3: 3, c4: 4, c5: 5, c6: 4, c7: 3, c8: 5 }, notes: 'محدّث' },
+    ]);
+    const updated = await listMonthlyEvaluations();
+    expect(updated).toHaveLength(2);
+    expect(updated.find((row) => row.employeeId === first.id)?.notes).toBe('محدّث');
+  });
+
+  it('يرفض درجة خارج 1–5 أو تكرار نفس الشهر', async () => {
+    const employee = await makeEmployee({ code: 'RO-22' });
+    await expect(
+      saveMonthlyEvaluation({ employeeId: employee.id, year: 2026, month: 5, visits: 1, scores: { c1: 7 } }),
+    ).rejects.toMatchObject({ errors: { c1: expect.any(String) } });
+
+    await saveMonthlyEvaluation({ employeeId: employee.id, year: 2026, month: 5, visits: 1, scores: {} });
+    await expect(
+      saveMonthlyEvaluation({ employeeId: employee.id, year: 2026, month: 5, visits: 2, scores: {} }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('يقبل صفًا بملاحظات فقط ويحفظها', async () => {
+    const employee = await makeEmployee({ code: 'RO-23' });
+    const saved = await saveMonthlyEvaluation({ employeeId: employee.id, year: 2026, month: 6, visits: null, scores: {}, notes: 'ملاحظة طويلة' });
+    expect(saved.notes).toBe('ملاحظة طويلة');
+    expect(saved.visits).toBeNull();
+  });
+});
+
+describe('الزيارات الميدانية', () => {
+  it('يحفظ زيارة بحقول اختيارية فارغة', async () => {
+    const employee = await makeEmployee({ code: 'RO-30' });
+    const visit = await saveFieldVisit({
+      employeeId: employee.id,
+      region: 'القاهرة',
+      branch: 'فرع المعادي',
+      visitDate: '2026-03-04',
+      visitType: 'زيارة ميدانية',
+      status: 'completed',
+      finalAssessment: 'ملتزم',
+      notes: '',
+    });
+    expect(visit.id).toBeTruthy();
+    expect((await listFieldVisits())[0].branch).toBe('فرع المعادي');
+  });
+
+  it('يرفض زيارة بلا فرع أو تاريخ', async () => {
+    const employee = await makeEmployee({ code: 'RO-31' });
+    await expect(
+      saveFieldVisit({ employeeId: employee.id, branch: ' ', visitDate: '', visitType: 'زيارة' }),
+    ).rejects.toMatchObject({ errors: { branch: 'الفرع مطلوب', visitDate: 'تاريخ الزيارة مطلوب' } });
   });
 });
 
 describe('دقائق الصرف', () => {
-  it('يرفض ترتيبًا زمنيًا غير منطقي', async () => {
-    const employee = await makeEmployee({ code: 'RO-4' });
-    await expect(
-      saveMinute({
-        employeeId: employee.id,
-        branchRef: 'فرع 1',
-        receivedAt: '2026-10-01T09:00:00.000Z',
-        fileRequestedAt: '2026-10-01T08:00:00.000Z',
-      }),
-    ).rejects.toMatchObject({ errors: { fileRequestedAt: expect.stringContaining('لا يسبق') } });
-  });
-
-  it('يخزّن سلسلة الأوقات ويحسب المدد لاحقًا', async () => {
-    const employee = await makeEmployee({ code: 'RO-5' });
-    const saved = await saveMinute({
+  it('يحفظ دقيقة بالحد الأدنى من الحقول', async () => {
+    const employee = await makeEmployee({ code: 'RO-40' });
+    const minute = await saveMinute({
       employeeId: employee.id,
-      branchRef: 'فرع 2',
-      receivedAt: '2026-10-01T08:00:00.000Z',
-      fileRequestedAt: '2026-10-01T08:10:00.000Z',
-      fileReceivedAt: '2026-10-01T08:40:00.000Z',
-      reviewStartedAt: '2026-10-01T08:45:00.000Z',
-      finalResponseAt: '2026-10-01T09:20:00.000Z',
-      status: 'completed',
-      delayReason: 'تأخر وصول الملف',
-      observations: 'مطابقة سليمة',
+      date: '2026-03-05',
+      branch: 'فرع أ',
+      minuteReceivedTime: '09:15',
+      status: 'open',
+      result: 'pending',
     });
-    expect(saved.refNo).toMatch(/^M-/);
-    const rows = await listMinutes();
-    expect(rows).toHaveLength(1);
-    expect(rows[0].delayReason).toBe('تأخر وصول الملف');
+    expect(minute.finalResponseTime).toBe('');
+    expect((await listMinutes())).toHaveLength(1);
   });
 
-  it('يفصل الملاحظات عن الدقيقة عند الحذف بدل حذفها', async () => {
-    const employee = await makeEmployee({ code: 'RO-6' });
-    const minute = await saveMinute({ employeeId: employee.id, branchRef: 'فرع 3', receivedAt: '2026-10-01T08:00:00.000Z' });
-    await saveObservation({ employeeId: employee.id, minuteId: minute.id, date: '2026-10-01', type: 'إجراء', text: 'ملاحظة' });
-    await deleteMinute(minute.id);
-    const observations = await listObservations();
-    expect(observations).toHaveLength(1);
-    expect(observations[0].minuteId).toBeNull();
-  });
-});
-
-describe('الزيارات ودورات المراجعة', () => {
-  it('يضيف دورات مراجعة متعددة بترتيب زمني دون فقدان السابقة', async () => {
-    const employee = await makeEmployee({ code: 'RO-7' });
-    const visit = await saveVisit({
-      employeeId: employee.id,
-      branchRef: 'فرع 4',
-      departureAt: '2026-10-01T07:00:00.000Z',
-      arrivalAt: '2026-10-01T08:00:00.000Z',
-      completedAt: '2026-10-01T09:00:00.000Z',
-      returnAt: '2026-10-01T10:00:00.000Z',
-      reportSubmittedAt: '2026-10-01T12:00:00.000Z',
-      status: 'report_pending',
-    });
-
-    await addReviewCycle(visit.id, {
-      reviewedAt: '2026-10-01T13:00:00.000Z',
-      observations: 'نقص مستند',
-      corrections: 'إرفاق كشف الحساب',
-      outcome: 'corrections',
-    });
-    await addReviewCycle(visit.id, {
-      reviewedAt: '2026-10-01T15:00:00.000Z',
-      observations: 'تم التصحيح',
-      corrections: '',
-      outcome: 'accepted',
-    });
-
-    const [stored] = await listVisits();
-    expect(stored.reviewCycles).toHaveLength(2);
-    expect(stored.reviewCycles.map((cycle) => cycle.seq)).toEqual([1, 2]);
-    expect(stored.reviewCycles[0].outcome).toBe('corrections');
-    expect(stored.reviewCycles[1].observations).toBe('تم التصحيح');
-    expect(stored.reportReviewedAt).toBe('2026-10-01T13:00:00.000Z');
-  });
-
-  it('يرفض أوقاتًا غير متسلسلة', async () => {
-    const employee = await makeEmployee({ code: 'RO-8' });
+  it('يرفض وقتًا بصيغة خاطئة', async () => {
+    const employee = await makeEmployee({ code: 'RO-41' });
     await expect(
-      saveVisit({
-        employeeId: employee.id,
-        branchRef: 'فرع 5',
-        departureAt: '2026-10-01T10:00:00.000Z',
-        arrivalAt: '2026-10-01T09:00:00.000Z',
-      }),
+      saveMinute({ employeeId: employee.id, date: '2026-03-05', branch: 'أ', minuteReceivedTime: '9' }),
     ).rejects.toBeInstanceOf(ValidationError);
   });
 });
 
-describe('التقييمات', () => {
-  it('يحفظ 8 درجات ولا يفرض أوزانًا', async () => {
-    const employee = await makeEmployee({ code: 'RO-10' });
-    const evaluation = await saveEvaluation({
+describe('الملاحظات والإجازات', () => {
+  it('يحفظ ملاحظة كاملة ويعدّلها', async () => {
+    const employee = await makeEmployee({ code: 'RO-50' });
+    const observation = await saveObservation({
       employeeId: employee.id,
-      periodType: 'monthly',
-      year: 2026,
-      month: 9,
-      scores: { k1: 4, k2: 3, k3: 5, k4: 4, k5: 5, k6: 4, k7: 3, k8: 5 },
-      comments: { k1: 'دقيق' },
-      overallComment: 'أداء جيد',
+      date: '2026-03-06',
+      source: 'زيارة ميدانية',
+      severity: 'high',
+      details: 'نقص مستندات',
+      status: 'open',
+      recurrence: true,
     });
-    expect(Object.keys(evaluation.scores)).toHaveLength(8);
-    expect((await listEvaluations())).toHaveLength(1);
+    expect(observation.recurrence).toBe(true);
+    expect((await listObservations())[0].details).toBe('نقص مستندات');
   });
 
-  it('يرفض درجة خارج النطاق 1-5', async () => {
-    const employee = await makeEmployee({ code: 'RO-11' });
-    await expect(
-      saveEvaluation({ employeeId: employee.id, periodType: 'monthly', year: 2026, month: 9, scores: { k1: 6 } }),
-    ).rejects.toMatchObject({ errors: { score_k1: expect.any(String) } });
+  it('يفصل الأيام عن الساعات في الإجازات', async () => {
+    const employee = await makeEmployee({ code: 'RO-51' });
+    await saveLeave({ employeeId: employee.id, type: 'إجازة سنوية', startDate: '2026-03-01', endDate: '2026-03-03', unit: 'days', days: 3 });
+    await saveLeave({ employeeId: employee.id, type: 'إذن تأخير', startDate: '2026-03-05', endDate: '2026-03-05', unit: 'hours', hours: 2 });
+    const rows = await listLeaves();
+    expect(rows.find((row) => row.unit === 'days')?.days).toBe(3);
+    expect(rows.find((row) => row.unit === 'hours')?.hours).toBe(2);
   });
 
-  it('يرفض تكرار نفس الموظف ونفس الشهر', async () => {
-    const employee = await makeEmployee({ code: 'RO-12' });
-    await saveEvaluation({ employeeId: employee.id, periodType: 'monthly', year: 2026, month: 8, scores: {} });
+  it('يرفض إجازة بتاريخ نهاية يسبق البداية', async () => {
+    const employee = await makeEmployee({ code: 'RO-52' });
     await expect(
-      saveEvaluation({ employeeId: employee.id, periodType: 'monthly', year: 2026, month: 8, scores: {} }),
+      saveLeave({ employeeId: employee.id, type: 'إجازة', startDate: '2026-03-10', endDate: '2026-03-01', unit: 'days', days: 1 }),
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('يحفظ ملاحظات التقييم السنوي', async () => {
+    const employee = await makeEmployee({ code: 'RO-53' });
+    const note = await saveAnnualNote(employee.id, 2026, 'أداء مستقر');
+    expect(note.notes).toBe('أداء مستقر');
+    const updated = await saveAnnualNote(employee.id, 2026, 'محدّث');
+    expect(updated.id).toBe(note.id);
   });
 });

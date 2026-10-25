@@ -1,165 +1,245 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { App } from '../src/App';
 import { AppProvider } from '../src/state/store';
-import { EmployeesPage } from '../src/pages/Employees';
-import { MinutesPage } from '../src/pages/Minutes';
-import { EvaluationsPage } from '../src/pages/Evaluations';
-import { ReportsPage } from '../src/pages/Reports';
 import { clearStore, useDatabase } from '../src/db/database';
-import { nextSerial, saveEmployee, saveMinute } from '../src/db/repo';
+import { nextEmployeeNo, saveEmployee, saveMonthlyEvaluation, listMonthlyEvaluations } from '../src/db/repo';
 import { STORE_NAMES } from '../src/db/schema';
 
 beforeEach(async () => {
   await useDatabase(`test-ui-${Math.random().toString(36).slice(2)}`);
   for (const store of STORE_NAMES) await clearStore(store);
+  window.location.hash = '#/';
 });
 
-function renderPage(page: React.ReactNode) {
-  return render(<AppProvider>{page}</AppProvider>);
+function renderApp() {
+  return render(
+    <AppProvider>
+      <App />
+    </AppProvider>,
+  );
 }
 
-/** ينتظر تحميل البيانات المحلية (تصبح أزرار الإضافة مفعّلة) */
-async function waitReady(name: RegExp) {
-  await waitFor(() => {
-    const [button] = screen.getAllByRole('button', { name });
-    expect(button).toBeEnabled();
+async function seedEmployee(overrides: Partial<Parameters<typeof saveEmployee>[0]> = {}) {
+  return saveEmployee({
+    employeeNo: await nextEmployeeNo(),
+    name: 'محمد عبد الله',
+    code: 'RO-501',
+    sector: 'قطاع القاهرة',
+    governorate: 'القاهرة',
+    jobTitle: 'ضابط مخاطر',
+    employmentDate: '2024-01-15',
+    branches: 'فرع الزمالك',
+    status: 'active',
+    notes: '',
+    ...overrides,
   });
 }
 
 const byId = (id: string) => document.getElementById(id) as HTMLInputElement;
 
-async function seedEmployee() {
-  return saveEmployee({
-    serial: await nextSerial(),
-    sector: 'قطاع القاهرة',
-    governorate: 'القاهرة',
-    name: 'محمد عبد الله',
-    code: 'RO-501',
-    jobTitle: 'ضابط مخاطر',
-    joiningDate: '2024-01-15T00:00:00.000Z',
-    visitCount: 4,
-    notes: '',
-  });
-}
-
-describe('شاشة الموظفين', () => {
-  it('تضيف موظفًا جديدًا وتظهره في الجدول', async () => {
+describe('إضافة موظف', () => {
+  it('يحفظ موظفًا جديدًا ويظهره في الجدول', async () => {
     const user = userEvent.setup();
-    renderPage(<EmployeesPage />);
-    await waitReady(/إضافة موظف/);
+    window.location.hash = '#/employees';
+    renderApp();
 
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /إضافة موظف/ })[0]).toBeEnabled());
     await user.click(screen.getAllByRole('button', { name: /إضافة موظف/ })[0]);
 
+    await user.click(byId('emp-name'));
     await user.type(byId('emp-name'), 'هدى سامي');
     await user.clear(byId('emp-code'));
     await user.type(byId('emp-code'), 'RO-777');
     await user.type(byId('emp-sector'), 'قطاع الدلتا');
     await user.type(byId('emp-gov'), 'الغربية');
-
     await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    const row = await screen.findByText('هدى سامي');
-    expect(row).toBeInTheDocument();
+    expect(await screen.findByText('هدى سامي')).toBeInTheDocument();
     expect(screen.getByText('RO-777')).toBeInTheDocument();
   });
 
-  it('يمنع حفظ موظف بدون اسم ويعرض رسالة الخطأ', async () => {
+  it('يعرض رسالة خطأ عند ترك الاسم فارغًا', async () => {
     const user = userEvent.setup();
-    renderPage(<EmployeesPage />);
-    await waitReady(/إضافة موظف/);
+    window.location.hash = '#/employees';
+    renderApp();
 
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /إضافة موظف/ })[0]).toBeEnabled());
     await user.click(screen.getAllByRole('button', { name: /إضافة موظف/ })[0]);
+    await user.clear(byId('emp-code'));
     await user.type(byId('emp-code'), 'RO-888');
-    await user.type(byId('emp-sector'), 'قطاع الصعيد');
-    await user.type(byId('emp-gov'), 'أسيوط');
     await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
 
-    expect(await screen.findByText('اسم الموظف مطلوب')).toBeInTheDocument();
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect((await screen.findAllByText('اسم الموظف مطلوب')).length).toBeGreaterThan(0);
   });
 });
 
-describe('شاشة دقائق الصرف', () => {
-  it('تعرض المدد المحسوبة ووسم تجاوز المهلة', async () => {
-    const employee = await seedEmployee();
-    const receivedAt = new Date(Date.now() - 240 * 60000).toISOString();
-    const reviewStartedAt = new Date(Date.now() - 180 * 60000).toISOString();
-    await saveMinute({
-      employeeId: employee.id,
-      branchRef: 'فرع الزمالك',
-      receivedAt,
-      fileRequestedAt: new Date(Date.now() - 230 * 60000).toISOString(),
-      fileReceivedAt: new Date(Date.now() - 200 * 60000).toISOString(),
-      reviewStartedAt,
-      status: 'open',
-    });
-
-    renderPage(<MinutesPage />);
-
-    expect(await screen.findByText('فرع الزمالك')).toBeInTheDocument();
-    expect(await screen.findByText(/تجاوز \+/)).toBeInTheDocument();
-    expect(screen.getByText('بانتظار الرد')).toBeInTheDocument();
-  });
-
-  it('تسجّل دقيقة جديدة عبر النموذج', async () => {
+describe('التقييم الشهري', () => {
+  it('يحسب الإجمالي تلقائيًا (زيارات + درجات) ويحفظ القيم', async () => {
     const employee = await seedEmployee();
     const user = userEvent.setup();
-    renderPage(<MinutesPage />);
-    await waitReady(/تسجيل دقيقة/);
+    window.location.hash = '#/monthly';
+    renderApp();
 
-    await user.click(screen.getAllByRole('button', { name: /تسجيل دقيقة/ })[0]);
-    await user.selectOptions(byId('min-employee'), employee.id);
-    await user.type(byId('min-branch'), 'فرع المعادي');
+    const visits = await screen.findByLabelText(`عدد الزيارات — ${employee.name}`);
+    await user.type(visits, '5');
+
+    const criteria = [5, 4, 3, 4, 5, 4, 3, 5];
+    const scoreSelects = Array.from(document.querySelectorAll('select.cell--score')) as HTMLSelectElement[];
+    expect(scoreSelects).toHaveLength(8);
+    for (const [index, value] of criteria.entries()) {
+      await user.selectOptions(scoreSelects[index], String(value));
+    }
+
+    // 33 درجة + 5 زيارات = 38
+    await waitFor(() => expect(screen.getByText('38')).toBeInTheDocument());
+    expect(screen.getByText('مكتمل')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /حفظ الشهر/ }));
+    await waitFor(async () => {
+      const rows = await listMonthlyEvaluations();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].visits).toBe(5);
+      expect(rows[0].scores.c1).toBe(5);
+    });
+  });
+
+  it('يعيد تحميل القيم المحفوظة عند إعادة فتح الشهر', async () => {
+    const employee = await seedEmployee();
+    await saveMonthlyEvaluation({
+      employeeId: employee.id,
+      year: new Date().getFullYear(),
+      month: new Date().getMonth() + 1,
+      visits: 2,
+      scores: { c1: 3, c2: 3, c3: 3, c4: 3, c5: 3, c6: 3, c7: 3, c8: 3 },
+      notes: 'ملاحظة محفوظة',
+    });
+
+    window.location.hash = '#/monthly';
+    renderApp();
+
+    const visits = await screen.findByLabelText(`عدد الزيارات — ${employee.name}`);
+    expect((visits as HTMLInputElement).value).toBe('2');
+    expect(screen.getByDisplayValue('ملاحظة محفوظة')).toBeInTheDocument();
+    // 24 + 2 = 26
+    expect(screen.getByText('26')).toBeInTheDocument();
+  });
+});
+
+describe('التقييم السنوي', () => {
+  it('يجمع النقاط والزيارات من الشهور المسجلة ويطبق التقدير', async () => {
+    const employee = await seedEmployee();
+    const year = new Date().getFullYear();
+    await saveMonthlyEvaluation({
+      employeeId: employee.id,
+      year,
+      month: 1,
+      visits: 5,
+      scores: { c1: 5, c2: 5, c3: 5, c4: 5, c5: 5, c6: 5, c7: 5, c8: 5 },
+    });
+
+    window.location.hash = '#/annual';
+    renderApp();
+
+    const row = (await screen.findByText(employee.name)).closest('tr') as HTMLTableRowElement;
+    const cells = within(row).getAllByRole('cell');
+    expect(cells[6].textContent).toBe('5'); // الزيارات
+    expect(cells[7].textContent).toBe('45'); // 40 + 5
+    expect(cells[9].textContent).toBe('1'); // أشهر مقيّمة
+  });
+});
+
+describe('سجلات الإدخال اليدوي', () => {
+  it('تضيف زيارة ميدانية وتظهرها في الجدول', async () => {
+    const employee = await seedEmployee();
+    const user = userEvent.setup();
+    window.location.hash = '#/visits';
+    renderApp();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة زيارة/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة زيارة/ }));
+    await user.selectOptions(byId('vis-employee'), employee.id);
+    await user.type(byId('vis-branch'), 'فرع المعادي');
     await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(await screen.findByText('فرع المعادي')).toBeInTheDocument();
   });
-});
 
-describe('شاشة التقييمات', () => {
-  it('تحسب المتوسط من الدرجات المسجلة فقط دون أوزان', async () => {
-    await seedEmployee();
+  it('تضيف دقيقة صرف بأقل الحقول المطلوبة', async () => {
+    const employee = await seedEmployee();
     const user = userEvent.setup();
-    renderPage(<EvaluationsPage />);
-    await waitReady(/تقييم جديد/);
+    window.location.hash = '#/minutes';
+    renderApp();
 
-    await user.click(screen.getAllByRole('button', { name: /تقييم جديد/ })[0]);
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة دقيقة/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة دقيقة/ }));
+    await user.selectOptions(byId('min-employee'), employee.id);
+    await user.type(byId('min-branch'), 'فرع طنطا');
+    await user.type(byId('min-received'), '09:30');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
 
-    const criteria = await screen.findAllByRole('group');
-    expect(criteria).toHaveLength(8);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(await screen.findByText('فرع طنطا')).toBeInTheDocument();
+  });
 
-    const first = within(criteria[0]);
-    await user.click(first.getByRole('button', { name: '4' }));
-    const second = within(criteria[1]);
-    await user.click(second.getByRole('button', { name: '2' }));
+  it('تضيف ملاحظة وإجازة', async () => {
+    const employee = await seedEmployee();
+    const user = userEvent.setup();
 
-    await waitFor(() => {
-      expect(screen.getByText(/المجموع: 6 من 2/)).toBeInTheDocument();
-    });
-    expect(screen.getByText(/المتوسط:\s*3\.00/)).toBeInTheDocument();
+    window.location.hash = '#/observations';
+    const { unmount } = renderApp();
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة ملاحظة/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة ملاحظة/ }));
+    await user.selectOptions(byId('obs-employee'), employee.id);
+    await user.type(byId('obs-details'), 'تأخر في تسليم التقرير');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(await screen.findByText('تأخر في تسليم التقرير')).toBeInTheDocument();
+    unmount();
+
+    window.location.hash = '#/leaves';
+    renderApp();
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة سجل/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة سجل/ }));
+    await user.selectOptions(byId('lev-employee'), employee.id);
+    await user.clear(byId('lev-days'));
+    await user.type(byId('lev-days'), '3');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect((await screen.findAllByText('إجازة سنوية')).length).toBeGreaterThan(0);
   });
 });
 
-describe('تقرير الموظف', () => {
-  it('يعرض بيانات الموظف ودقائقه في صفحة قابلة للطباعة', async () => {
+describe('ملف الموظف ولوحة المتابعة', () => {
+  it('يعرض سجل الموظف الكامل', async () => {
     const employee = await seedEmployee();
-    await saveMinute({
+    await saveMonthlyEvaluation({
       employeeId: employee.id,
-      branchRef: 'فرع المهندسين',
-      receivedAt: '2026-09-01T08:00:00.000Z',
-      reviewStartedAt: '2026-09-01T08:30:00.000Z',
-      finalResponseAt: '2026-09-01T09:00:00.000Z',
-      status: 'completed',
+      year: new Date().getFullYear(),
+      month: 2,
+      visits: 1,
+      scores: { c1: 4 },
+      notes: 'ملاحظة الشهر',
     });
 
-    const { container } = renderPage(<ReportsPage />);
+    window.location.hash = `#/employees/${employee.id}`;
+    renderApp();
 
-    expect((await screen.findAllByText('محمد عبد الله')).length).toBeGreaterThan(0);
-    expect(await screen.findByText('فرع المهندسين')).toBeInTheDocument();
-    expect(container.querySelector('.report-page')).not.toBeNull();
-    expect(screen.getByRole('button', { name: /طباعة/ })).toBeInTheDocument();
+    expect((await screen.findAllByText(employee.name)).length).toBeGreaterThan(0);
+    expect(await screen.findByText('ملاحظة الشهر')).toBeInTheDocument();
+    expect(screen.getByText('التقييمات الشهرية ' + new Date().getFullYear())).toBeInTheDocument();
+  });
+
+  it('تعرض لوحة المتابعة مؤشرات حقيقية وتحيل إلى السجلات', async () => {
+    await seedEmployee();
+    window.location.hash = '#/';
+    renderApp();
+
+    expect(await screen.findByText('موظفون على رأس العمل')).toBeInTheDocument();
+    expect(screen.getByText('موظفون بدون تقييم هذا الشهر')).toBeInTheDocument();
+    expect(screen.getByText('موظفون بدون تقييم شهري')).toBeInTheDocument();
   });
 });

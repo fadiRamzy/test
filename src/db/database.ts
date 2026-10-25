@@ -1,14 +1,7 @@
-import {
-  DB_NAME,
-  DB_VERSION,
-  DEFAULT_SETTINGS,
-  STORE_NAMES,
-  type AppSettings,
-  type StoreName,
-} from './schema';
+import { DB_NAME, DB_VERSION, DEFAULT_SETTINGS, STORE_NAMES, type AppSettings, type StoreName } from './schema';
 
 /**
- * طبقة IndexedDB. لا يوجد خادم ولا مزامنة: كل البيانات محلية في هذا المتصفح فقط.
+ * طبقة IndexedDB. لا خادم ولا مزامنة: كل البيانات محلية في متصفح المستخدم فقط.
  */
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -36,14 +29,6 @@ function req<T>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
-function txDone(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error ?? new Error('فشلت الكتابة في قاعدة البيانات'));
-    tx.onabort = () => reject(tx.error ?? new Error('أُلغيت الكتابة في قاعدة البيانات'));
-  });
-}
-
 export function openDatabase(name = currentName): Promise<IDBDatabase> {
   if (!isIndexedDbAvailable()) {
     return Promise.reject(new StorageUnavailableError('التخزين المحلي (IndexedDB) غير متاح في هذا المتصفح.'));
@@ -64,11 +49,13 @@ export function openDatabase(name = currentName): Promise<IDBDatabase> {
           if (!objectStore.indexNames.contains(index)) objectStore.createIndex(index, index, { unique: false });
         });
       };
-      create('employees', ['code', 'sector', 'governorate', 'serial']);
-      create('minutes', ['employeeId', 'receivedAt', 'status']);
-      create('visits', ['employeeId', 'status']);
-      create('observations', ['employeeId', 'date', 'type', 'status', 'minuteId', 'visitId']);
-      create('evaluations', ['employeeId', 'year']);
+      create('employees', ['code', 'sector', 'governorate', 'employeeNo', 'status']);
+      create('monthlyEvaluations', ['employeeId', 'year']);
+      create('fieldVisits', ['employeeId', 'visitDate', 'status']);
+      create('minutes', ['employeeId', 'date', 'status']);
+      create('observations', ['employeeId', 'date', 'status', 'category']);
+      create('leaves', ['employeeId', 'startDate']);
+      create('annualNotes', ['employeeId', 'year']);
       create('settings');
       create('meta');
     };
@@ -114,7 +101,11 @@ export async function putRecord<T extends { id: string }>(store: StoreName, reco
   const db = await getDb();
   const tx = db.transaction(store, 'readwrite');
   await req(tx.objectStore(store).put(record));
-  await txDone(tx);
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('فشلت الكتابة'));
+    tx.onabort = () => reject(tx.error ?? new Error('أُلغيت الكتابة'));
+  });
   return record;
 }
 
@@ -123,21 +114,31 @@ export async function putMany<T extends { id: string }>(store: StoreName, record
   const db = await getDb();
   const tx = db.transaction(store, 'readwrite');
   records.forEach((record) => tx.objectStore(store).put(record));
-  await txDone(tx);
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('فشلت الكتابة'));
+    tx.onabort = () => reject(tx.error ?? new Error('أُلغيت الكتابة'));
+  });
 }
 
 export async function deleteRecord(store: StoreName, id: string): Promise<void> {
   const db = await getDb();
   const tx = db.transaction(store, 'readwrite');
   await req(tx.objectStore(store).delete(id));
-  await txDone(tx);
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('فشل الحذف'));
+  });
 }
 
 export async function clearStore(store: StoreName): Promise<void> {
   const db = await getDb();
   const tx = db.transaction(store, 'readwrite');
   await req(tx.objectStore(store).clear());
-  await txDone(tx);
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('فشل مسح الجدول'));
+  });
 }
 
 export async function countRecords(store: StoreName): Promise<number> {
@@ -151,14 +152,22 @@ const SETTINGS_ID = 'app-settings';
 
 export function mergeSettings(value?: Partial<AppSettings>): AppSettings {
   const v = value ?? {};
+  const list = (input: unknown, fallback: string[]) => (Array.isArray(input) ? (input as string[]) : fallback);
   return {
     ...DEFAULT_SETTINGS,
     ...v,
-    sectors: Array.isArray(v.sectors) && v.sectors.length ? v.sectors : DEFAULT_SETTINGS.sectors,
-    governorates: Array.isArray(v.governorates) && v.governorates.length ? v.governorates : DEFAULT_SETTINGS.governorates,
-    observationTypes:
-      Array.isArray(v.observationTypes) && v.observationTypes.length ? v.observationTypes : DEFAULT_SETTINGS.observationTypes,
-    deadlineMinutes: Number(v.deadlineMinutes) > 0 ? Number(v.deadlineMinutes) : DEFAULT_SETTINGS.deadlineMinutes,
+    sectors: list(v.sectors, DEFAULT_SETTINGS.sectors),
+    governorates: list(v.governorates, DEFAULT_SETTINGS.governorates),
+    branches: list(v.branches, DEFAULT_SETTINGS.branches),
+    jobTitles: list(v.jobTitles, DEFAULT_SETTINGS.jobTitles),
+    visitTypes: list(v.visitTypes, DEFAULT_SETTINGS.visitTypes),
+    financingTypes: list(v.financingTypes, DEFAULT_SETTINGS.financingTypes),
+    observationCategories: list(v.observationCategories, DEFAULT_SETTINGS.observationCategories),
+    leaveTypes: list(v.leaveTypes, DEFAULT_SETTINGS.leaveTypes),
+    ratingThresholds:
+      Array.isArray(v.ratingThresholds) && v.ratingThresholds.length
+        ? v.ratingThresholds
+        : DEFAULT_SETTINGS.ratingThresholds,
   };
 }
 
@@ -189,12 +198,4 @@ export async function writeMeta<T>(key: string, value: T): Promise<void> {
   await putRecord('meta', { id: key, value });
 }
 
-export async function wipeAllData(): Promise<void> {
-  for (const store of STORE_NAMES) {
-    if (store === 'settings' || store === 'meta') continue;
-    await clearStore(store);
-  }
-  await clearStore('settings');
-  await ensureSettings();
-  await clearStore('meta');
-}
+export { STORE_NAMES };

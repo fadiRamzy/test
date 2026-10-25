@@ -1,10 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useApp } from '../state/store';
-import { useRoute } from '../state/router';
 import {
   Badge,
   Button,
-  Callout,
   Card,
   EmptyState,
   Field,
@@ -16,187 +14,181 @@ import {
   Select,
   Table,
   TableWrap,
-  Tabs,
   Textarea,
+  Toolbar,
 } from '../components/ui';
 import { ValidationError, deleteMinute, saveMinute } from '../db/repo';
-import { MINUTE_STATUS_LABELS, type Minute, type MinuteStatus } from '../db/schema';
 import {
-  fmtDateTime,
-  fmtDurationShort,
-  fromDateTimeInputValue,
-  nowDateTimeInputValue,
-  toDateInputValue,
-  toDateTimeInputValue,
-} from '../lib/format';
-import { MINUTE_FLAG_LABELS, matchMinuteFlag, minuteState, type MinuteFlag } from '../lib/tracking';
+  MINUTE_RESULT_LABELS,
+  MINUTE_STATUS_LABELS,
+  type DisbursementMinute,
+  type MinuteResult,
+  type MinuteStatus,
+} from '../db/schema';
+import { isMinuteOutstanding, minuteDurations } from '../lib/calc';
+import { fmtDate, fmtNumber, todayInputValue, toDateInputValue } from '../lib/format';
+import { downloadCsv, csvFileName } from '../lib/csv';
 
 interface Draft {
   id?: string;
   employeeId: string;
-  branchRef: string;
-  receivedAt: string;
-  fileRequestedAt: string;
-  fileReceivedAt: string;
-  reviewStartedAt: string;
-  finalResponseAt: string;
+  date: string;
+  branch: string;
+  clientRef: string;
+  financingType: string;
+  amount: string;
+  minuteReceivedTime: string;
+  fileRequestTime: string;
+  fileReceivedTime: string;
+  finalResponseTime: string;
+  result: MinuteResult;
   status: MinuteStatus;
-  observations: string;
-  delayReason: string;
+  notes: string;
 }
 
-const FLAGS: MinuteFlag[] = ['all', 'file_not_requested', 'waiting_file', 'review_not_started', 'pending_response', 'overdue', 'completed'];
-
-const emptyDraft = (): Draft => ({
-  employeeId: '',
-  branchRef: '',
-  receivedAt: nowDateTimeInputValue(),
-  fileRequestedAt: '',
-  fileReceivedAt: '',
-  reviewStartedAt: '',
-  finalResponseAt: '',
+const emptyDraft = (employeeId = ''): Draft => ({
+  employeeId,
+  date: todayInputValue(),
+  branch: '',
+  clientRef: '',
+  financingType: '',
+  amount: '',
+  minuteReceivedTime: '',
+  fileRequestTime: '',
+  fileReceivedTime: '',
+  finalResponseTime: '',
+  result: 'pending',
   status: 'open',
-  observations: '',
-  delayReason: '',
+  notes: '',
 });
 
+const YEARS = (() => {
+  const current = new Date().getFullYear();
+  return Array.from({ length: 8 }, (_, index) => current + 1 - index);
+})();
+
 export function MinutesPage() {
-  const route = useRoute();
   const { data, settings, runAction } = useApp();
-  const initialFlag = (route.query.get('flag') as MinuteFlag | null) ?? 'all';
-  const [flag, setFlag] = useState<MinuteFlag>(FLAGS.includes(initialFlag) ? initialFlag : 'all');
-  const [employee, setEmployee] = useState(route.query.get('employee') ?? 'all');
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [employee, setEmployee] = useState('all');
+  const [status, setStatus] = useState('all');
   const [query, setQuery] = useState('');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState<Minute | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<DisbursementMinute | null>(null);
 
-  const employees = data.employees.filter((row) => !row.archived);
-  const nameOf = (id: string | null) => data.employees.find((row) => row.id === id)?.name ?? '—';
-
-  const counts = useMemo(() => {
-    const map = {} as Record<MinuteFlag, number>;
-    for (const item of FLAGS) {
-      map[item] = data.minutes.filter((row) => matchMinuteFlag(minuteState(row, settings.deadlineMinutes), item)).length;
-    }
-    return map;
-  }, [data.minutes, settings.deadlineMinutes]);
+  const nameOf = (id: string) => data.employees.find((row) => row.id === id)?.name ?? '—';
 
   const rows = useMemo(() => {
     const text = query.trim().toLowerCase();
     return data.minutes
-      .filter((row) => matchMinuteFlag(minuteState(row, settings.deadlineMinutes), flag))
+      .filter((row) => row.date.startsWith(String(year)))
       .filter((row) => (employee === 'all' ? true : row.employeeId === employee))
-      .filter((row) => (from ? row.receivedAt.slice(0, 10) >= from : true))
-      .filter((row) => (to ? row.receivedAt.slice(0, 10) <= to : true))
       .filter((row) =>
-        !text ? true : `${row.refNo} ${row.branchRef} ${row.observations} ${row.delayReason}`.toLowerCase().includes(text),
+        status === 'all' ? true : status === 'outstanding' ? isMinuteOutstanding(row) : row.status === status,
       )
-      .sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
-  }, [data.minutes, flag, employee, from, to, query, settings.deadlineMinutes]);
+      .filter((row) => (!text ? true : `${row.branch} ${row.clientRef} ${row.notes} ${nameOf(row.employeeId)}`.toLowerCase().includes(text)))
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.minutes, data.employees, year, employee, status, query]);
 
-  const startNew = () => {
-    setErrors({});
-    setDraft({ ...emptyDraft(), employeeId: employees[0]?.id ?? '' });
-  };
-
-  const startEdit = (minute: Minute) => {
-    setErrors({});
-    setDraft({
-      id: minute.id,
-      employeeId: minute.employeeId ?? '',
-      branchRef: minute.branchRef,
-      receivedAt: toDateTimeInputValue(minute.receivedAt),
-      fileRequestedAt: toDateTimeInputValue(minute.fileRequestedAt),
-      fileReceivedAt: toDateTimeInputValue(minute.fileReceivedAt),
-      reviewStartedAt: toDateTimeInputValue(minute.reviewStartedAt),
-      finalResponseAt: toDateTimeInputValue(minute.finalResponseAt),
-      status: minute.status,
-      observations: minute.observations,
-      delayReason: minute.delayReason,
-    });
-  };
+  const outstanding = data.minutes.filter((row) => row.date.startsWith(String(year)) && isMinuteOutstanding(row)).length;
 
   const submit = async () => {
     if (!draft) return;
-    setSaving(true);
     setErrors({});
     try {
       await runAction(
         () =>
           saveMinute({
             id: draft.id,
-            employeeId: draft.employeeId || null,
-            branchRef: draft.branchRef,
-            receivedAt: fromDateTimeInputValue(draft.receivedAt) ?? '',
-            fileRequestedAt: fromDateTimeInputValue(draft.fileRequestedAt),
-            fileReceivedAt: fromDateTimeInputValue(draft.fileReceivedAt),
-            reviewStartedAt: fromDateTimeInputValue(draft.reviewStartedAt),
-            finalResponseAt: fromDateTimeInputValue(draft.finalResponseAt),
+            employeeId: draft.employeeId,
+            date: draft.date,
+            branch: draft.branch,
+            clientRef: draft.clientRef,
+            financingType: draft.financingType,
+            amount: draft.amount === '' ? null : Number(draft.amount),
+            minuteReceivedTime: draft.minuteReceivedTime,
+            fileRequestTime: draft.fileRequestTime,
+            fileReceivedTime: draft.fileReceivedTime,
+            finalResponseTime: draft.finalResponseTime,
+            result: draft.result,
             status: draft.status,
-            observations: draft.observations,
-            delayReason: draft.delayReason,
+            notes: draft.notes,
           }),
-        draft.id ? 'تم تحديث دقيقة الصرف.' : 'تم تسجيل دقيقة الصرف.',
+        draft.id ? 'تم حفظ تعديلات الدقيقة.' : 'تمت إضافة دقيقة الصرف.',
       );
       setDraft(null);
     } catch (error) {
       if (error instanceof ValidationError) setErrors(error.errors);
-    } finally {
-      setSaving(false);
     }
   };
 
-  const draftPreview = useMemo(() => {
-    if (!draft) return null;
-    return minuteState(
-      {
-        id: 'preview',
-        createdAt: '',
-        updatedAt: '',
-        refNo: '—',
-        employeeId: draft.employeeId || null,
-        branchRef: draft.branchRef,
-        receivedAt: fromDateTimeInputValue(draft.receivedAt) ?? '',
-        fileRequestedAt: fromDateTimeInputValue(draft.fileRequestedAt),
-        fileReceivedAt: fromDateTimeInputValue(draft.fileReceivedAt),
-        reviewStartedAt: fromDateTimeInputValue(draft.reviewStartedAt),
-        finalResponseAt: fromDateTimeInputValue(draft.finalResponseAt),
-        status: draft.status,
-        observations: draft.observations,
-        delayReason: draft.delayReason,
-      },
-      settings.deadlineMinutes,
-    );
-  }, [draft, settings.deadlineMinutes]);
-
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+
+  const exportCsv = () => {
+    downloadCsv(
+      csvFileName(`minutes-${year}`),
+      ['التاريخ', 'الفرع', 'الموظف', 'مرجع العميل', 'نوع التمويل', 'المبلغ', 'وقت الاستلام', 'طلب الملف', 'استلام الملف', 'الرد النهائي', 'المدة (دقيقة)', 'النتيجة', 'الحالة', 'ملاحظات'],
+      rows.map((row) => {
+        const durations = minuteDurations(row);
+        return [
+          row.date,
+          row.branch,
+          nameOf(row.employeeId),
+          row.clientRef,
+          row.financingType,
+          row.amount ?? '',
+          row.minuteReceivedTime,
+          row.fileRequestTime,
+          row.fileReceivedTime,
+          row.finalResponseTime,
+          durations.totalMinutes ?? '',
+          MINUTE_RESULT_LABELS[row.result],
+          MINUTE_STATUS_LABELS[row.status],
+          row.notes,
+        ];
+      }),
+    );
+  };
+
+  const draftDurations = draft ? minuteDurations({ ...emptyDraft(), ...draft, amount: null } as DisbursementMinute) : null;
 
   return (
     <>
       <PageHeader
-        title="دقائق الصرف"
-        description={`مهلة المراجعة ${settings.deadlineMinutes} دقيقة — تُحسب المدد فقط من الأوقات المسجلة يدويًا.`}
+        title="دقائق الصرف اليومية"
+        description="سجل يدوي مبسط: التاريخ والفرع والعميل والأوقات والنتيجة. الحقول الاختيارية يمكن تركها فارغة."
         actions={
-          <Button variant="primary" icon="plus" onClick={startNew} disabled={!employees.length}>
-            تسجيل دقيقة
-          </Button>
+          <>
+            <Button icon="download" onClick={exportCsv}>
+              تصدير CSV
+            </Button>
+            <Button
+              variant="primary"
+              icon="plus"
+              disabled={!data.employees.length}
+              onClick={() => {
+                setErrors({});
+                setDraft(emptyDraft(data.employees.find((row) => !row.archived)?.id ?? ''));
+              }}
+            >
+              إضافة دقيقة
+            </Button>
+          </>
         }
       />
 
-      <Tabs
-        tabs={FLAGS.map((item) => ({ id: item, label: MINUTE_FLAG_LABELS[item], count: counts[item] }))}
-        value={flag}
-        onChange={setFlag}
-      />
-
       <Card padded={false}>
-        <div className="toolbar">
-          <SearchInput value={query} onChange={setQuery} placeholder="بحث بالمرجع أو الفرع أو الملاحظات…" />
-          <Select value={employee} onChange={(e) => setEmployee(e.target.value)} aria-label="تصفية بالموظف">
+        <Toolbar>
+          <Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">
+            {YEARS.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </Select>
+          <Select value={employee} onChange={(e) => setEmployee(e.target.value)} aria-label="الموظف">
             <option value="all">كل الموظفين</option>
             {data.employees.map((row) => (
               <option key={row.id} value={row.id}>
@@ -204,62 +196,88 @@ export function MinutesPage() {
               </option>
             ))}
           </Select>
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="من تاريخ" />
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="إلى تاريخ" />
-          <span className="toolbar__count">{rows.length} دقيقة</span>
-        </div>
+          <Select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="الحالة">
+            <option value="all">كل الحالات</option>
+            <option value="open">قيد الإجراء</option>
+            <option value="closed">منتهية</option>
+            <option value="outstanding">بدون رد نهائي</option>
+          </Select>
+          <SearchInput value={query} onChange={setQuery} placeholder="بحث بالفرع أو العميل…" />
+          <span className="toolbar__spacer">
+            {rows.length} دقيقة · بدون رد نهائي {outstanding}
+          </span>
+        </Toolbar>
 
         {rows.length ? (
           <TableWrap>
             <Table>
               <thead>
                 <tr>
-                  <th>المرجع</th>
-                  <th>الموظف</th>
-                  <th>الفرع / العميل</th>
-                  <th>ورود الدقيقة</th>
+                  <th>التاريخ</th>
+                  <th>الفرع</th>
+                  <th>ضابط المخاطر</th>
+                  <th>مرجع العميل</th>
+                  <th>نوع التمويل</th>
+                  <th className="num">المبلغ</th>
+                  <th>استلام</th>
                   <th>طلب الملف</th>
                   <th>استلام الملف</th>
-                  <th>بدء المراجعة</th>
                   <th>الرد النهائي</th>
-                  <th>انتظار الملف</th>
-                  <th>زمن المراجعة</th>
-                  <th>الإجمالي</th>
+                  <th className="num">المدة</th>
+                  <th>النتيجة</th>
                   <th>الحالة</th>
+                  <th>ملاحظات</th>
                   <th>إجراءات</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row) => {
-                  const state = minuteState(row, settings.deadlineMinutes);
+                  const durations = minuteDurations(row);
                   return (
-                    <tr key={row.id} className={state.overdue ? 'row--danger' : undefined}>
-                      <td className="mono">{row.refNo}</td>
+                    <tr key={row.id}>
+                      <td className="nowrap">{fmtDate(row.date)}</td>
+                      <td>{row.branch}</td>
                       <td>{nameOf(row.employeeId)}</td>
-                      <td>{row.branchRef}</td>
-                      <td>{fmtDateTime(row.receivedAt)}</td>
-                      <td>{fmtDateTime(row.fileRequestedAt)}</td>
-                      <td>{fmtDateTime(row.fileReceivedAt)}</td>
-                      <td>{fmtDateTime(row.reviewStartedAt)}</td>
-                      <td>{fmtDateTime(row.finalResponseAt)}</td>
-                      <td>{fmtDurationShort(state.waitingMinutes)}</td>
-                      <td>{fmtDurationShort(state.reviewMinutes)}</td>
-                      <td>{fmtDurationShort(state.totalMinutes)}</td>
+                      <td>{row.clientRef || '—'}</td>
+                      <td>{row.financingType || '—'}</td>
+                      <td className="num">{row.amount === null ? '—' : fmtNumber(row.amount)}</td>
+                      <td className="mono">{row.minuteReceivedTime || '—'}</td>
+                      <td className="mono">{row.fileRequestTime || '—'}</td>
+                      <td className="mono">{row.fileReceivedTime || '—'}</td>
+                      <td className="mono">{row.finalResponseTime || '—'}</td>
+                      <td className="num">{durations.totalMinutes === null ? '—' : durations.totalMinutes}</td>
+                      <td>{MINUTE_RESULT_LABELS[row.result]}</td>
                       <td>
-                        <div className="stack-sm">
-                          <Badge tone={row.status === 'completed' ? 'success' : row.status === 'cancelled' ? 'neutral' : 'info'}>
-                            {MINUTE_STATUS_LABELS[row.status]}
-                          </Badge>
-                          {state.overdue ? <Badge tone="danger">تجاوز +{fmtDurationShort(state.overdueBy)}</Badge> : null}
-                          {state.fileNotRequested ? <Badge tone="neutral">لم يُطلب الملف</Badge> : null}
-                          {state.waitingForFile ? <Badge tone="warning">بانتظار الملف</Badge> : null}
-                          {state.pendingFinalResponse ? <Badge tone="warning">بانتظار الرد</Badge> : null}
-                        </div>
-                        {row.delayReason ? <div className="small muted wrap">سبب التأخير: {row.delayReason}</div> : null}
+                        <Badge tone={row.status === 'closed' ? 'success' : 'warning'}>{MINUTE_STATUS_LABELS[row.status]}</Badge>
                       </td>
-                      <td className="cell-actions">
-                        <IconButton icon="edit" label="تعديل" onClick={() => startEdit(row)} />
-                        <IconButton icon="trash" label="حذف" variant="danger" onClick={() => setConfirmDelete(row)} />
+                      <td className="wrap small">{row.notes || '—'}</td>
+                      <td>
+                        <div className="table__actions">
+                          <IconButton
+                            icon="edit"
+                            label="تعديل"
+                            onClick={() => {
+                              setErrors({});
+                              setDraft({
+                                id: row.id,
+                                employeeId: row.employeeId,
+                                date: toDateInputValue(row.date),
+                                branch: row.branch,
+                                clientRef: row.clientRef,
+                                financingType: row.financingType,
+                                amount: row.amount === null ? '' : String(row.amount),
+                                minuteReceivedTime: row.minuteReceivedTime,
+                                fileRequestTime: row.fileRequestTime,
+                                fileReceivedTime: row.fileReceivedTime,
+                                finalResponseTime: row.finalResponseTime,
+                                result: row.result,
+                                status: row.status,
+                                notes: row.notes,
+                              });
+                            }}
+                          />
+                          <IconButton icon="trash" tone="danger" label="حذف" onClick={() => setConfirmDelete(row)} />
+                        </div>
                       </td>
                     </tr>
                   );
@@ -268,90 +286,99 @@ export function MinutesPage() {
             </Table>
           </TableWrap>
         ) : (
-          <EmptyState
-            icon="minutes"
-            title="لا دقائق مطابقة"
-            description={data.minutes.length ? 'جرّب تغيير التصفية أو البحث.' : 'ابدأ بتسجيل أول دقيقة صرف.'}
-            action={
-              <Button variant="primary" icon="plus" onClick={startNew} disabled={!employees.length}>
-                تسجيل دقيقة
-              </Button>
-            }
-          />
+          <EmptyState title="لا دقائق مسجلة في هذه السنة" description="أضف أول دقيقة صرف من الزر أعلى الصفحة." />
         )}
       </Card>
 
       <Modal
         open={Boolean(draft)}
         onClose={() => setDraft(null)}
-        title={draft?.id ? 'تعديل دقيقة صرف' : 'تسجيل دقيقة صرف'}
-        subtitle="سجّل الأوقات كما حدثت فعلًا — تُحسب المدد والمهل تلقائيًا من هذه الأوقات فقط."
+        title={draft?.id ? 'تعديل دقيقة صرف' : 'إضافة دقيقة صرف'}
         size="lg"
         footer={
           <>
             <Button onClick={() => setDraft(null)}>إلغاء</Button>
-            <Button variant="primary" icon="save" loading={saving} onClick={submit}>
+            <Button variant="primary" icon="save" onClick={submit}>
               حفظ
             </Button>
           </>
         }
       >
         {draft ? (
-          <div className="form-grid">
-            <Field label="الموظف المسؤول" required error={errors.employeeId} htmlFor="min-employee">
+          <div className="formgrid">
+            <Field label="التاريخ" required error={errors.date} htmlFor="min-date">
+              <Input id="min-date" type="date" value={draft.date} onChange={(e) => set('date', e.target.value)} />
+            </Field>
+            <Field label="الفرع" required error={errors.branch} htmlFor="min-branch">
+              <Input id="min-branch" list="branches-list" value={draft.branch} onChange={(e) => set('branch', e.target.value)} />
+              <datalist id="branches-list">
+                {settings.branches.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
+            </Field>
+            <Field label="ضابط المخاطر المسؤول" required error={errors.employeeId} htmlFor="min-employee">
               <Select id="min-employee" value={draft.employeeId} onChange={(e) => set('employeeId', e.target.value)}>
                 <option value="">— اختر —</option>
-                {employees.map((row) => (
+                {data.employees.filter((row) => !row.archived).map((row) => (
                   <option key={row.id} value={row.id}>
-                    {row.serial} — {row.name}
+                    {row.employeeNo} — {row.name}
                   </option>
                 ))}
               </Select>
             </Field>
-            <Field label="الفرع / مرجع العميل" required error={errors.branchRef} htmlFor="min-branch">
-              <Input id="min-branch" value={draft.branchRef} onChange={(e) => set('branchRef', e.target.value)} />
+            <Field label="مرجع العميل / الحالة" htmlFor="min-client">
+              <Input id="min-client" value={draft.clientRef} onChange={(e) => set('clientRef', e.target.value)} />
             </Field>
-            <Field label="وقت ورود الدقيقة" required error={errors.receivedAt} htmlFor="min-received">
-              <Input id="min-received" type="datetime-local" value={draft.receivedAt} onChange={(e) => set('receivedAt', e.target.value)} />
+            <Field label="نوع التمويل" htmlFor="min-type">
+              <Input id="min-type" list="financing-types" value={draft.financingType} onChange={(e) => set('financingType', e.target.value)} />
+              <datalist id="financing-types">
+                {settings.financingTypes.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
             </Field>
-            <Field label="وقت طلب الملف" error={errors.fileRequestedAt} htmlFor="min-freq">
-              <Input id="min-freq" type="datetime-local" value={draft.fileRequestedAt} onChange={(e) => set('fileRequestedAt', e.target.value)} />
+            <Field label="المبلغ" error={errors.amount} htmlFor="min-amount">
+              <Input id="min-amount" type="number" min={0} step="0.01" value={draft.amount} onChange={(e) => set('amount', e.target.value)} />
             </Field>
-            <Field label="وقت استلام الملف" error={errors.fileReceivedAt} htmlFor="min-frec">
-              <Input id="min-frec" type="datetime-local" value={draft.fileReceivedAt} onChange={(e) => set('fileReceivedAt', e.target.value)} />
+            <Field label="وقت استلام الدقيقة" required error={errors.minuteReceivedTime} htmlFor="min-received">
+              <Input id="min-received" type="time" value={draft.minuteReceivedTime} onChange={(e) => set('minuteReceivedTime', e.target.value)} />
             </Field>
-            <Field label="وقت بدء المراجعة" error={errors.reviewStartedAt} htmlFor="min-review">
-              <Input id="min-review" type="datetime-local" value={draft.reviewStartedAt} onChange={(e) => set('reviewStartedAt', e.target.value)} />
+            <Field label="وقت طلب الملف" htmlFor="min-freq">
+              <Input id="min-freq" type="time" value={draft.fileRequestTime} onChange={(e) => set('fileRequestTime', e.target.value)} />
             </Field>
-            <Field label="وقت الرد النهائي" error={errors.finalResponseAt} htmlFor="min-final">
-              <Input id="min-final" type="datetime-local" value={draft.finalResponseAt} onChange={(e) => set('finalResponseAt', e.target.value)} />
+            <Field label="وقت استلام الملف" htmlFor="min-frec">
+              <Input id="min-frec" type="time" value={draft.fileReceivedTime} onChange={(e) => set('fileReceivedTime', e.target.value)} />
             </Field>
-            <Field label="حالة الدقيقة" htmlFor="min-status">
-              <Select id="min-status" value={draft.status} onChange={(e) => set('status', e.target.value as MinuteStatus)}>
-                <option value="open">قيد المتابعة</option>
-                <option value="completed">مكتملة</option>
-                <option value="cancelled">ملغاة</option>
+            <Field label="وقت الرد النهائي" htmlFor="min-final">
+              <Input id="min-final" type="time" value={draft.finalResponseTime} onChange={(e) => set('finalResponseTime', e.target.value)} />
+            </Field>
+            <Field label="النتيجة" htmlFor="min-result">
+              <Select id="min-result" value={draft.result} onChange={(e) => set('result', e.target.value as MinuteResult)}>
+                {Object.entries(MINUTE_RESULT_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
               </Select>
             </Field>
-            <Field label="سبب التأخير (إن وُجد)" htmlFor="min-delay" className="span-2">
-              <Input id="min-delay" value={draft.delayReason} onChange={(e) => set('delayReason', e.target.value)} />
+            <Field label="الحالة" htmlFor="min-status">
+              <Select id="min-status" value={draft.status} onChange={(e) => set('status', e.target.value as MinuteStatus)}>
+                {Object.entries(MINUTE_STATUS_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
             </Field>
-            <Field label="ملاحظات" htmlFor="min-obs" className="span-2">
-              <Textarea id="min-obs" rows={2} value={draft.observations} onChange={(e) => set('observations', e.target.value)} />
+            <Field label="ملاحظات" htmlFor="min-notes" className="span2">
+              <Textarea id="min-notes" rows={2} value={draft.notes} onChange={(e) => set('notes', e.target.value)} />
             </Field>
-            {draftPreview ? (
-              <div className="span-2">
-                <Callout tone={draftPreview.overdue ? 'danger' : 'info'} title="المدد المحسوبة">
-                  انتظار الملف: {fmtDurationShort(draftPreview.waitingMinutes)} · زمن المراجعة:{' '}
-                  {fmtDurationShort(draftPreview.reviewMinutes)} · الإجمالي من الورود:{' '}
-                  {fmtDurationShort(draftPreview.totalMinutes)}
-                  {draftPreview.overdue
-                    ? ` — تجاوز المهلة بمقدار ${fmtDurationShort(draftPreview.overdueBy)}`
-                    : draftPreview.isOpen
-                      ? ' — داخل المهلة حتى الآن'
-                      : ''}
-                </Callout>
-              </div>
+            {draftDurations && draftDurations.totalMinutes !== null ? (
+              <p className="small muted span2">
+                المدة من الاستلام إلى الرد النهائي: {draftDurations.totalMinutes} دقيقة
+                {draftDurations.fileWaitMinutes !== null ? ` · انتظار الملف: ${draftDurations.fileWaitMinutes} دقيقة` : ''}
+              </p>
             ) : null}
           </div>
         ) : null}
@@ -379,9 +406,8 @@ export function MinutesPage() {
           </>
         }
       >
-        <p className="confirm-text">
-          سيتم حذف الدقيقة «{confirmDelete?.refNo}» المسجلة بتاريخ {confirmDelete ? toDateInputValue(confirmDelete.receivedAt) : ''}.
-          الملاحظات المرتبطة بها ستبقى في سجل الموظف دون ارتباط.
+        <p className="small">
+          سيتم حذف دقيقة {confirmDelete ? `${fmtDate(confirmDelete.date)} — ${confirmDelete.branch}` : ''} نهائيًا.
         </p>
       </Modal>
     </>

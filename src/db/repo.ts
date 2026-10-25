@@ -2,20 +2,22 @@ import { deleteRecord, getAll, getById, putRecord } from './database';
 import { nowIso, uid } from '../lib/utils';
 import {
   EVALUATION_CRITERIA,
-  RATING_MAX,
-  RATING_MIN,
+  SCORE_MAX,
+  SCORE_MIN,
+  type AnnualNote,
+  type DisbursementMinute,
   type Employee,
-  type Evaluation,
-  type Minute,
+  type FieldVisit,
+  type Leave,
+  type MonthlyEvaluation,
   type Observation,
-  type ReviewCycle,
-  type Visit,
 } from './schema';
+import { isScoreValid } from '../lib/calc';
 
 export class ValidationError extends Error {
   errors: Record<string, string>;
   constructor(errors: Record<string, string>) {
-    super('بيانات غير صحيحة');
+    super(Object.values(errors)[0] ?? 'بيانات غير صحيحة');
     this.name = 'ValidationError';
     this.errors = errors;
   }
@@ -25,8 +27,8 @@ function fail(errors: Record<string, string>): never {
   throw new ValidationError(errors);
 }
 
-const isIso = (value: unknown) => typeof value === 'string' && value !== '' && !Number.isNaN(new Date(value).getTime());
-const trim = (value: string | undefined | null) => (value ?? '').trim();
+const trim = (value: string | null | undefined) => (value ?? '').trim();
+const isDate = (value?: string | null) => Boolean(value) && !Number.isNaN(new Date(value as string).getTime());
 
 /* ------------------------------- الموظفون ------------------------------- */
 
@@ -34,34 +36,28 @@ export async function listEmployees(includeArchived = false): Promise<Employee[]
   const rows = await getAll<Employee>('employees');
   return rows
     .filter((row) => (includeArchived ? true : !row.archived))
-    .sort((a, b) => a.serial - b.serial);
+    .sort((a, b) => a.employeeNo - b.employeeNo || a.name.localeCompare(b.name, 'ar'));
 }
 
-export async function nextSerial(): Promise<number> {
+export async function nextEmployeeNo(): Promise<number> {
   const rows = await getAll<Employee>('employees');
-  return rows.reduce((max, row) => Math.max(max, Number(row.serial) || 0), 0) + 1;
+  return rows.reduce((max, row) => Math.max(max, Number(row.employeeNo) || 0), 0) + 1;
 }
 
 export function validateEmployee(input: Partial<Employee>, existing: Employee[]): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!trim(input.name)) errors.name = 'اسم الموظف مطلوب';
   if (!trim(input.code)) errors.code = 'كود الموظف مطلوب';
-  else if (
-    existing.some((row) => row.id !== input.id && trim(row.code).toLowerCase() === trim(input.code).toLowerCase())
-  ) {
+  else if (existing.some((row) => row.id !== input.id && trim(row.code).toLowerCase() === trim(input.code).toLowerCase()))
     errors.code = 'كود الموظف مستخدم بالفعل';
-  }
-  if (!trim(input.jobTitle)) errors.jobTitle = 'المسمى الوظيفي مطلوب';
   if (!trim(input.sector)) errors.sector = 'القطاع مطلوب';
   if (!trim(input.governorate)) errors.governorate = 'المحافظة مطلوبة';
-  if (!input.joiningDate) errors.joiningDate = 'تاريخ الالتحاق مطلوب';
-  else if (Number.isNaN(new Date(input.joiningDate).getTime())) errors.joiningDate = 'تاريخ الالتحاق غير صحيح';
-  if (input.serial === undefined || input.serial === null || Number(input.serial) < 1) errors.serial = 'الرقم التسلسلي مطلوب';
-  else if (existing.some((row) => row.id !== input.id && Number(row.serial) === Number(input.serial)))
-    errors.serial = 'الرقم التسلسلي مستخدم بالفعل';
-  if (input.visitCount !== null && input.visitCount !== undefined) {
-    if (!Number.isFinite(Number(input.visitCount)) || Number(input.visitCount) < 0) errors.visitCount = 'عدد الزيارات يجب أن يكون صفرًا أو أكثر';
-  }
+  if (!trim(input.jobTitle)) errors.jobTitle = 'المسمى الوظيفي مطلوب';
+  if (!isDate(input.employmentDate)) errors.employmentDate = 'تاريخ التعيين مطلوب';
+  if (input.employeeNo === undefined || input.employeeNo === null || Number(input.employeeNo) < 1)
+    errors.employeeNo = 'رقم الموظف مطلوب';
+  else if (existing.some((row) => row.id !== input.id && Number(row.employeeNo) === Number(input.employeeNo)))
+    errors.employeeNo = 'رقم الموظف مستخدم بالفعل';
   return errors;
 }
 
@@ -75,38 +71,20 @@ export async function saveEmployee(input: Partial<Employee>): Promise<Employee> 
     id: input.id ?? uid('emp'),
     createdAt: current?.createdAt ?? nowIso(),
     updatedAt: nowIso(),
-    serial: Number(input.serial ?? existing.length + 1),
-    sector: trim(input.sector),
-    governorate: trim(input.governorate),
+    employeeNo: Number(input.employeeNo),
     name: trim(input.name),
     code: trim(input.code),
+    sector: trim(input.sector),
+    governorate: trim(input.governorate),
     jobTitle: trim(input.jobTitle),
-    joiningDate: input.joiningDate ?? '',
-    visitCount: input.visitCount === null || input.visitCount === undefined ? null : Number(input.visitCount),
-    notes: input.notes ?? '',
+    employmentDate: input.employmentDate ?? '',
+    branches: input.branches ?? '',
+    status: input.status ?? 'active',
     archived: input.archived ?? current?.archived ?? false,
+    notes: input.notes ?? '',
   };
   await putRecord('employees', record);
   return record;
-}
-
-/** حذف نهائي مسموح فقط عند عدم وجود سجلات مرتبطة */
-export async function deleteEmployee(id: string): Promise<void> {
-  const [minutes, visits, observations, evaluations] = await Promise.all([
-    getAll<Minute>('minutes'),
-    getAll<Visit>('visits'),
-    getAll<Observation>('observations'),
-    getAll<Evaluation>('evaluations'),
-  ]);
-  const linked =
-    minutes.filter((row) => row.employeeId === id).length +
-    visits.filter((row) => row.employeeId === id).length +
-    observations.filter((row) => row.employeeId === id).length +
-    evaluations.filter((row) => row.employeeId === id).length;
-  if (linked > 0) {
-    fail({ form: `لا يمكن الحذف النهائي: يوجد ${linked} سجلًا مرتبطًا. استخدم الأرشفة بدلًا من ذلك.` });
-  }
-  await deleteRecord('employees', id);
 }
 
 export async function setEmployeeArchived(id: string, archived: boolean): Promise<void> {
@@ -115,193 +93,232 @@ export async function setEmployeeArchived(id: string, archived: boolean): Promis
   await putRecord('employees', { ...employee, archived, updatedAt: nowIso() });
 }
 
-/* ----------------------------- دقائق الصرف ----------------------------- */
+/** حذف نهائي — يُسمح فقط إذا لم يكن للموظف أي سجلات */
+export async function deleteEmployee(id: string): Promise<void> {
+  const [evaluations, visits, minutes, observations, leaves] = await Promise.all([
+    getAll<MonthlyEvaluation>('monthlyEvaluations'),
+    getAll<FieldVisit>('fieldVisits'),
+    getAll<DisbursementMinute>('minutes'),
+    getAll<Observation>('observations'),
+    getAll<Leave>('leaves'),
+  ]);
+  const linked =
+    evaluations.filter((row) => row.employeeId === id).length +
+    visits.filter((row) => row.employeeId === id).length +
+    minutes.filter((row) => row.employeeId === id).length +
+    observations.filter((row) => row.employeeId === id).length +
+    leaves.filter((row) => row.employeeId === id).length;
 
-export async function listMinutes(): Promise<Minute[]> {
-  const rows = await getAll<Minute>('minutes');
-  return rows.sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
+  if (linked > 0) {
+    fail({ form: `لا يمكن الحذف: للموظف ${linked} سجلًا مرتبطًا. استخدم «أرشفة» بدلًا من الحذف.` });
+  }
+  await deleteRecord('employees', id);
 }
 
-export function validateMinute(input: Partial<Minute>): Record<string, string> {
-  const errors: Record<string, string> = {};
-  if (!input.employeeId) errors.employeeId = 'الموظف المسؤول مطلوب';
-  if (!trim(input.branchRef)) errors.branchRef = 'الفرع / مرجع العميل مطلوب';
-  if (!isIso(input.receivedAt)) errors.receivedAt = 'وقت ورود الدقيقة مطلوب';
+/* --------------------------- التقييم الشهري ---------------------------- */
 
-  const chain: Array<[keyof Minute, string]> = [
-    ['receivedAt', 'ورود الدقيقة'],
-    ['fileRequestedAt', 'طلب الملف'],
-    ['fileReceivedAt', 'استلام الملف'],
-    ['reviewStartedAt', 'بدء المراجعة'],
-    ['finalResponseAt', 'الرد النهائي'],
-  ];
-  let previous: { label: string; at: number } | null = null;
-  for (const [field, label] of chain) {
-    const value = input[field] as string | null | undefined;
-    if (!value) continue;
-    if (!isIso(value)) {
-      errors[field] = `وقت ${label} غير صحيح`;
-      continue;
-    }
-    const at = new Date(value).getTime();
-    if (previous && at < previous.at) errors[field] = `وقت ${label} لا يسبق وقت ${previous.label}`;
-    previous = { label, at };
+export async function listMonthlyEvaluations(): Promise<MonthlyEvaluation[]> {
+  return getAll<MonthlyEvaluation>('monthlyEvaluations');
+}
+
+export function validateMonthly(input: Partial<MonthlyEvaluation>, others: MonthlyEvaluation[]): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!input.employeeId) errors.employeeId = 'الموظف مطلوب';
+  if (!input.year || input.year < 2000 || input.year > 2100) errors.year = 'السنة غير صحيحة';
+  if (!input.month || input.month < 1 || input.month > 12) errors.month = 'الشهر غير صحيح';
+  for (const criterion of EVALUATION_CRITERIA) {
+    const value = input.scores?.[criterion.id];
+    if (value === null || value === undefined) continue;
+    if (!isScoreValid(value)) errors[criterion.id] = `درجة «${criterion.name}» يجب أن تكون من ${SCORE_MIN} إلى ${SCORE_MAX}`;
   }
+  if (input.visits !== null && input.visits !== undefined) {
+    if (!Number.isFinite(Number(input.visits)) || Number(input.visits) < 0) errors.visits = 'عدد الزيارات يجب أن يكون صفرًا أو أكثر';
+  }
+  const duplicate = others.find(
+    (row) =>
+      row.id !== input.id && row.employeeId === input.employeeId && row.year === input.year && row.month === input.month,
+  );
+  if (duplicate) errors.period = 'يوجد تقييم مسجل لنفس الموظف في نفس الشهر — عدّل السجل الموجود.';
   return errors;
 }
 
-export async function saveMinute(input: Partial<Minute>): Promise<Minute> {
+/** إنشاء أو تحديث تقييم شهر واحد لموظف */
+export async function saveMonthlyEvaluation(input: Partial<MonthlyEvaluation>): Promise<MonthlyEvaluation> {
+  const others = await getAll<MonthlyEvaluation>('monthlyEvaluations');
+  const errors = validateMonthly(input, others);
+  if (Object.keys(errors).length) fail(errors);
+  const current = input.id ? others.find((row) => row.id === input.id) : undefined;
+  const record: MonthlyEvaluation = {
+    id: input.id ?? uid('mev'),
+    createdAt: current?.createdAt ?? nowIso(),
+    updatedAt: nowIso(),
+    employeeId: input.employeeId as string,
+    year: Number(input.year),
+    month: Number(input.month),
+    visits: input.visits === null || input.visits === undefined ? null : Number(input.visits),
+    scores: input.scores ?? {},
+    notes: input.notes ?? '',
+  };
+  await putRecord('monthlyEvaluations', record);
+  return record;
+}
+
+/** حفظ جماعي لصفوف جدول الشهر (إنشاء/تحديث لكل موظف) */
+export async function saveMonthlyBatch(
+  year: number,
+  month: number,
+  rows: Array<{ employeeId: string; visits: number | null; scores: MonthlyEvaluation['scores']; notes: string }>,
+): Promise<number> {
+  const existing = await getAll<MonthlyEvaluation>('monthlyEvaluations');
+  const byEmployee = new Map(
+    existing.filter((row) => row.year === year && row.month === month).map((row) => [row.employeeId, row]),
+  );
+  const records: MonthlyEvaluation[] = [];
+
+  for (const row of rows) {
+    const current = byEmployee.get(row.employeeId);
+    records.push({
+      id: current?.id ?? uid('mev'),
+      createdAt: current?.createdAt ?? nowIso(),
+      updatedAt: nowIso(),
+      employeeId: row.employeeId,
+      year,
+      month,
+      visits: row.visits,
+      scores: row.scores,
+      notes: row.notes,
+    });
+  }
+
+  const { putMany } = await import('./database');
+  await putMany('monthlyEvaluations', records);
+  return records.length;
+}
+
+export async function deleteMonthlyEvaluation(id: string): Promise<void> {
+  await deleteRecord('monthlyEvaluations', id);
+}
+
+/* --------------------------- ملاحظات سنوية ----------------------------- */
+
+export async function listAnnualNotes(): Promise<AnnualNote[]> {
+  return getAll<AnnualNote>('annualNotes');
+}
+
+export async function saveAnnualNote(employeeId: string, year: number, notes: string): Promise<AnnualNote> {
+  const rows = await getAll<AnnualNote>('annualNotes');
+  const current = rows.find((row) => row.employeeId === employeeId && row.year === year);
+  const record: AnnualNote = {
+    id: current?.id ?? uid('anl'),
+    createdAt: current?.createdAt ?? nowIso(),
+    updatedAt: nowIso(),
+    employeeId,
+    year,
+    notes,
+  };
+  await putRecord('annualNotes', record);
+  return record;
+}
+
+/* --------------------------- الزيارات الميدانية ------------------------- */
+
+export async function listFieldVisits(): Promise<FieldVisit[]> {
+  const rows = await getAll<FieldVisit>('fieldVisits');
+  return rows.sort((a, b) => (a.visitDate < b.visitDate ? 1 : -1));
+}
+
+export function validateVisit(input: Partial<FieldVisit>): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!input.employeeId) errors.employeeId = 'الموظف مطلوب';
+  if (!trim(input.branch)) errors.branch = 'الفرع مطلوب';
+  if (!isDate(input.visitDate)) errors.visitDate = 'تاريخ الزيارة مطلوب';
+  if (!trim(input.visitType)) errors.visitType = 'نوع الزيارة مطلوب';
+  return errors;
+}
+
+export async function saveFieldVisit(input: Partial<FieldVisit>): Promise<FieldVisit> {
+  const errors = validateVisit(input);
+  if (Object.keys(errors).length) fail(errors);
+  const current = input.id ? await getById<FieldVisit>('fieldVisits', input.id) : undefined;
+  const record: FieldVisit = {
+    id: input.id ?? uid('vis'),
+    createdAt: current?.createdAt ?? nowIso(),
+    updatedAt: nowIso(),
+    employeeId: input.employeeId as string,
+    region: input.region ?? '',
+    branch: trim(input.branch),
+    visitDate: input.visitDate as string,
+    visitType: trim(input.visitType),
+    reference: input.reference ?? '',
+    status: input.status ?? 'completed',
+    reportSubmittedAt: input.reportSubmittedAt || null,
+    reportReviewedAt: input.reportReviewedAt || null,
+    revisions: input.revisions === null || input.revisions === undefined ? null : Number(input.revisions),
+    finalAssessment: input.finalAssessment ?? '',
+    notes: input.notes ?? '',
+  };
+  await putRecord('fieldVisits', record);
+  return record;
+}
+
+export async function deleteFieldVisit(id: string): Promise<void> {
+  await deleteRecord('fieldVisits', id);
+}
+
+/* --------------------------- دقائق الصرف ------------------------------- */
+
+export async function listMinutes(): Promise<DisbursementMinute[]> {
+  const rows = await getAll<DisbursementMinute>('minutes');
+  return rows.sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
+export function validateMinute(input: Partial<DisbursementMinute>): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!input.employeeId) errors.employeeId = 'ضابط المخاطر المسؤول مطلوب';
+  if (!isDate(input.date)) errors.date = 'التاريخ مطلوب';
+  if (!trim(input.branch)) errors.branch = 'الفرع مطلوب';
+  if (!trim(input.minuteReceivedTime)) errors.minuteReceivedTime = 'وقت استلام الدقيقة مطلوب';
+  else if (!/^\d{1,2}:\d{2}$/.test(trim(input.minuteReceivedTime))) errors.minuteReceivedTime = 'صيغة الوقت غير صحيحة';
+  for (const field of ['fileRequestTime', 'fileReceivedTime', 'finalResponseTime'] as const) {
+    const value = input[field];
+    if (value && !/^\d{1,2}:\d{2}$/.test(value)) errors[field] = 'صيغة الوقت غير صحيحة';
+  }
+  if (input.amount !== null && input.amount !== undefined && (!Number.isFinite(Number(input.amount)) || Number(input.amount) < 0))
+    errors.amount = 'المبلغ يجب أن يكون صفرًا أو أكثر';
+  return errors;
+}
+
+export async function saveMinute(input: Partial<DisbursementMinute>): Promise<DisbursementMinute> {
   const errors = validateMinute(input);
   if (Object.keys(errors).length) fail(errors);
-  const current = input.id ? await getById<Minute>('minutes', input.id) : undefined;
-  const record: Minute = {
+  const current = input.id ? await getById<DisbursementMinute>('minutes', input.id) : undefined;
+  const record: DisbursementMinute = {
     id: input.id ?? uid('min'),
     createdAt: current?.createdAt ?? nowIso(),
     updatedAt: nowIso(),
-    refNo: trim(input.refNo) || `M-${Date.now().toString().slice(-7)}`,
-    employeeId: input.employeeId ?? null,
-    branchRef: trim(input.branchRef),
-    receivedAt: input.receivedAt as string,
-    fileRequestedAt: input.fileRequestedAt || null,
-    fileReceivedAt: input.fileReceivedAt || null,
-    reviewStartedAt: input.reviewStartedAt || null,
-    finalResponseAt: input.finalResponseAt || null,
+    employeeId: input.employeeId as string,
+    date: input.date as string,
+    branch: trim(input.branch),
+    clientRef: input.clientRef ?? '',
+    financingType: input.financingType ?? '',
+    amount: input.amount === null || input.amount === undefined ? null : Number(input.amount),
+    minuteReceivedTime: input.minuteReceivedTime ?? '',
+    fileRequestTime: input.fileRequestTime ?? '',
+    fileReceivedTime: input.fileReceivedTime ?? '',
+    finalResponseTime: input.finalResponseTime ?? '',
+    result: input.result ?? 'pending',
     status: input.status ?? 'open',
-    observations: input.observations ?? '',
-    delayReason: input.delayReason ?? '',
+    notes: input.notes ?? '',
   };
   await putRecord('minutes', record);
   return record;
 }
 
 export async function deleteMinute(id: string): Promise<void> {
-  const observations = await getAll<Observation>('observations');
-  const linked = observations.filter((row) => row.minuteId === id);
-  for (const row of linked) {
-    await putRecord('observations', { ...row, minuteId: null, updatedAt: nowIso() });
-  }
   await deleteRecord('minutes', id);
 }
 
-/* ------------------------------- الزيارات ------------------------------- */
-
-export async function listVisits(): Promise<Visit[]> {
-  const rows = await getAll<Visit>('visits');
-  return rows
-    .map((row) => ({ ...row, reviewCycles: Array.isArray(row.reviewCycles) ? row.reviewCycles : [] }))
-    .sort((a, b) => ((a.departureAt ?? a.createdAt) < (b.departureAt ?? b.createdAt) ? 1 : -1));
-}
-
-export function validateVisit(input: Partial<Visit>): Record<string, string> {
-  const errors: Record<string, string> = {};
-  if (!input.employeeId) errors.employeeId = 'الموظف المسؤول مطلوب';
-  if (!trim(input.branchRef)) errors.branchRef = 'الفرع / مرجع العميل مطلوب';
-
-  const chain: Array<[keyof Visit, string]> = [
-    ['departureAt', 'التحرك'],
-    ['arrivalAt', 'الوصول'],
-    ['completedAt', 'إتمام الزيارة'],
-    ['returnAt', 'العودة'],
-    ['reportSubmittedAt', 'تسليم التقرير'],
-    ['reportReviewedAt', 'مراجعة التقرير'],
-    ['finalEmailAt', 'البريد النهائي'],
-  ];
-  let previous: { label: string; at: number } | null = null;
-  for (const [field, label] of chain) {
-    const value = input[field] as string | null | undefined;
-    if (!value) continue;
-    if (!isIso(value)) {
-      errors[field] = `وقت ${label} غير صحيح`;
-      continue;
-    }
-    const at = new Date(value).getTime();
-    if (previous && at < previous.at) errors[field] = `وقت ${label} لا يسبق وقت ${previous.label}`;
-    previous = { label, at };
-  }
-  return errors;
-}
-
-export function newReviewCycle(seq: number): ReviewCycle {
-  return { id: uid('cyc'), seq, reviewedAt: '', observations: '', corrections: '', outcome: 'pending' };
-}
-
-export async function saveVisit(input: Partial<Visit>): Promise<Visit> {
-  const errors = validateVisit(input);
-  if (Object.keys(errors).length) fail(errors);
-  const current = input.id ? await getById<Visit>('visits', input.id) : undefined;
-  const record: Visit = {
-    id: input.id ?? uid('vis'),
-    createdAt: current?.createdAt ?? nowIso(),
-    updatedAt: nowIso(),
-    refNo: trim(input.refNo) || `V-${Date.now().toString().slice(-7)}`,
-    employeeId: input.employeeId ?? null,
-    branchRef: trim(input.branchRef),
-    departureAt: input.departureAt || null,
-    arrivalAt: input.arrivalAt || null,
-    completedAt: input.completedAt || null,
-    returnAt: input.returnAt || null,
-    reportSubmittedAt: input.reportSubmittedAt || null,
-    reportReviewedAt: input.reportReviewedAt || null,
-    finalEmailAt: input.finalEmailAt || null,
-    status: input.status ?? 'in_progress',
-    reviewCycles: Array.isArray(input.reviewCycles) ? input.reviewCycles : current?.reviewCycles ?? [],
-    observations: input.observations ?? '',
-  };
-  await putRecord('visits', record);
-  return record;
-}
-
-export async function deleteVisit(id: string): Promise<void> {
-  const observations = await getAll<Observation>('observations');
-  for (const row of observations.filter((item) => item.visitId === id)) {
-    await putRecord('observations', { ...row, visitId: null, cycleId: null, updatedAt: nowIso() });
-  }
-  await deleteRecord('visits', id);
-}
-
-/** إضافة دورة مراجعة جديدة — الدورات السابقة لا تُعدَّل ولا تُحذف */
-export async function addReviewCycle(
-  visitId: string,
-  cycle: { reviewedAt: string; observations: string; corrections: string; outcome: ReviewCycle['outcome'] },
-): Promise<Visit> {
-  const visit = await getById<Visit>('visits', visitId);
-  if (!visit) fail({ form: 'الزيارة غير موجودة' });
-  const cycles = Array.isArray(visit.reviewCycles) ? visit.reviewCycles : [];
-  const next: ReviewCycle = {
-    id: uid('cyc'),
-    seq: cycles.reduce((max, item) => Math.max(max, item.seq), 0) + 1,
-    reviewedAt: cycle.reviewedAt,
-    observations: cycle.observations,
-    corrections: cycle.corrections,
-    outcome: cycle.outcome,
-  };
-  const updated: Visit = {
-    ...visit,
-    reviewCycles: [...cycles, next],
-    reportReviewedAt: visit.reportReviewedAt ?? cycle.reviewedAt,
-    updatedAt: nowIso(),
-  };
-  await putRecord('visits', updated);
-  return updated;
-}
-
-export async function updateReviewCycle(
-  visitId: string,
-  cycleId: string,
-  patch: Partial<Omit<ReviewCycle, 'id' | 'seq'>>,
-): Promise<Visit> {
-  const visit = await getById<Visit>('visits', visitId);
-  if (!visit) fail({ form: 'الزيارة غير موجودة' });
-  const updated: Visit = {
-    ...visit,
-    reviewCycles: (visit.reviewCycles ?? []).map((cycle) => (cycle.id === cycleId ? { ...cycle, ...patch } : cycle)),
-    updatedAt: nowIso(),
-  };
-  await putRecord('visits', updated);
-  return updated;
-}
-
-/* ------------------------------- الملاحظات ------------------------------ */
+/* ------------------------------ الملاحظات ------------------------------ */
 
 export async function listObservations(): Promise<Observation[]> {
   const rows = await getAll<Observation>('observations');
@@ -311,10 +328,8 @@ export async function listObservations(): Promise<Observation[]> {
 export function validateObservation(input: Partial<Observation>): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!input.employeeId) errors.employeeId = 'الموظف مطلوب';
-  if (!input.date) errors.date = 'تاريخ الملاحظة مطلوب';
-  else if (Number.isNaN(new Date(input.date).getTime())) errors.date = 'تاريخ الملاحظة غير صحيح';
-  if (!trim(input.type)) errors.type = 'نوع الملاحظة مطلوب';
-  if (!trim(input.text)) errors.text = 'نص الملاحظة مطلوب';
+  if (!isDate(input.date)) errors.date = 'تاريخ الملاحظة مطلوب';
+  if (!trim(input.details)) errors.details = 'تفاصيل الملاحظة مطلوبة';
   return errors;
 }
 
@@ -326,15 +341,20 @@ export async function saveObservation(input: Partial<Observation>): Promise<Obse
     id: input.id ?? uid('obs'),
     createdAt: current?.createdAt ?? nowIso(),
     updatedAt: nowIso(),
-    employeeId: input.employeeId ?? null,
-    minuteId: input.minuteId || null,
-    visitId: input.visitId || null,
-    cycleId: input.cycleId || null,
-    date: (input.date ?? '').slice(0, 10),
-    type: trim(input.type),
-    text: trim(input.text),
+    employeeId: input.employeeId as string,
+    date: input.date as string,
+    source: input.source ?? 'ملاحظة مباشرة',
+    branch: input.branch ?? '',
+    reference: input.reference ?? '',
+    category: input.category ?? '',
+    severity: input.severity ?? 'medium',
+    details: trim(input.details),
+    correctiveAction: input.correctiveAction ?? '',
+    notificationDate: input.notificationDate || null,
     status: input.status ?? 'open',
-    resolution: input.resolution ?? '',
+    resolutionDate: input.resolutionDate || null,
+    recurrence: Boolean(input.recurrence),
+    followUpNotes: input.followUpNotes ?? '',
   };
   await putRecord('observations', record);
   return record;
@@ -344,65 +364,51 @@ export async function deleteObservation(id: string): Promise<void> {
   await deleteRecord('observations', id);
 }
 
-/* ------------------------------- التقييمات ------------------------------ */
+/* --------------------------- الإجازات والأذونات ------------------------- */
 
-export async function listEvaluations(): Promise<Evaluation[]> {
-  const rows = await getAll<Evaluation>('evaluations');
-  return rows.sort((a, b) => (a.year === b.year ? (b.month ?? 13) - (a.month ?? 13) : b.year - a.year));
+export async function listLeaves(): Promise<Leave[]> {
+  const rows = await getAll<Leave>('leaves');
+  return rows.sort((a, b) => (a.startDate < b.startDate ? 1 : -1));
 }
 
-export function periodKey(evaluation: Pick<Evaluation, 'periodType' | 'year' | 'month'>): string {
-  return `${evaluation.periodType}|${evaluation.year}|${evaluation.periodType === 'monthly' ? evaluation.month : 0}`;
-}
-
-export function validateEvaluation(input: Partial<Evaluation>, others: Evaluation[]): Record<string, string> {
+export function validateLeave(input: Partial<Leave>): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!input.employeeId) errors.employeeId = 'الموظف مطلوب';
-  if (!input.year || input.year < 2000 || input.year > 2100) errors.year = 'السنة غير صحيحة';
-  if (input.periodType === 'monthly' && (!input.month || input.month < 1 || input.month > 12)) errors.month = 'الشهر مطلوب';
-  for (const criterion of EVALUATION_CRITERIA) {
-    const value = input.scores?.[criterion.id];
-    if (value === null || value === undefined) continue;
-    if (!Number.isFinite(value) || value < RATING_MIN || value > RATING_MAX) {
-      errors[`score_${criterion.id}`] = `الدرجة يجب أن تكون بين ${RATING_MIN} و${RATING_MAX}`;
-    }
+  if (!trim(input.type)) errors.type = 'نوع الإجازة أو الإذن مطلوب';
+  if (!isDate(input.startDate)) errors.startDate = 'تاريخ البداية مطلوب';
+  if (!isDate(input.endDate)) errors.endDate = 'تاريخ النهاية مطلوب';
+  else if (isDate(input.startDate) && new Date(input.endDate as string) < new Date(input.startDate as string))
+    errors.endDate = 'تاريخ النهاية لا يسبق تاريخ البداية';
+  const unit = input.unit ?? 'days';
+  const value = unit === 'days' ? input.days : input.hours;
+  if (value === null || value === undefined || !Number.isFinite(Number(value)) || Number(value) <= 0) {
+    errors[unit === 'days' ? 'days' : 'hours'] = unit === 'days' ? 'عدد الأيام مطلوب' : 'عدد الساعات مطلوب';
   }
-  const duplicate = others.find(
-    (row) =>
-      row.id !== input.id &&
-      row.employeeId === input.employeeId &&
-      periodKey(row) ===
-        periodKey({
-          periodType: input.periodType ?? 'monthly',
-          year: input.year ?? 0,
-          month: input.month ?? null,
-        }),
-  );
-  if (duplicate) errors.period = 'يوجد تقييم مسجل لنفس الموظف ونفس الفترة — عدّل التقييم الموجود.';
   return errors;
 }
 
-export async function saveEvaluation(input: Partial<Evaluation>): Promise<Evaluation> {
-  const others = await getAll<Evaluation>('evaluations');
-  const errors = validateEvaluation(input, others);
+export async function saveLeave(input: Partial<Leave>): Promise<Leave> {
+  const errors = validateLeave(input);
   if (Object.keys(errors).length) fail(errors);
-  const current = input.id ? others.find((row) => row.id === input.id) : undefined;
-  const record: Evaluation = {
-    id: input.id ?? uid('evl'),
+  const current = input.id ? await getById<Leave>('leaves', input.id) : undefined;
+  const unit = input.unit ?? 'days';
+  const record: Leave = {
+    id: input.id ?? uid('lev'),
     createdAt: current?.createdAt ?? nowIso(),
     updatedAt: nowIso(),
-    employeeId: input.employeeId ?? null,
-    periodType: input.periodType ?? 'monthly',
-    year: Number(input.year),
-    month: input.periodType === 'annual' ? null : Number(input.month ?? 0) || null,
-    scores: input.scores ?? {},
-    comments: input.comments ?? {},
-    overallComment: input.overallComment ?? '',
+    employeeId: input.employeeId as string,
+    type: trim(input.type),
+    startDate: input.startDate as string,
+    endDate: input.endDate as string,
+    unit,
+    days: unit === 'days' ? Number(input.days) : null,
+    hours: unit === 'hours' ? Number(input.hours) : null,
+    notes: input.notes ?? '',
   };
-  await putRecord('evaluations', record);
+  await putRecord('leaves', record);
   return record;
 }
 
-export async function deleteEvaluation(id: string): Promise<void> {
-  await deleteRecord('evaluations', id);
+export async function deleteLeave(id: string): Promise<void> {
+  await deleteRecord('leaves', id);
 }

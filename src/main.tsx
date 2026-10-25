@@ -5,7 +5,6 @@ import '@fontsource/cairo/500.css';
 import '@fontsource/cairo/600.css';
 import '@fontsource/cairo/700.css';
 import './styles/base.css';
-import './styles/report.css';
 import { App } from './App';
 import { AppProvider } from './state/store';
 import { registerServiceWorker } from './serviceWorker';

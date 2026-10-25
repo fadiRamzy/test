@@ -1,46 +1,48 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useApp } from '../state/store';
 import { navigate } from '../state/router';
-import { Badge, Button, Callout, Card, EmptyState, PageHeader, StatCard, Table, TableWrap } from '../components/ui';
-import { countNoun, fmtDate, fmtDateTime, NOUNS } from '../lib/format';
-import { buildDashboard, visitState } from '../lib/tracking';
-import { REVIEW_OUTCOME_LABELS } from '../db/schema';
+import { Button, Card, EmptyState, PageHeader, Select, Stat, Table, TableWrap } from '../components/ui';
+import { MONTHS_AR } from '../db/schema';
+import { dashboardCounts } from '../lib/calc';
+import { fmtDate } from '../lib/format';
+
+const YEARS = (() => {
+  const current = new Date().getFullYear();
+  return Array.from({ length: 6 }, (_, index) => current + 1 - index);
+})();
 
 export function DashboardPage() {
-  const { data, settings, ready } = useApp();
+  const { data, settings } = useApp();
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
 
-  const counters = useMemo(
-    () => buildDashboard(data, settings.deadlineMinutes),
-    [data, settings.deadlineMinutes],
+  const counts = useMemo(
+    () =>
+      dashboardCounts(
+        { employees: data.employees, evaluations: data.evaluations, visits: data.visits, minutes: data.minutes, observations: data.observations },
+        year,
+        month,
+      ),
+    [data, year, month],
   );
 
-  const nameOf = (id: string | null) => data.employees.find((row) => row.id === id)?.name ?? '—';
-
-  const openObservations = useMemo(
-    () => data.observations.filter((row) => row.status === 'open').slice(0, 6),
+  const recentObservations = useMemo(
+    () => data.observations.filter((row) => row.status === 'open').slice(0, 5),
     [data.observations],
   );
-
-  const upcoming = useMemo(
-    () =>
-      data.visits.filter((visit) => visit.status !== 'completed' && visit.status !== 'cancelled').slice(0, 5),
-    [data.visits],
-  );
-
-  if (!ready) return null;
 
   if (!data.employees.length) {
     return (
       <>
-        <PageHeader title="لوحة المعلومات اليومية" description="نظرة سريعة على أحمال العمل والمهام المتأخرة." />
+        <PageHeader title="لوحة المتابعة" description="ابدأ بإضافة الموظفين ثم سجّل التقييمات والزيارات." />
         <Card>
           <EmptyState
-            icon="employees"
-            title="ابدأ بإضافة الموظفين"
-            description="أضف ضباط المخاطر (الاسم، الكود، القطاع، المحافظة، تاريخ الالتحاق) ثم سجّل دقائق الصرف والزيارات والتقييمات."
+            title="لا يوجد موظفون بعد"
+            description="أضف ضباط المخاطر مرة واحدة، ثم ستظهر أسماؤهم في كل الجداول تلقائيًا."
             action={
               <Button variant="primary" icon="plus" onClick={() => navigate('/employees')}>
-                إضافة الموظفين
+                إضافة موظف
               </Button>
             }
           />
@@ -52,128 +54,77 @@ export function DashboardPage() {
   return (
     <>
       <PageHeader
-        title="لوحة المعلومات اليومية"
-        description={`${fmtDate(new Date())} — مهلة المراجعة المعتمدة ${settings.deadlineMinutes} دقيقة.`}
+        title="لوحة المتابعة"
+        description={`${settings.organizationName} — نظرة سريعة على ${MONTHS_AR[month - 1]} ${year}.`}
         actions={
           <>
-            <Button icon="minutes" onClick={() => navigate('/minutes')}>
-              دقائق الصرف
-            </Button>
-            <Button icon="visits" onClick={() => navigate('/visits')}>
-              الزيارات
-            </Button>
+            <Select value={month} onChange={(e) => setMonth(Number(e.target.value))} aria-label="الشهر">
+              {MONTHS_AR.map((name, index) => (
+                <option key={name} value={index + 1}>
+                  {name}
+                </option>
+              ))}
+            </Select>
+            <Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">
+              {YEARS.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </Select>
           </>
         }
       />
 
-      <div className="stat-grid">
-        <StatCard
-          label="دقائق واردة اليوم"
-          value={counters.incomingToday}
-          hint={`إجمالي المسجل ${counters.incomingTotal}`}
-          icon="minutes"
-          tone="primary"
-          onClick={() => navigate('/minutes?flag=all')}
+      <div className="stats">
+        <Stat label="موظفون على رأس العمل" value={counts.activeEmployees} onClick={() => navigate('/employees')} />
+        <Stat
+          label={`زيارات ${MONTHS_AR[month - 1]}`}
+          value={counts.visitsInPeriod}
+          onClick={() => navigate('/visits')}
         />
-        <StatCard
-          label="بانتظار طلب الملف"
-          value={counters.fileNotRequested}
-          hint="لم يُسجَّل وقت طلب الملف"
-          icon="clock"
-          tone="info"
-          onClick={() => navigate('/minutes?flag=file_not_requested')}
+        <Stat
+          label="تقييمات شهرية مكتملة"
+          value={counts.evaluationsCompleted}
+          hint={`من ${counts.activeEmployees} موظفًا`}
+          onClick={() => navigate('/monthly')}
         />
-        <StatCard
-          label="بانتظار استلام الملف"
-          value={counters.waitingForFile}
-          icon="upload"
-          tone="info"
-          onClick={() => navigate('/minutes?flag=waiting_file')}
+        <Stat
+          label="موظفون بدون تقييم هذا الشهر"
+          value={counts.evaluationsMissing}
+          onClick={() => navigate('/monthly')}
         />
-        <StatCard
-          label="لم تبدأ المراجعة"
-          value={counters.reviewNotStarted}
-          icon="flag"
-          tone="warning"
-          onClick={() => navigate('/minutes?flag=review_not_started')}
-        />
-        <StatCard
-          label="بانتظار الرد النهائي"
-          value={counters.pendingFinalResponse}
-          icon="reports"
-          tone="warning"
-          onClick={() => navigate('/minutes?flag=pending_response')}
-        />
-        <StatCard
-          label="دقائق متأخرة عن المهلة"
-          value={counters.overdueMinutes}
-          icon="alert"
-          tone="danger"
-          onClick={() => navigate('/minutes?flag=overdue')}
-        />
-        <StatCard
-          label="زيارات جارية"
-          value={counters.visitsInProgress}
-          icon="visits"
-          tone="primary"
-          onClick={() => navigate('/visits?flag=in_progress')}
-        />
-        <StatCard
-          label="تقارير بانتظار التسليم"
-          value={counters.reportsPendingSubmission}
-          icon="upload"
-          tone="neutral"
-          onClick={() => navigate('/visits?flag=report_pending')}
-        />
-        <StatCard
-          label="تقارير بانتظار المراجعة"
-          value={counters.reportsPendingReview}
-          icon="search"
-          tone="info"
-          onClick={() => navigate('/visits?flag=awaiting_review')}
-        />
-        <StatCard
-          label="مهام متأخرة (دقائق + تقارير)"
-          value={counters.overdueTasks}
-          hint={`تقارير متأخرة: ${counters.overdueReports}`}
-          icon="alert"
-          tone="danger"
-          onClick={() => navigate('/reports')}
-        />
+        <Stat label="ملاحظات مفتوحة" value={counts.openObservations} onClick={() => navigate('/observations')} />
+        <Stat label="دقائق صرف بدون رد نهائي" value={counts.outstandingMinutes} onClick={() => navigate('/minutes')} />
       </div>
 
-      <Card title="حِمل العمل حسب الموظف" subtitle="مرتب تنازليًا بحسب المتأخرات ثم التقارير المعلّقة." padded={false}>
-        {counters.workload.length ? (
+      <Card title="موظفون بدون تقييم شهري" subtitle={`${MONTHS_AR[month - 1]} ${year}`} padded={false}>
+        {counts.employeesWithoutEvaluation.length ? (
           <TableWrap>
             <Table>
               <thead>
                 <tr>
-                  <th>م</th>
-                  <th>الموظف</th>
-                  <th>دقائق مفتوحة</th>
-                  <th>دقائق متأخرة</th>
-                  <th>زيارات مفتوحة</th>
-                  <th>تقارير معلّقة</th>
-                  <th>ملاحظات مفتوحة</th>
+                  <th className="num">الرقم</th>
+                  <th>الاسم</th>
+                  <th>الكود</th>
+                  <th>القطاع</th>
+                  <th>المحافظة</th>
+                  <th>الفروع</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {counters.workload.map((row) => (
-                  <tr key={row.employee.id}>
-                    <td className="num">{row.employee.serial}</td>
+                {counts.employeesWithoutEvaluation.map((employee) => (
+                  <tr key={employee.id}>
+                    <td className="num">{employee.employeeNo}</td>
+                    <td>{employee.name}</td>
+                    <td className="mono">{employee.code}</td>
+                    <td>{employee.sector}</td>
+                    <td>{employee.governorate}</td>
+                    <td>{employee.branches || '—'}</td>
                     <td>
-                      <strong>{row.employee.name}</strong>
-                      <div className="small muted">{row.employee.jobTitle}</div>
-                    </td>
-                    <td className="num">{row.openMinutes}</td>
-                    <td className="num">{row.overdueMinutes ? <Badge tone="danger">{row.overdueMinutes}</Badge> : '0'}</td>
-                    <td className="num">{row.openVisits}</td>
-                    <td className="num">{row.pendingReports}</td>
-                    <td className="num">{row.openObservations}</td>
-                    <td>
-                      <Button size="sm" onClick={() => navigate(`/employees/${row.employee.id}`)}>
-                        الملف
+                      <Button size="sm" onClick={() => navigate('/monthly')}>
+                        تسجيل التقييم
                       </Button>
                     </td>
                   </tr>
@@ -182,71 +133,38 @@ export function DashboardPage() {
             </Table>
           </TableWrap>
         ) : (
-          <EmptyState icon="employees" title="لا يوجد موظفون نشطون" description="أضف موظفًا أو أعد تفعيل موظف مؤرشف." />
+          <EmptyState title="كل الموظفين تم تقييمهم هذا الشهر" />
         )}
       </Card>
 
-      <div className="grid-2">
-        <Card title="أحدث الملاحظات المفتوحة" subtitle={countNoun(openObservations.length, NOUNS.observation)}>
-          {openObservations.length ? (
-            <ul className="timeline">
-              {openObservations.map((row) => (
-                <li key={row.id}>
-                  <div className="timeline__head">
-                    <Badge tone="warning">{row.type}</Badge>
-                    <span className="small muted">{fmtDate(row.date)}</span>
-                  </div>
-                  <p className="small">{row.text}</p>
-                  <span className="small muted">الموظف: {nameOf(row.employeeId)}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState icon="observations" title="لا ملاحظات مفتوحة" description="أي ملاحظة تُسجَّل تظهر هنا حتى تُغلق." />
-          )}
-        </Card>
-
-        <Card title="تقارير وزيارات تحتاج متابعة">
-          {upcoming.length ? (
-            <ul className="timeline">
-              {upcoming.map((visit) => {
-                const state = visitState(visit, settings.deadlineMinutes);
-                const label = state.reportPending
-                  ? 'بانتظار التقرير'
-                  : state.reportAwaitingReview
-                    ? 'بانتظار المراجعة'
-                    : state.needsCorrections
-                      ? 'تحتاج تصحيحًا'
-                      : 'جارية';
-                return (
-                <li key={visit.id}>
-                  <div className="timeline__head">
-                    <strong>{visit.refNo}</strong>
-                    <Badge tone={state.overdue ? 'danger' : state.reportAwaitingReview ? 'info' : 'neutral'}>{label}</Badge>
-                  </div>
-                  <p className="small">
-                    {visit.branchRef} — {nameOf(visit.employeeId)}
-                  </p>
-                  <span className="small muted">
-                    عودة: {fmtDateTime(visit.returnAt)} · تسليم التقرير: {fmtDateTime(visit.reportSubmittedAt)}
-                    {visit.reviewCycles?.length
-                      ? ` · آخر نتيجة: ${REVIEW_OUTCOME_LABELS[visit.reviewCycles[visit.reviewCycles.length - 1].outcome]}`
-                      : ''}
-                  </span>
-                </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <EmptyState icon="visits" title="لا تقارير معلّقة" description="كل الزيارات المسجلة مكتملة." />
-          )}
-        </Card>
-      </div>
-
-      <Callout tone="info" title="البيانات محلية على هذا المتصفح">
-        كل ما تدخله يُحفظ في IndexedDB داخل هذا المتصفح فقط. لا تتم مزامنة البيانات بين الأجهزة، وقد تُفقد إذا حذفت
-        بيانات المتصفح. صدّر نسخة JSON من صفحة الإعدادات بشكل دوري.
-      </Callout>
+      <Card title="أحدث الملاحظات المفتوحة" padded={false}>
+        {recentObservations.length ? (
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <th>التاريخ</th>
+                  <th>الموظف</th>
+                  <th>التصنيف</th>
+                  <th>التفاصيل</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentObservations.map((row) => (
+                  <tr key={row.id}>
+                    <td className="nowrap">{fmtDate(row.date)}</td>
+                    <td>{data.employees.find((employee) => employee.id === row.employeeId)?.name ?? '—'}</td>
+                    <td>{row.category || '—'}</td>
+                    <td className="wrap small">{row.details}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableWrap>
+        ) : (
+          <EmptyState title="لا ملاحظات مفتوحة" />
+        )}
+      </Card>
     </>
   );
 }

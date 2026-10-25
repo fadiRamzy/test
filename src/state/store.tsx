@@ -1,36 +1,64 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ensureSettings, isIndexedDbAvailable, readSettings, writeSettings } from '../db/database';
-import { listEmployees, listEvaluations, listMinutes, listObservations, listVisits } from '../db/repo';
-import { DEFAULT_SETTINGS, type AppSettings, type Employee, type Evaluation, type Minute, type Observation, type Visit } from '../db/schema';
+import {
+  listAnnualNotes,
+  listEmployees,
+  listFieldVisits,
+  listLeaves,
+  listMinutes,
+  listMonthlyEvaluations,
+  listObservations,
+} from '../db/repo';
+import {
+  DEFAULT_SETTINGS,
+  type AnnualNote,
+  type AppSettings,
+  type DisbursementMinute,
+  type Employee,
+  type FieldVisit,
+  type Leave,
+  type MonthlyEvaluation,
+  type Observation,
+} from '../db/schema';
 
-export type ToastKind = 'success' | 'error' | 'info' | 'warning';
+export type ToastKind = 'success' | 'error' | 'info';
 export interface Toast {
   id: number;
   kind: ToastKind;
   message: string;
 }
 
-export interface DataSet {
+export interface AppData {
   employees: Employee[];
-  minutes: Minute[];
-  visits: Visit[];
+  evaluations: MonthlyEvaluation[];
+  visits: FieldVisit[];
+  minutes: DisbursementMinute[];
   observations: Observation[];
-  evaluations: Evaluation[];
+  leaves: Leave[];
+  annualNotes: AnnualNote[];
 }
 
-const EMPTY: DataSet = { employees: [], minutes: [], visits: [], observations: [], evaluations: [] };
+const EMPTY: AppData = {
+  employees: [],
+  evaluations: [],
+  visits: [],
+  minutes: [],
+  observations: [],
+  leaves: [],
+  annualNotes: [],
+};
 
 interface AppContextValue {
   ready: boolean;
   fatalError: string | null;
   settings: AppSettings;
-  data: DataSet;
+  data: AppData;
   refresh: () => Promise<void>;
   saveSettings: (patch: Partial<AppSettings>) => Promise<void>;
   notify: (message: string, kind?: ToastKind) => void;
   toasts: Toast[];
   dismissToast: (id: number) => void;
-  /** ينفّذ عملية ثم يحدّث البيانات ويعرض رسالة نجاح أو خطأ */
+  /** ينفّذ عملية كتابة ثم يحدّث البيانات ويعرض رسالة نجاح أو خطأ */
   runAction: <T>(action: () => Promise<T>, successMessage?: string) => Promise<T | undefined>;
 }
 
@@ -40,30 +68,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [data, setData] = useState<DataSet>(EMPTY);
+  const [data, setData] = useState<AppData>(EMPTY);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
 
   const notify = useCallback((message: string, kind: ToastKind = 'info') => {
     toastId.current += 1;
     const id = toastId.current;
-    // نُبقي ثلاثة تنبيهات كحد أقصى حتى لا تحجب المحتوى
     setToasts((prev) => [...prev.slice(-2), { id, kind, message }]);
-    setTimeout(() => setToasts((prev) => prev.filter((toast) => toast.id !== id)), 4000);
+    setTimeout(() => setToasts((prev) => prev.filter((toast) => toast.id !== id)), 3500);
   }, []);
 
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((toast) => toast.id !== id)), []);
 
   const load = useCallback(async () => {
-    const [employees, minutes, visits, observations, evaluations, loadedSettings] = await Promise.all([
+    const [employees, evaluations, visits, minutes, observations, leaves, annualNotes, loadedSettings] = await Promise.all([
       listEmployees(true),
+      listMonthlyEvaluations(),
+      listFieldVisits(),
       listMinutes(),
-      listVisits(),
       listObservations(),
-      listEvaluations(),
+      listLeaves(),
+      listAnnualNotes(),
       readSettings(),
     ]);
-    setData({ employees, minutes, visits, observations, evaluations });
+    setData({ employees, evaluations, visits, minutes, observations, leaves, annualNotes });
     setSettings(loadedSettings);
   }, []);
 
@@ -91,11 +120,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [load]);
 
-  const refresh = useCallback(async () => {
-    await load();
-  }, [load]);
-
-  const saveSettingsAction = useCallback(
+  const saveSettings = useCallback(
     async (patch: Partial<AppSettings>) => {
       const next = await writeSettings({ ...settings, ...patch });
       setSettings(next);
@@ -131,14 +156,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       fatalError,
       settings,
       data,
-      refresh,
-      saveSettings: saveSettingsAction,
+      refresh: load,
+      saveSettings,
       notify,
       toasts,
       dismissToast,
       runAction,
     }),
-    [ready, fatalError, settings, data, refresh, saveSettingsAction, notify, toasts, dismissToast, runAction],
+    [ready, fatalError, settings, data, load, saveSettings, notify, toasts, dismissToast, runAction],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
