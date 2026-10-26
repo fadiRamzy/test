@@ -3,7 +3,7 @@
  * - نص حقيقي (vector) بخط TrueType مضمّن بصيغة Type0/Identity-H.
  * - ضغط Flate عند توفّر CompressionStream (وإلا تُكتب البيانات غير مضغوطة).
  */
-import type { FontMetrics } from '../pdf-fonts';
+import type { FontMetrics } from '../pdf-times-fonts';
 import { measureGlyphs, shapeText } from './shape';
 
 const encoder = new TextEncoder();

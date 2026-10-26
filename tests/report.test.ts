@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { buildEmployeeReport, pdfDate } from '../src/lib/pdf/employeeReport';
 import { buildCashReportPdf } from '../src/lib/pdf/report';
-import { FONT_BOLD, FONT_REGULAR } from '../src/lib/pdf-fonts';
+import { FONT_TIMES_BOLD, FONT_TIMES_REGULAR } from '../src/lib/pdf-times-fonts';
 import { measureText, shapeText } from '../src/lib/pdf/shape';
 import type { DailyMinute, Employee, VisitTiming } from '../src/db/schema';
 
@@ -51,8 +51,8 @@ const minute = (id: string, employeeId: string, createdAt: string, date?: string
     updatedAt: createdAt,
   }) as DailyMinute;
 
-const regular = { metrics: FONT_REGULAR, bytes: new Uint8Array(readFileSync('public/fonts/cash-arabic-regular.ttf')) };
-const bold = { metrics: FONT_BOLD, bytes: new Uint8Array(readFileSync('public/fonts/cash-arabic-bold.ttf')) };
+const regular = { metrics: FONT_TIMES_REGULAR, bytes: new Uint8Array(readFileSync('public/fonts/times-new-roman-regular.ttf')) };
+const bold = { metrics: FONT_TIMES_BOLD, bytes: new Uint8Array(readFileSync('public/fonts/times-new-roman-bold.ttf')) };
 
 describe('تقرير الموظف — حساب الأعداد والفترات', () => {
   const employees = [employee('1', 'أبأنوب جرجس'), employee('2', 'منى فتحي')];
@@ -119,12 +119,12 @@ describe('تقرير الموظف — حساب الأعداد والفترات',
 
 describe('تشكيل النص العربي و PDF', () => {
   it('يشكّل الحروف العربية بصيغة متصلة', () => {
-    const glyphs = shapeText('اسم الموظف', FONT_REGULAR);
+    const glyphs = shapeText('اسم الموظف', FONT_TIMES_REGULAR);
     // 10 حروف منطقية => نفس العدد من الأشكال، ولكنها أشكال متصلة (Presentation Forms)
     expect(glyphs.length).toBe(10);
     const presentation = glyphs.filter((glyph) => glyph.code >= 0xfe70 && glyph.code <= 0xfeff).length;
     expect(presentation).toBeGreaterThan(5);
-    expect(measureText('اسم', 9, FONT_REGULAR)).toBeGreaterThan(0);
+    expect(measureText('اسم', 9, FONT_TIMES_REGULAR)).toBeGreaterThan(0);
   });
 
   it('ينتج ملف PDF صحيح الحجم والنوع بعدد صفحات مناسب لكل عدد زيارات', async () => {
@@ -153,8 +153,8 @@ describe('تشكيل النص العربي و PDF', () => {
       expect(new TextDecoder().decode(bytes)).toContain('%%EOF');
       sizes.push(bytes.length);
     }
-    // حجم معقول (خط مُجزَّأ + ضغط) ولا يكبر إلا بشكل طفيف مع الصفوف
-    expect(Math.max(...sizes)).toBeLessThan(250 * 1024);
+    // حجم معقول بخطّي Times New Roman مُجزَّأين ومضمّنين + ضغط، ويزيد قليلًا مع الصفوف
+    expect(Math.max(...sizes)).toBeLessThan(500 * 1024);
     expect(sizes[4] - sizes[0]).toBeLessThan(20 * 1024);
   });
 
@@ -170,7 +170,13 @@ describe('تشكيل النص العربي و PDF', () => {
     expect(raw).toContain('/Type /Font');
     expect(raw).toContain('/Subtype /Type0');
     expect(raw).toContain('/MediaBox [0 0 612 792]');
-    // الخط مُجزَّأ: ملف الخط المضمّن أصغر من 60KB
-    expect(regular.bytes.length).toBeLessThan(60 * 1024);
+    expect(raw).toContain('/BaseFont /TimesNewRomanPSMT');
+    expect(raw).toContain('/BaseFont /TimesNewRomanPS-BoldMT');
+    expect(raw).not.toContain('CASHArabic');
+    expect(raw).not.toContain('/Subtype /Image');
+    expect(raw).not.toContain('إدارة المخاطر');
+    // ملفّا الخطين هما Times New Roman regular/bold، ولا يتجاوز كل subset 180KB.
+    expect(regular.bytes.length).toBeLessThan(180 * 1024);
+    expect(bold.bytes.length).toBeLessThan(180 * 1024);
   });
 });

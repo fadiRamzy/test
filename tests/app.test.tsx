@@ -1168,7 +1168,7 @@ describe('استخراج بيانات الموظفين PDF', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      const file = url.includes('bold') ? 'public/fonts/cash-arabic-bold.ttf' : 'public/fonts/cash-arabic-regular.ttf';
+      const file = url.includes('bold') ? 'public/fonts/times-new-roman-bold.ttf' : 'public/fonts/times-new-roman-regular.ttf';
       const { readFileSync } = await import('node:fs');
       const data = readFileSync(file);
       return new Response(new Uint8Array(data), { status: 200 });

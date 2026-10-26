@@ -3,7 +3,7 @@
  * الخطوط المضمّنة لا تدعم GSUB، لذلك تُستخدم أشكال الحروف العربية (Presentation Forms)
  * مع خوارزمية وصل قياسية وترتيب بصري RTL — النتيجة نصّ حقيقي قابل للبحث والنسخ.
  */
-import type { FontMetrics } from '../pdf-fonts';
+import type { FontMetrics } from '../pdf-times-fonts';
 import { ARABIC_FORMS, ARABIC_JOINING, ARABIC_MARKS, LAM_ALEF, type ArabicForm } from '../pdf-arabic';
 
 export interface PlacedGlyph {

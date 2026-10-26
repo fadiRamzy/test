@@ -24,7 +24,6 @@ const COLORS = {
   white: '1 1 1',
   text: '0 0 0',
   navy: '0.043 0.165 0.29',
-  orange: '0.961 0.510 0.125',
   muted: '0.35 0.35 0.35',
 };
 
@@ -54,10 +53,6 @@ const EMPLOYEE_HEADER_HEIGHT = 21.6;
 const EMPLOYEE_NAME_CELL = 78.3;
 const HEADER_ROW_HEIGHT = 21.6;
 const DATA_ROW_HEIGHT = 22;
-
-/** مساحة الشعار والزخرفة المرجعية: 2.14 × 2.58 بوصة = 154 × 186 نقطة */
-const BRAND_WIDTH = 154;
-const BRAND_HEIGHT = 186;
 
 export interface ReportVisit {
   branch: string;
@@ -99,8 +94,8 @@ function columnLefts() {
 
 export async function buildCashReportPdf(input: ReportInput): Promise<Uint8Array> {
   const doc = new PdfDocument(PAGE_WIDTH, PAGE_HEIGHT);
-  doc.addFont('CASHArabic-Regular', 'F1', input.regular);
-  doc.addFont('CASHArabic-Bold', 'F2', input.bold);
+  doc.addFont('TimesNewRomanPSMT', 'F1', input.regular);
+  doc.addFont('TimesNewRomanPS-BoldMT', 'F2', input.bold);
   const metrics = input.regular.metrics;
   const lefts = columnLefts();
   const monthHeaders = input.periodKind === 'month';
@@ -142,20 +137,6 @@ export async function buildCashReportPdf(input: ReportInput): Promise<Uint8Array
     });
   };
 
-  const drawBrand = () => {
-    // علامة CASH أعلى اليسار داخل مساحة 154×186 نقطة (2.14×2.58 بوصة) — رسم متجهي بلا تمديد لصور
-    const topY = PAGE_HEIGHT - 1;
-    const bottomY = PAGE_HEIGHT - BRAND_HEIGHT;
-    const wedge = Math.min(BRAND_WIDTH - 36, 118);
-    page.path(`0 ${topY} m ${wedge} ${topY} l 0 ${bottomY} l h`, COLORS.navy);
-    page.path(
-      `${wedge - 16} ${topY} m ${wedge} ${topY} l 12 ${bottomY} l ${wedge - 40} ${bottomY} l h`,
-      COLORS.orange,
-    );
-    page.text('CASH', { x: 12, top: 13, font: 'bold', size: 21, color: COLORS.orange, align: 'left', maxWidth: 84 });
-    page.text('إدارة المخاطر', { x: 12, top: 41, font: 'regular', size: 8, color: '1 1 1', align: 'left', maxWidth: 74 });
-  };
-
   const drawPeriodLabel = () => {
     page.text(input.periodLabel, {
       x: TABLE_LEFT,
@@ -169,7 +150,6 @@ export async function buildCashReportPdf(input: ReportInput): Promise<Uint8Array
   };
 
   const startPage = () => {
-    drawBrand();
     drawPeriodLabel();
     cursorTop = BLOCK_TOP;
   };

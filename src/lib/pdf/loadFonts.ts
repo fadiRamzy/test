@@ -1,5 +1,5 @@
 /** تحميل الخطوط المضمّنة لتقارير PDF (مرة واحدة ثم تُحفظ في الذاكرة) */
-import { FONT_BOLD, FONT_REGULAR } from '../pdf-fonts';
+import { FONT_TIMES_BOLD, FONT_TIMES_REGULAR } from '../pdf-times-fonts';
 import type { PdfFontSource } from './writer';
 
 let cached: { regular: PdfFontSource; bold: PdfFontSource } | null = null;
@@ -15,12 +15,12 @@ async function fetchFont(file: string): Promise<Uint8Array> {
 export async function loadReportFonts(): Promise<{ regular: PdfFontSource; bold: PdfFontSource }> {
   if (cached) return cached;
   const [regular, bold] = await Promise.all([
-    fetchFont('cash-arabic-regular.ttf'),
-    fetchFont('cash-arabic-bold.ttf'),
+    fetchFont('times-new-roman-regular.ttf'),
+    fetchFont('times-new-roman-bold.ttf'),
   ]);
   cached = {
-    regular: { metrics: FONT_REGULAR, bytes: regular },
-    bold: { metrics: FONT_BOLD, bytes: bold },
+    regular: { metrics: FONT_TIMES_REGULAR, bytes: regular },
+    bold: { metrics: FONT_TIMES_BOLD, bytes: bold },
   };
   return cached;
 }
