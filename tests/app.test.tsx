@@ -1052,6 +1052,57 @@ describe('ملاحظات الزيارة والوقت اليدوي', () => {
     expect(screen.getAllByText('ساعة و10 دقائق').length).toBeGreaterThan(0);
   });
 
+  it('تعديل المحضر والزيارة يعبئ المنتقي بالقيم المحفوظة ويحدّث الحسابات', async () => {
+    const employee = await seedEmployee({ code: 'RO-929' });
+    const minute = await saveMinute({
+      employeeId: employee.id,
+      fileRequestTime: '08:10',
+      fileReceivedTime: '14:00',
+      responseTime: '15:30',
+      inspectionResult: 'no_notes',
+    });
+    const visit = await saveVisitTiming({
+      employeeId: employee.id,
+      visitDate: '2026-03-04',
+      branch: 'فرع المعادي',
+      clientName: 'شركة التحرير',
+      location: 'المعادي',
+      departureTime: '18:15',
+      returnTime: '19:00',
+    });
+    const user = userEvent.setup();
+
+    window.location.hash = '#/minutes';
+    renderApp();
+    const minuteRow = await screen.findByText('2 م');
+    const minuteTr = minuteRow.closest('tr') as HTMLElement;
+    await user.click(within(minuteTr).getByRole('button', { name: 'تعديل' }));
+    expect(byId('min-request').value).toBe('8:10 ص');
+    expect(byId('min-received').value).toBe('2 م');
+    expect(byId('min-response').value).toBe('3:30 م');
+    expect(screen.getByTestId('minute-preview').textContent).toContain('ساعة و30 دقيقة');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect((await listMinutes()).find((row) => row.id === minute.id)).toMatchObject({
+      fileReceivedTime: '14:00',
+      responseTime: '15:30',
+    });
+
+    window.location.hash = '#/visit-times';
+    renderApp();
+    const visitRow = await screen.findByText('شركة التحرير');
+    await user.click(within(visitRow.closest('tr') as HTMLElement).getByRole('button', { name: 'تعديل' }));
+    expect(byId('vt-departure').value).toBe('6:15 م');
+    expect(byId('vt-return').value).toBe('7 م');
+    expect(screen.getByTestId('visit-preview').textContent).toContain('45 دقيقة');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect((await listVisitTimings()).find((row) => row.id === visit.id)).toMatchObject({
+      departureTime: '18:15',
+      returnTime: '19:00',
+    });
+  });
+
   it('حقل الوقت يقبل الكتابة اليدوية والاختيار من المنتقي (12 ساعة)', async () => {
     await seedEmployee();
     const user = userEvent.setup();
@@ -1069,7 +1120,7 @@ describe('ملاحظات الزيارة والوقت اليدوي', () => {
     // منتقي الوقت: 3 عصرًا و45 دقيقة
     const responseField = within(byId('min-response').closest('.timefield') as HTMLElement);
     await user.click(responseField.getByRole('button', { name: 'اختيار الوقت من القائمة' }));
-    const picker = screen.getByRole('group', { name: 'منتقي الوقت' });
+    const picker = screen.getByRole('dialog', { name: 'منتقي الوقت' });
     await user.selectOptions(within(picker).getByLabelText('الساعة'), '3');
     await user.selectOptions(within(picker).getByLabelText('الدقيقة'), '45');
     await user.selectOptions(within(picker).getByLabelText('الفترة'), 'م');

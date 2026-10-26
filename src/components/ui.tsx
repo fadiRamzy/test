@@ -271,7 +271,9 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
 }
 
 /**
- * حقل وقت بنظام 12 ساعة: كتابة يدوية (2:30 م / 14:30) أو اختيار من منتقي ساعة/دقيقة/ص‑م.
+ * حقل وقت موحّد بنظام 12 ساعة:
+ * - كتابة يدوية داخل الحقل نفسه (2:30 م / 9:05 ص / 14:30) مع تطبيع تلقائي.
+ * - اختيار بصري: الضغط على الحقل أو أيقونة الساعة يفتح منتقيًا (ساعة 1‑12 · دقيقة 00‑59 · ص/م).
  * القيمة المخزّنة تبقى HH:MM بنظام 24 ساعة — لا تتغيّر الحسابات.
  */
 export function TimeInput({
@@ -287,16 +289,47 @@ export function TimeInput({
   disabled?: boolean;
   label?: string;
 }) {
+  const autoId = useId();
   const parts = splitTime12(value);
   const [open, setOpen] = useState(false);
   const [text, setText] = useState(value ? fmtTime(value) : '');
   /** القيمة التي أرسلها هذا الحقل — لتمييز الكتابة اليدوية عن التغيير الخارجي */
   const emitted = useRef<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const hourRef = useRef<HTMLSelectElement>(null);
+  const panelId = `${id ?? autoId}-panel`;
 
   useEffect(() => {
     if (emitted.current === value) return;
     setText(value ? fmtTime(value) : '');
   }, [value]);
+
+  // إغلاق عند الضغط خارج الحقل أو Escape
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        // Escape يغلق المنتقي فقط، ولا يغلق النموذج المفتوح
+        event.stopPropagation();
+        event.preventDefault();
+        setOpen(false);
+        inputRef.current?.focus();
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
+    // مرحلة الالتقاط لتسبق مستمع النموذج (Modal) وتغلق المنتقي وحده
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [open]);
 
   const commit = (next: string) => {
     emitted.current = next;
@@ -312,30 +345,53 @@ export function TimeInput({
     else if (!next.trim()) onChange('');
   };
 
+  const openPanel = (focusPanel = false) => {
+    if (disabled) return;
+    setOpen(true);
+    if (focusPanel) setTimeout(() => hourRef.current?.focus(), 0);
+  };
+
   const setHour = (hours: string) => commit(joinTime12(hours, parts.minutes, parts.period));
   const setMinutes = (minutes: string) => commit(joinTime12(parts.hours, minutes, parts.period));
   const setPeriod = (period: string) => commit(joinTime12(parts.hours, parts.minutes, period === 'م' ? 'م' : 'ص'));
+  const now = () => {
+    const date = new Date();
+    commit(joinTime12(String(date.getHours() % 12 === 0 ? 12 : date.getHours() % 12), String(date.getMinutes()).padStart(2, '0'), date.getHours() < 12 ? 'ص' : 'م'));
+  };
   const empty = !parts.hours;
 
   return (
-    <div className="timefield">
+    <div className={cn('timefield', open && 'is-open')} ref={rootRef}>
       <div className="timefield__row">
         <input
+          ref={inputRef}
           id={id}
           className="input timefield__input"
           type="text"
           inputMode="numeric"
           dir="ltr"
           placeholder="2:30 م"
-          aria-label={label ? `${label} — كتابة يدوية` : 'الوقت'}
+          aria-label={label ? `${label} — كتابة يدوية أو اختيار` : 'الوقت'}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
+          autoComplete="off"
           value={text}
           disabled={disabled}
+          onClick={() => openPanel()}
+          onFocus={() => openPanel()}
           onChange={(event) => typeText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown') {
+              event.preventDefault();
+              openPanel(true);
+            }
+          }}
           onBlur={() => {
             const parsed = parseTimeText(text);
             if (parsed) commit(parsed);
             else if (text.trim()) setText(value ? fmtTime(value) : '');
-            else onChange('');
+            else if (value) onChange('');
           }}
         />
         <button
@@ -343,36 +399,78 @@ export function TimeInput({
           className={cn('timefield__pick', open && 'is-open')}
           aria-label="اختيار الوقت من القائمة"
           aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
           disabled={disabled}
-          onClick={() => setOpen((state) => !state)}
+          onClick={() => (open ? setOpen(false) : openPanel(true))}
         >
           <Icon name="clock" size={15} />
         </button>
       </div>
+
       {open ? (
-        <div className="timefield__pop" role="group" aria-label="منتقي الوقت">
-          <Select aria-label="الساعة" value={parts.hours} onChange={(e) => setHour(e.target.value)}>
-            <option value="">—</option>
-            {Array.from({ length: 12 }, (_, index) => String(index + 1)).map((hour) => (
-              <option key={hour} value={hour}>
-                {hour}
-              </option>
-            ))}
-          </Select>
-          <Select aria-label="الدقيقة" value={parts.minutes} disabled={empty} onChange={(e) => setMinutes(e.target.value)}>
-            {Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0')).map((minute) => (
-              <option key={minute} value={minute}>
-                {minute}
-              </option>
-            ))}
-          </Select>
-          <Select aria-label="الفترة" value={parts.period} disabled={empty} onChange={(e) => setPeriod(e.target.value)}>
-            <option value="ص">ص</option>
-            <option value="م">م</option>
-          </Select>
-          <Button size="sm" onClick={() => setOpen(false)}>
-            تم
-          </Button>
+        <div className="timefield__pop" id={panelId} role="dialog" aria-label="منتقي الوقت">
+          <div className="timefield__cols">
+            <label className="timefield__col">
+              <span>الساعة</span>
+              <select
+                ref={hourRef}
+                className="select"
+                aria-label="الساعة"
+                value={parts.hours}
+                onChange={(e) => setHour(e.target.value)}
+              >
+                <option value="">—</option>
+                {Array.from({ length: 12 }, (_, index) => String(index + 1)).map((hour) => (
+                  <option key={hour} value={hour}>
+                    {hour}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="timefield__col">
+              <span>الدقيقة</span>
+              <select
+                className="select"
+                aria-label="الدقيقة"
+                value={parts.minutes}
+                disabled={empty}
+                onChange={(e) => setMinutes(e.target.value)}
+              >
+                {Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0')).map((minute) => (
+                  <option key={minute} value={minute}>
+                    {minute}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="timefield__col">
+              <span>الفترة</span>
+              <select
+                className="select"
+                aria-label="الفترة"
+                value={parts.period}
+                disabled={empty}
+                onChange={(e) => setPeriod(e.target.value)}
+              >
+                <option value="ص">ص</option>
+                <option value="م">م</option>
+              </select>
+            </label>
+          </div>
+          <div className="timefield__preview" aria-live="polite">
+            {empty ? 'لم يُحدَّد وقت' : fmtTime(joinTime12(parts.hours, parts.minutes, parts.period))}
+          </div>
+          <div className="timefield__actions">
+            <Button size="sm" onClick={now}>
+              الآن
+            </Button>
+            <Button size="sm" onClick={() => commit('')} disabled={empty}>
+              مسح
+            </Button>
+            <Button size="sm" variant="primary" onClick={() => setOpen(false)}>
+              تم
+            </Button>
+          </div>
         </div>
       ) : null}
     </div>

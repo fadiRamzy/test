@@ -223,14 +223,39 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
     );
   };
 
+  const initials = employee.name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('');
+
   return (
     <>
-      <PageHeader
-        eyebrow="ملف الموظف"
-        title={employee.name}
-        description={`${employee.jobTitle} · ${employee.sector} — ${employee.governorate}`}
-        actions={
-          <>
+      <header className="profile-hero">
+        <div className="profile-hero__top">
+          <div className="profile-hero__avatar" aria-hidden="true">
+            {initials}
+          </div>
+          <div className="profile-hero__identity">
+            <span className="profile-hero__eyebrow">ملف الموظف</span>
+            <h1 className="profile-hero__name">{employee.name}</h1>
+            <p className="profile-hero__role">
+              {employee.jobTitle}
+              <span className="profile-hero__dot" aria-hidden="true" />
+              {employee.sector}
+              <span className="profile-hero__dot" aria-hidden="true" />
+              {employee.governorate}
+            </p>
+            <div className="profile-hero__badges">
+              <Badge tone={employee.status === 'active' ? 'success' : 'neutral'}>
+                {EMPLOYEE_STATUS_LABELS[employee.status]}
+              </Badge>
+              {employee.archived ? <Badge>مؤرشف</Badge> : null}
+              <Badge tone="info">{employee.code}</Badge>
+            </div>
+          </div>
+          <div className="profile-hero__actions">
             <Button icon="arrow-left" onClick={() => navigate('/employees')}>
               قائمة الموظفين
             </Button>
@@ -240,10 +265,62 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
             <Button icon="print" onClick={() => window.print()}>
               طباعة
             </Button>
-          </>
-        }
-      />
+          </div>
+        </div>
+        <div className="profile-facts">
+          <span className="profile-chip">
+            <em>الكود</em>
+            <strong className="mono">{employee.code}</strong>
+          </span>
+          <span className="profile-chip">
+            <em>الرقم</em>
+            <strong>{employee.employeeNo}</strong>
+          </span>
+          <span className="profile-chip">
+            <em>التعيين</em>
+            <strong>{fmtDate(employee.employmentDate)}</strong>
+          </span>
+          <span className="profile-chip profile-chip--wide">
+            <em>الفروع</em>
+            <strong>{employee.branches || '—'}</strong>
+          </span>
+        </div>
+      </header>
 
+      <section aria-labelledby="profile-summary">
+        <h2 className="profile-section" id="profile-summary">
+          ملخص النشاط
+        </h2>
+        <div className="stats profile-stats">
+          <Stat
+            icon="minutes"
+            label="عدد المحاضر اليومية"
+            value={totals.minutesCount}
+            hint={`إجمالي مدد المحاضر: ${totals.minutesCount ? fmtDurationWords(totals.minuteMinutes) : '—'}`}
+          />
+          <Stat
+            icon="visits"
+            label="عدد الزيارات"
+            value={totals.visitsCount}
+            hint={totals.invalidVisits ? `${totals.invalidVisits} زيارة بمدة غير صالحة` : 'كل الزيارات بمدة صالحة'}
+          />
+          <Stat
+            icon="clock"
+            label="إجمالي مدة الزيارات"
+            value={totals.validVisits ? fmtDurationWords(totals.visitMinutes) : '—'}
+            hint={`محسوبة من ${totals.validVisits} زيارة`}
+          />
+          <Stat
+            icon="alert"
+            tone={totals.lateMinutes ? 'warning' : 'neutral'}
+            label="محاضر متأخرة"
+            value={totals.lateMinutes}
+            hint={totals.incompleteMinutes ? `${totals.incompleteMinutes} محضر ناقص التوقيتات` : 'تجاوزت 60 دقيقة'}
+          />
+        </div>
+      </section>
+
+      <h2 className="profile-section">البيانات الأساسية</h2>
       <ListCard
         id="profile-details"
         title="بيانات الموظف"
@@ -297,25 +374,8 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
         {employee.notes ? <p className="small muted note-block">ملاحظات: {employee.notes}</p> : null}
       </ListCard>
 
-      <div className="stats">
-        <Stat icon="minutes" label="عدد المحاضر اليومية" value={totals.minutesCount} hint={`إجمالي مدد المحاضر: ${totals.minutesCount ? fmtDurationWords(totals.minuteMinutes) : '—'}`} />
-        <Stat icon="visits" label="عدد الزيارات" value={totals.visitsCount} hint={totals.invalidVisits ? `${totals.invalidVisits} زيارة بمدة غير صالحة` : 'كل الزيارات بمدة صالحة'} />
-        <Stat
-          icon="clock"
-          label="إجمالي مدة الزيارات"
-          value={totals.validVisits ? fmtDurationWords(totals.visitMinutes) : '—'}
-          hint={`محسوبة من ${totals.validVisits} زيارة`}
-        />
-        <Stat
-          icon="alert"
-          tone={totals.lateMinutes ? 'warning' : 'neutral'}
-          label="محاضر متأخرة"
-          value={totals.lateMinutes}
-          hint={totals.incompleteMinutes ? `${totals.incompleteMinutes} محضر ناقص التوقيتات` : 'تجاوزت 60 دقيقة'}
-        />
-      </div>
-
-      <Card title="تصفية السجلات" subtitle="تُطبَّق على المحاضر والزيارات والمؤشرات أعلاه — لا تحذف أي سجل">
+      <h2 className="profile-section">محاضر يومية</h2>
+      <Card title="تصفية السجلات" subtitle="تُطبَّق على المحاضر والزيارات — لا تحذف أي سجل">
         <Toolbar>
           <SearchInput value={query} onChange={setQuery} placeholder="بحث بالعميل أو الفرع أو المكان…" />
           <Select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} aria-label="الشهر">
@@ -413,6 +473,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
         )}
       </ListCard>
 
+      <h2 className="profile-section">الزيارات</h2>
       <ListCard
         id="profile-visits"
         title="توقيت الزيارات"
@@ -452,7 +513,6 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
                       <td>{row.location || '—'}</td>
                       <td className="nowrap">{fmtTime(row.departureTime)}</td>
                       <td className="nowrap">{fmtTime(row.returnTime)}</td>
-                      <td className="wrap small">{row.notes || '—'}</td>
                       <td className="nowrap" title={timing.reason ?? undefined}>
                         {timing.minutes === null ? (
                           <Badge tone="neutral">{timing.reason ?? 'مدة غير صالحة'}</Badge>
@@ -460,6 +520,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
                           fmtDurationWords(timing.minutes)
                         )}
                       </td>
+                      <td className="wrap small">{row.notes || '—'}</td>
                     </tr>
                   );
                 })}
