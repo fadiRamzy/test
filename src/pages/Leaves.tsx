@@ -186,8 +186,9 @@ export function LeavesPage() {
         title="سجلات الإجازات والأذونات"
         subtitle={`${rows.length} سجل`}
         note={`قائمة السجلات مخفية (${rows.length} سجل) — اضغط «إظهار البيانات» لعرضها.`}
-      >
-        <Toolbar>
+      
+          controls={
+            <Toolbar>
           <Select value={year} onChange={(e) => setYear(e.target.value)} aria-label="السنة">
             <option value="all">كل السنوات</option>
             {years.map((item) => (
@@ -215,6 +216,8 @@ export function LeavesPage() {
           <SearchInput value={query} onChange={setQuery} placeholder="بحث…" />
           <span className="toolbar__spacer">{rows.length} سجل</span>
         </Toolbar>
+          }>
+        
 
         {rows.length ? (
           <TableWrap>

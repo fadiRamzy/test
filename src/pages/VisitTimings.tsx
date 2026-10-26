@@ -15,6 +15,7 @@ import {
   Select,
   Table,
   TableWrap,
+  Textarea,
   TimeInput,
   Toolbar,
 } from '../components/ui';
@@ -34,6 +35,7 @@ interface Draft {
   location: string;
   departureTime: string;
   returnTime: string;
+  notes: string;
 }
 
 const emptyDraft = (): Draft => ({
@@ -44,6 +46,7 @@ const emptyDraft = (): Draft => ({
   location: '',
   departureTime: '',
   returnTime: '',
+  notes: '',
 });
 
 function durationCell(visit: VisitTiming) {
@@ -139,6 +142,7 @@ export function VisitTimingsPage() {
             location: draft.location,
             departureTime: draft.departureTime,
             returnTime: draft.returnTime,
+            notes: draft.notes,
           }),
         draft.id ? 'تم حفظ تعديلات الزيارة.' : 'تمت إضافة الزيارة.',
       );
@@ -154,7 +158,7 @@ export function VisitTimingsPage() {
   const exportCsv = () => {
     downloadCsv(
       csvFileName('visits'),
-      ['الموظف', 'التاريخ', 'الفرع', 'اسم العميل', 'مكان الزيارة', 'توقيت التحرك', 'توقيت الرجوع', 'مدة الزيارة'],
+      ['الموظف', 'التاريخ', 'الفرع', 'اسم العميل', 'مكان الزيارة', 'توقيت التحرك', 'توقيت الرجوع', 'مدة الزيارة', 'ملاحظات'],
       rows.map((visit) => {
         const timing = visitTiming(visit);
         return [
@@ -166,6 +170,7 @@ export function VisitTimingsPage() {
           visit.departureTime,
           visit.returnTime,
           timing.minutes === null ? (timing.reason ?? 'مدة غير صالحة') : fmtDurationWords(timing.minutes),
+          visit.notes ?? '',
         ];
       }),
     );
@@ -215,8 +220,9 @@ export function VisitTimingsPage() {
               تصدير CSV
             </Button>
           }
-        >
-          <Toolbar>
+        
+            controls={
+              <Toolbar>
             <SearchInput value={query} onChange={setQuery} placeholder="بحث بالموظف أو الفرع أو العميل…" />
             <Select value={listEmployee} onChange={(e) => setListEmployee(e.target.value)} aria-label="الموظف في الزيارات">
               <option value="all">كل الموظفين</option>
@@ -257,6 +263,8 @@ export function VisitTimingsPage() {
               عدد الزيارات: {rows.length}
             </span>
           </Toolbar>
+            }>
+          
 
           {rows.length ? (
             <>
@@ -283,6 +291,7 @@ export function VisitTimingsPage() {
                       <th>توقيت التحرك على الزيارة</th>
                       <th>توقيت الرجوع للفرع</th>
                       <th>مدة الزيارة</th>
+                      <th>ملاحظات</th>
                       <th>إجراءات</th>
                     </tr>
                   </thead>
@@ -297,6 +306,7 @@ export function VisitTimingsPage() {
                         <td className="nowrap">{fmtTime(row.departureTime)}</td>
                         <td className="nowrap">{fmtTime(row.returnTime)}</td>
                         <td>{durationCell(row)}</td>
+                        <td className="wrap small">{row.notes || '—'}</td>
                         <td>
                           <div className="table__actions">
                             <IconButton
@@ -313,6 +323,7 @@ export function VisitTimingsPage() {
                                   location: row.location ?? '',
                                   departureTime: row.departureTime ?? '',
                                   returnTime: row.returnTime ?? '',
+                                  notes: row.notes ?? '',
                                 });
                               }}
                             />
@@ -342,7 +353,7 @@ export function VisitTimingsPage() {
         open={Boolean(draft)}
         onClose={() => setDraft(null)}
         title={draft?.id ? 'تعديل زيارة' : 'إضافة زيارة'}
-        subtitle="كل الحقول اختيارية — يمكن الحفظ حتى لو لم تُسجّل كل البيانات."
+        subtitle="يمكن الحفظ حتى لو لم تُسجّل كل البيانات."
         size="lg"
         footer={
           <>
@@ -357,19 +368,19 @@ export function VisitTimingsPage() {
           <div className="formgrid">
             <EmployeePicker
               id="vt-employee"
-              label="الموظف (اختياري)"
+              label="الموظف"
               value={draft.employeeId}
               error={errors.employeeId}
               onChange={(value) => set('employeeId', value)}
               options={activeEmployees.map((row) => ({ id: row.id, name: row.name, meta: `رقم ${row.employeeNo}` }))}
             />
-            <Field label="التاريخ (اختياري)" error={errors.visitDate} htmlFor="vt-date">
+            <Field label="التاريخ" error={errors.visitDate} htmlFor="vt-date">
               <Input id="vt-date" type="date" value={draft.visitDate} onChange={(e) => set('visitDate', e.target.value)} />
             </Field>
-            <Field label="الفرع (اختياري)" error={errors.branch} htmlFor="vt-branch">
+            <Field label="الفرع" error={errors.branch} htmlFor="vt-branch">
               <Input id="vt-branch" value={draft.branch} onChange={(e) => set('branch', e.target.value)} />
             </Field>
-            <Field label="اسم العميل (اختياري)" error={errors.clientName} htmlFor="vt-client">
+            <Field label="اسم العميل" error={errors.clientName} htmlFor="vt-client">
               <Input
                 id="vt-client"
                 className="input--client"
@@ -377,14 +388,17 @@ export function VisitTimingsPage() {
                 onChange={(e) => set('clientName', e.target.value)}
               />
             </Field>
-            <Field label="مكان الزيارة (اختياري)" error={errors.location} htmlFor="vt-location">
+            <Field label="مكان الزيارة" error={errors.location} htmlFor="vt-location">
               <Input id="vt-location" value={draft.location} onChange={(e) => set('location', e.target.value)} />
             </Field>
-            <Field label="توقيت التحرك على الزيارة (اختياري)" error={errors.departureTime} htmlFor="vt-departure">
+            <Field label="توقيت التحرك على الزيارة" error={errors.departureTime} htmlFor="vt-departure">
               <TimeInput id="vt-departure" value={draft.departureTime} onChange={(value) => set('departureTime', value)} />
             </Field>
-            <Field label="توقيت الرجوع للفرع (اختياري)" error={errors.returnTime} htmlFor="vt-return">
+            <Field label="توقيت الرجوع للفرع" error={errors.returnTime} htmlFor="vt-return">
               <TimeInput id="vt-return" value={draft.returnTime} onChange={(value) => set('returnTime', value)} />
+            </Field>
+            <Field label="ملاحظات" htmlFor="vt-notes" className="span2">
+              <Textarea id="vt-notes" rows={2} value={draft.notes} onChange={(e) => set('notes', e.target.value)} />
             </Field>
             <div className="span2 small muted" data-testid="visit-preview">
               {preview && preview.minutes !== null ? (

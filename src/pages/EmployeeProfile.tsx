@@ -202,7 +202,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
           return [
             'زيارة موقوتة',
             row.visitDate,
-            `${row.branch} — ${row.clientName}${row.location ? ` — ${row.location}` : ''}`,
+            `${row.branch} — ${row.clientName}${row.location ? ` — ${row.location}` : ''}${row.notes ? ` — ${row.notes}` : ''}`,
             `تحرك ${fmtTime(row.departureTime)} · رجوع ${fmtTime(row.returnTime)} · ${
               timing.minutes === null ? 'مدة غير صالحة' : fmtDurationWords(timing.minutes)
             }`,
@@ -438,6 +438,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
                   <th>توقيت التحرك</th>
                   <th>توقيت الرجوع</th>
                   <th>مدة الزيارة</th>
+                  <th>ملاحظات</th>
                 </tr>
               </thead>
               <tbody>
@@ -451,6 +452,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
                       <td>{row.location || '—'}</td>
                       <td className="nowrap">{fmtTime(row.departureTime)}</td>
                       <td className="nowrap">{fmtTime(row.returnTime)}</td>
+                      <td className="wrap small">{row.notes || '—'}</td>
                       <td className="nowrap" title={timing.reason ?? undefined}>
                         {timing.minutes === null ? (
                           <Badge tone="neutral">{timing.reason ?? 'مدة غير صالحة'}</Badge>

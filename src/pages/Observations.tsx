@@ -174,8 +174,9 @@ export function ObservationsPage() {
         }
       />
 
-      <ListCard id="observations-records" title="الملاحظات المسجلة" note="قائمة الملاحظات مخفية — اضغط «إظهار البيانات» لعرضها.">
-        <Toolbar>
+      <ListCard id="observations-records" title="الملاحظات المسجلة" note="قائمة الملاحظات مخفية — اضغط «إظهار البيانات» لعرضها."
+        controls={
+          <Toolbar>
           <Select value={employee} onChange={(e) => setEmployee(e.target.value)} aria-label="الموظف">
             <option value="all">كل الموظفين</option>
             {data.employees.map((row) => (
@@ -202,6 +203,8 @@ export function ObservationsPage() {
           <SearchInput value={query} onChange={setQuery} placeholder="بحث في التفاصيل…" />
           <span className="toolbar__spacer">{rows.length} ملاحظة</span>
         </Toolbar>
+        }>
+        
 
         {rows.length ? (
           <TableWrap>

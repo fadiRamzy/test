@@ -61,6 +61,45 @@ export function splitTime12(value?: string | null): { hours: string; minutes: st
   };
 }
 
+/** يقرأ وقتًا مكتوبًا يدويًا (12 أو 24 ساعة) ويعيد HH:MM، أو null إذا لم يكن صالحًا */
+export function parseTimeText(input: string): string | null {
+  const text = (input ?? '')
+    .trim()
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .toLowerCase();
+  if (!text) return null;
+
+  const period = /(صباح|مساء|ص|م|am|pm|a|p)\s*$/.exec(text.replace(/\./g, ''));
+  const periodText = period ? period[1] : '';
+  const core = text
+    .replace(/(صباح|مساء|ص|م|am|pm|a|p)\s*$/, '')
+    .replace(/[^0-9:.٫]/g, '')
+    .replace(/[٫:]/g, '.')
+    .trim();
+  if (!core) return null;
+
+  const parts = core.split('.').filter((part) => part !== '');
+  if (parts.length > 2) return null;
+  const hours = Number(parts[0]);
+  const minutes = parts.length === 2 ? Number(parts[1]) : 0;
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (minutes < 0 || minutes > 59) return null;
+
+  const isPm = periodText === 'م' || periodText === 'مساء' || periodText === 'pm' || periodText === 'p';
+  const isAm = periodText === 'ص' || periodText === 'صباح' || periodText === 'am' || periodText === 'a';
+
+  let hours24: number;
+  if (isPm || isAm) {
+    if (hours < 1 || hours > 12) return null;
+    hours24 = (hours % 12) + (isPm ? 12 : 0);
+  } else {
+    if (hours < 0 || hours > 23) return null;
+    hours24 = hours;
+  }
+  return `${String(hours24).padStart(2, '0')}:${pad(minutes)}`;
+}
+
 /** يجمع أجزاء نظام 12 ساعة في وقت HH:MM (24 ساعة) — ساعة فارغة تعني بلا وقت */
 export function joinTime12(hours: string, minutes: string, period: 'ص' | 'م'): string {
   if (!hours) return '';

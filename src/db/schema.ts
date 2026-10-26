@@ -226,6 +226,8 @@ export interface VisitTiming extends BaseRecord {
   departureTime: string;
   /** توقيت الرجوع للفرع HH:MM */
   returnTime: string;
+  /** ملاحظات على الزيارة (اختيارية) */
+  notes?: string;
 }
 
 /* ------------------------------ الملاحظات ----------------------------- */

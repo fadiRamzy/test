@@ -390,6 +390,7 @@ export async function saveVisitTiming(input: Partial<VisitTiming>): Promise<Visi
     location: trim(input.location),
     departureTime: trim(input.departureTime),
     returnTime: trim(input.returnTime),
+    notes: trim(input.notes),
   };
   await putRecord('visitTimings', record);
   return record;

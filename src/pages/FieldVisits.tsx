@@ -222,8 +222,9 @@ export function FieldVisitsPage() {
         title="الزيارات الميدانية المسجلة"
         subtitle={`${rows.length} زيارة`}
         note={`قائمة الزيارات مخفية (${rows.length} زيارة) — اضغط «إظهار البيانات» لعرضها.`}
-      >
-        <Toolbar>
+      
+          controls={
+            <Toolbar>
           <Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">
             {YEARS.map((item) => (
               <option key={item} value={item}>
@@ -250,6 +251,8 @@ export function FieldVisitsPage() {
           <SearchInput value={query} onChange={setQuery} placeholder="بحث بالفرع أو المرجع…" />
           <span className="toolbar__spacer">{rows.length} زيارة</span>
         </Toolbar>
+          }>
+        
 
         {rows.length ? (
           <TableWrap>

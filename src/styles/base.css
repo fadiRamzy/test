@@ -812,3 +812,163 @@ textarea.cell--notes { min-height: 30px; height: 30px; resize: vertical; padding
   .timefield { grid-template-columns: 1fr 1fr 1fr; }
   .counts { background: transparent; }
 }
+
+/* ======================================================================
+   تحسينات زجاجية هادئة (مستوحاة من واجهات Apple) — شفافية خفيفة،
+   تمويه ناعم، حدود دقيقة وظلال رقيقة. الجداول تبقى معتمة وواضحة.
+   ====================================================================== */
+
+:root {
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-strong: rgba(255, 255, 255, 0.86);
+  --glass-border: rgba(255, 255, 255, 0.6);
+  --glass-shadow: 0 10px 30px rgba(13, 27, 42, 0.08), 0 2px 6px rgba(13, 27, 42, 0.04);
+  --glass-inset: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+/* خلفية ناعمة خلف المحتوى تمنح التمويه معنى دون زخرفة زائدة */
+body {
+  background:
+    radial-gradient(1100px 520px at 100% -8%, rgba(19, 137, 127, 0.10), transparent 62%),
+    radial-gradient(900px 480px at 0% 0%, rgba(27, 90, 138, 0.10), transparent 58%),
+    var(--surface-muted);
+  background-attachment: fixed;
+}
+
+.topnav {
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  border-bottom: 1px solid rgba(227, 234, 242, 0.9);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.topnav__link.is-active {
+  background: rgba(19, 137, 127, 0.10);
+  box-shadow: var(--glass-inset);
+}
+
+/* البطاقات: سطح زجاجي خفيف مع حدود بيضاء — الجداول داخلها معتمة */
+.card {
+  background: var(--glass-strong);
+  backdrop-filter: saturate(140%) blur(10px);
+  -webkit-backdrop-filter: saturate(140%) blur(10px);
+  border: 1px solid rgba(227, 234, 242, 0.9);
+  box-shadow: var(--glass-shadow);
+}
+.card__head {
+  background: rgba(255, 255, 255, 0.55);
+  border-bottom: 1px solid rgba(227, 234, 242, 0.9);
+}
+
+/* أدوات البحث والفلاتر */
+.toolbar,
+.listcard__controls {
+  background: rgba(255, 255, 255, 0.6);
+  border-bottom: 1px solid rgba(227, 234, 242, 0.9);
+}
+.listcard__controls .toolbar { border-bottom: none; background: transparent; }
+.toolbar .search,
+.toolbar .select,
+.toolbar .input {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+/* الجداول تبقى صلبة ومقروءة */
+.table thead th { background: rgba(239, 244, 249, 0.96); }
+.card__body .tablewrap,
+.card__body--flush .tablewrap { background: var(--surface); }
+
+/* المؤشرات */
+.stat {
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(227, 234, 242, 0.9);
+  box-shadow: var(--glass-shadow);
+}
+
+/* النوافذ والمنسدلات */
+.overlay { background: rgba(9, 20, 34, 0.34); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.modal {
+  background: var(--glass-strong);
+  backdrop-filter: saturate(180%) blur(18px);
+  -webkit-backdrop-filter: saturate(180%) blur(18px);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 30px 70px rgba(13, 27, 42, 0.22), var(--glass-inset);
+  animation: glass-in 0.18s ease-out;
+}
+.modal__head { background: rgba(255, 255, 255, 0.5); border-bottom: 1px solid rgba(227, 234, 242, 0.9); }
+.modal__foot { background: rgba(255, 255, 255, 0.5); }
+
+.picker__pop,
+.timefield__pop {
+  background: var(--glass-strong);
+  backdrop-filter: saturate(180%) blur(16px);
+  -webkit-backdrop-filter: saturate(180%) blur(16px);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 22px 48px rgba(13, 27, 42, 0.18), var(--glass-inset);
+  animation: glass-in 0.16s ease-out;
+}
+
+@keyframes glass-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.995); }
+  to { opacity: 1; transform: none; }
+}
+
+/* الانتقال عند إظهار/إخفاء القوائم */
+.listcard__list { animation: list-in 0.16s ease-out; }
+@keyframes list-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+.collapsed-note { background: transparent; }
+
+/* حقل الوقت: كتابة يدوية + منتقي */
+.timefield { display: block; }
+.timefield__row { display: flex; gap: 6px; }
+.timefield__input { flex: 1 1 auto; font-variant-numeric: tabular-nums; }
+.timefield__pick {
+  flex: 0 0 auto;
+  width: 38px;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink-600);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.timefield__pick:hover { background: var(--surface-sunken); color: var(--brand-700); }
+.timefield__pick.is-open { border-color: var(--brand-500); color: var(--brand-700); box-shadow: 0 0 0 3px rgba(27, 90, 138, 0.12); }
+.timefield__pop {
+  position: absolute;
+  z-index: 95;
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.9fr auto;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+  padding: 8px;
+  border-radius: 12px;
+}
+.timefield { position: relative; }
+.timefield__pop .select { min-height: 34px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* احترام تقليل الحركة */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* عند عدم دعم التمويه: أسطح معتمة كاملة */
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .card, .modal, .stat, .picker__pop, .timefield__pop { background: var(--surface); }
+}
+
+@media print {
+  body { background: #fff; }
+  .card, .stat, .modal { background: #fff; box-shadow: none; backdrop-filter: none; }
+}

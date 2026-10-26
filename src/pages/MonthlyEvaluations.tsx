@@ -195,8 +195,9 @@ export function MonthlyEvaluationsPage() {
         </p>
       </div>
 
-      <ListCard id="monthly-records" title="التقييم الشهري — جدول الإدخال" note="جدول التقييم مخفي — اضغط «إظهار البيانات» لعرضه.">
-        <Toolbar>
+      <ListCard id="monthly-records" title="التقييم الشهري — جدول الإدخال" note="جدول التقييم مخفي — اضغط «إظهار البيانات» لعرضه."
+        controls={
+          <Toolbar>
           <Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">
             {YEARS.map((item) => (
               <option key={item} value={item}>
@@ -245,6 +246,8 @@ export function MonthlyEvaluationsPage() {
             {visible.length} موظف · مكتمل {completedCount}
           </span>
         </Toolbar>
+        }>
+        
 
         <TableWrap>
           <table className="table sheet">

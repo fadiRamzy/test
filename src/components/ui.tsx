@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from './Icon';
 import { cn } from '../lib/utils';
-import { joinTime12, splitTime12 } from '../lib/format';
+import { fmtTime, joinTime12, parseTimeText, splitTime12 } from '../lib/format';
 
 /* --------------------------------- أزرار --------------------------------- */
 
@@ -115,6 +115,7 @@ export function ListCard({
   title,
   subtitle,
   actions,
+  controls,
   children,
   padded = false,
   defaultCollapsed = false,
@@ -127,6 +128,8 @@ export function ListCard({
   title?: ReactNode;
   subtitle?: ReactNode;
   actions?: ReactNode;
+  /** الفلاتر وأدوات البحث — تبقى ظاهرة وتعمل حتى عند إخفاء القائمة */
+  controls?: ReactNode;
   children: ReactNode;
   padded?: boolean;
   defaultCollapsed?: boolean;
@@ -157,13 +160,16 @@ export function ListCard({
         </>
       }
     >
-      {collapsed ? (
-        <div className="collapsed-note small muted" id={id}>
-          {note ?? 'البيانات مخفية — اضغط «إظهار البيانات» لعرضها. الإخفاء لا يحذف أي سجل.'}
-        </div>
-      ) : (
-        <div id={id}>{children}</div>
-      )}
+      {controls ? <div className="listcard__controls">{controls}</div> : null}
+      <div className="listcard__list" id={id} data-collapsed={collapsed ? 'true' : 'false'}>
+        {collapsed ? (
+          <div className="collapsed-note small muted">
+            {note ?? 'البيانات مخفية — اضغط «إظهار البيانات» لعرضها. الإخفاء لا يحذف أي سجل.'}
+          </div>
+        ) : (
+          children
+        )}
+      </div>
     </Card>
   );
 }
@@ -264,45 +270,111 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return <select {...props} className={cn('select', props.className)} />;
 }
 
-/** حقل وقت بنظام 12 ساعة (ساعة · دقيقة · ص/م) — يخزّن HH:MM داخليًا دون تغيير الصيغة */
+/**
+ * حقل وقت بنظام 12 ساعة: كتابة يدوية (2:30 م / 14:30) أو اختيار من منتقي ساعة/دقيقة/ص‑م.
+ * القيمة المخزّنة تبقى HH:MM بنظام 24 ساعة — لا تتغيّر الحسابات.
+ */
 export function TimeInput({
   id,
   value,
   onChange,
   disabled,
+  label,
 }: {
   id?: string;
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  label?: string;
 }) {
   const parts = splitTime12(value);
-  const setHour = (hours: string) => onChange(joinTime12(hours, parts.minutes, parts.period));
-  const setMinutes = (minutes: string) => onChange(joinTime12(parts.hours, minutes, parts.period));
-  const setPeriod = (period: string) => onChange(joinTime12(parts.hours, parts.minutes, period === 'م' ? 'م' : 'ص'));
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState(value ? fmtTime(value) : '');
+  /** القيمة التي أرسلها هذا الحقل — لتمييز الكتابة اليدوية عن التغيير الخارجي */
+  const emitted = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (emitted.current === value) return;
+    setText(value ? fmtTime(value) : '');
+  }, [value]);
+
+  const commit = (next: string) => {
+    emitted.current = next;
+    setText(next ? fmtTime(next) : '');
+    onChange(next);
+  };
+
+  const typeText = (next: string) => {
+    setText(next);
+    const parsed = parseTimeText(next);
+    emitted.current = parsed;
+    if (parsed) onChange(parsed);
+    else if (!next.trim()) onChange('');
+  };
+
+  const setHour = (hours: string) => commit(joinTime12(hours, parts.minutes, parts.period));
+  const setMinutes = (minutes: string) => commit(joinTime12(parts.hours, minutes, parts.period));
+  const setPeriod = (period: string) => commit(joinTime12(parts.hours, parts.minutes, period === 'م' ? 'م' : 'ص'));
   const empty = !parts.hours;
 
   return (
     <div className="timefield">
-      <Select id={id} aria-label="الساعة" value={parts.hours} disabled={disabled} onChange={(e) => setHour(e.target.value)}>
-        <option value="">—</option>
-        {Array.from({ length: 12 }, (_, index) => String(index + 1)).map((hour) => (
-          <option key={hour} value={hour}>
-            {hour}
-          </option>
-        ))}
-      </Select>
-      <Select aria-label="الدقيقة" value={parts.minutes} disabled={disabled || empty} onChange={(e) => setMinutes(e.target.value)}>
-        {Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0')).map((minute) => (
-          <option key={minute} value={minute}>
-            {minute}
-          </option>
-        ))}
-      </Select>
-      <Select aria-label="الفترة" value={parts.period} disabled={disabled || empty} onChange={(e) => setPeriod(e.target.value)}>
-        <option value="ص">ص</option>
-        <option value="م">م</option>
-      </Select>
+      <div className="timefield__row">
+        <input
+          id={id}
+          className="input timefield__input"
+          type="text"
+          inputMode="numeric"
+          dir="ltr"
+          placeholder="2:30 م"
+          aria-label={label ? `${label} — كتابة يدوية` : 'الوقت'}
+          value={text}
+          disabled={disabled}
+          onChange={(event) => typeText(event.target.value)}
+          onBlur={() => {
+            const parsed = parseTimeText(text);
+            if (parsed) commit(parsed);
+            else if (text.trim()) setText(value ? fmtTime(value) : '');
+            else onChange('');
+          }}
+        />
+        <button
+          type="button"
+          className={cn('timefield__pick', open && 'is-open')}
+          aria-label="اختيار الوقت من القائمة"
+          aria-expanded={open}
+          disabled={disabled}
+          onClick={() => setOpen((state) => !state)}
+        >
+          <Icon name="clock" size={15} />
+        </button>
+      </div>
+      {open ? (
+        <div className="timefield__pop" role="group" aria-label="منتقي الوقت">
+          <Select aria-label="الساعة" value={parts.hours} onChange={(e) => setHour(e.target.value)}>
+            <option value="">—</option>
+            {Array.from({ length: 12 }, (_, index) => String(index + 1)).map((hour) => (
+              <option key={hour} value={hour}>
+                {hour}
+              </option>
+            ))}
+          </Select>
+          <Select aria-label="الدقيقة" value={parts.minutes} disabled={empty} onChange={(e) => setMinutes(e.target.value)}>
+            {Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0')).map((minute) => (
+              <option key={minute} value={minute}>
+                {minute}
+              </option>
+            ))}
+          </Select>
+          <Select aria-label="الفترة" value={parts.period} disabled={empty} onChange={(e) => setPeriod(e.target.value)}>
+            <option value="ص">ص</option>
+            <option value="م">م</option>
+          </Select>
+          <Button size="sm" onClick={() => setOpen(false)}>
+            تم
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,10 +1,9 @@
 import { useRef, useState } from 'react';
 import { useApp } from '../state/store';
-import { Badge, Button, Callout, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Table, TableWrap, Textarea } from '../components/ui';
+import { Badge, Button, Callout, Card, Field, Input, Modal, PageHeader, Select, Table, TableWrap, Textarea } from '../components/ui';
 import {
   backupFileName,
   createBackup,
-  dataCounts,
   restoreBackup,
   validateBackup,
   type BackupPayload,
@@ -29,7 +28,6 @@ const ENTITIES: EntityName[] = [
 
 export function ReportsPage() {
   const { data, settings, saveSettings, refresh, notify } = useApp();
-  const [counts, setCounts] = useState<Record<EntityName, number> | null>(null);
   const [pending, setPending] = useState<{ payload: BackupPayload; validation: ValidationResult; name: string } | null>(null);
   const [restoring, setRestoring] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -138,7 +136,7 @@ export function ReportsPage() {
   const exportVisitTimings = () =>
     downloadCsv(
       csvFileName(`visit-timings-${year}`),
-      ['الموظف', 'التاريخ', 'الفرع', 'اسم العميل', 'مكان الزيارة', 'توقيت التحرك', 'توقيت الرجوع', 'مدة الزيارة'],
+      ['الموظف', 'التاريخ', 'الفرع', 'اسم العميل', 'مكان الزيارة', 'توقيت التحرك', 'توقيت الرجوع', 'مدة الزيارة', 'ملاحظات'],
       data.visitTimings
         .filter((row) => (row.visitDate ?? '').startsWith(String(year)))
         .map((row) => {
@@ -152,6 +150,7 @@ export function ReportsPage() {
             row.departureTime,
             row.returnTime,
             timing.minutes === null ? (timing.reason ?? '') : fmtDurationWords(timing.minutes),
+            row.notes ?? '',
           ];
         }),
     );
@@ -178,7 +177,6 @@ export function ReportsPage() {
   const exportBackup = async () => {
     const payload = await createBackup();
     downloadFile(backupFileName(), JSON.stringify(payload, null, 2));
-    setCounts(payload.counts);
     notify('تم تصدير النسخة الاحتياطية (JSON).', 'success');
   };
 
@@ -201,7 +199,6 @@ export function ReportsPage() {
       downloadFile(`safety-${backupFileName()}`, JSON.stringify(await createBackup(), null, 2));
       notify(mode === 'replace' ? 'تم استبدال البيانات، ونُزّلت نسخة أمان.' : 'تم دمج البيانات، ونُزّلت نسخة أمان.', 'success');
       setPending(null);
-      setCounts(await dataCounts());
     } catch (error) {
       notify(error instanceof Error ? error.message : 'تعذّرت الاستعادة.', 'error');
     } finally {
@@ -213,7 +210,7 @@ export function ReportsPage() {
     <>
       <PageHeader
         title="التقارير والنسخ"
-        description="تصدير CSV لكل وحدة، ونسخ احتياطي كامل بصيغة JSON، والقوائم المرجعية المستخدمة في القوائم المنسدلة."
+        description="نسخة احتياطية كاملة بصيغة JSON واستعادتها، مع تصدير CSV والقوائم المرجعية."
       />
 
       <Card title="تصدير CSV" subtitle={`السنة: ${year} حيث ينطبق`} actions={<Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">{Array.from({ length: 6 }, (_, index) => now.getFullYear() + 1 - index).map((item) => <option key={item} value={item}>{item}</option>)}</Select>}>
@@ -229,16 +226,13 @@ export function ReportsPage() {
         </div>
       </Card>
 
-      <Card title="النسخ الاحتياطي والاستعادة" subtitle="ملف JSON واحد يحتوي كل السجلات والإعدادات.">
+      <Card title="النسخ الاحتياطي والاستعادة" subtitle="ملف JSON واحد يحتوي كل السجلات والإعدادات — تصدير للنسخ، واستيراد للاستعادة.">
         <div className="rowactions">
           <Button variant="primary" icon="download" onClick={exportBackup}>
             تصدير نسخة كاملة
           </Button>
           <Button icon="upload" onClick={() => fileRef.current?.click()}>
             استيراد نسخة
-          </Button>
-          <Button icon="database" onClick={async () => setCounts(await dataCounts())}>
-            عرض عدد السجلات
           </Button>
           <input
             ref={fileRef}
@@ -252,29 +246,6 @@ export function ReportsPage() {
             }}
           />
         </div>
-
-        {counts ? (
-          <TableWrap>
-            <Table>
-              <thead>
-                <tr>
-                  <th>الجدول</th>
-                  <th className="num">عدد السجلات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ENTITIES.map((entity) => (
-                  <tr key={entity}>
-                    <td>{ENTITY_LABELS[entity]}</td>
-                    <td className="num">{counts[entity]}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </TableWrap>
-        ) : (
-          <EmptyState title="لم يُعرض العدد بعد" description="اضغط «عرض عدد السجلات»." />
-        )}
       </Card>
 
       <Card title="القوائم المرجعية" subtitle="سطر واحد لكل قيمة — تُستخدم في القوائم المنسدلة داخل النماذج.">

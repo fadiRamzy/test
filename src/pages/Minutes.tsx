@@ -176,11 +176,12 @@ export function MinutesPage() {
           padded={false}
           title="المحاضر المسجلة"
           subtitle={`${rows.length} محضر`}
-          hideLabel="إخفاء المحاضر"
-          showLabel="إظهار المحاضر"
-          note={`قائمة المحاضر مخفية (${rows.length} محضر) — اضغط «إظهار المحاضر» لعرضها.`}
-        >
-          <Toolbar>
+          hideLabel="إخفاء البيانات"
+          showLabel="إظهار البيانات"
+          note={`قائمة المحاضر مخفية (${rows.length} محضر) — اضغط «إظهار البيانات» لعرضها. الإخفاء لا يحذف أي سجل.`}
+        
+            controls={
+              <Toolbar>
             <SearchInput value={query} onChange={setQuery} placeholder="بحث باسم الموظف…" />
             <Select value={employeeFilter} onChange={(e) => setEmployeeFilter(e.target.value)} aria-label="الموظف في المحاضر">
               <option value="all">كل الموظفين</option>
@@ -211,6 +212,8 @@ export function MinutesPage() {
             </Button>
             <span className="toolbar__spacer">{rows.length} محضر</span>
           </Toolbar>
+            }>
+          
 
           {rows.length ? (
             <TableWrap>
@@ -302,7 +305,7 @@ export function MinutesPage() {
           <div className="formgrid">
             <EmployeePicker
               id="min-employee"
-              label="الموظف (اختياري)"
+              label="الموظف"
               className="span2"
               value={draft.employeeId}
               error={errors.employeeId}
@@ -319,7 +322,7 @@ export function MinutesPage() {
             <Field label="توقيت الرد على الملف" error={errors.responseTime} htmlFor="min-response">
               <TimeInput id="min-response" value={draft.responseTime} onChange={(value) => set('responseTime', value)} />
             </Field>
-            <Field label="نتيجة الفحص (اختياري)" error={errors.inspectionResult} htmlFor="min-result">
+            <Field label="نتيجة الفحص" error={errors.inspectionResult} htmlFor="min-result">
               <Select
                 id="min-result"
                 value={draft.inspectionResult}

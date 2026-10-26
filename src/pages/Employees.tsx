@@ -21,8 +21,11 @@ import {
 } from '../components/ui';
 import { ValidationError, deleteEmployee, nextEmployeeNo, saveEmployee, setEmployeeArchived } from '../db/repo';
 import { EMPLOYEE_STATUS_LABELS, EMPLOYEE_STATUS_OPTIONS, type Employee, type EmployeeStatus } from '../db/schema';
-import { fmtDate, toDateInputValue, todayInputValue } from '../lib/format';
+import { fmtDate, monthName, toDateInputValue, todayInputValue } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
+import { buildCashReportPdf, reportFileName } from '../lib/pdf/report';
+import { buildEmployeeReport } from '../lib/pdf/employeeReport';
+import { downloadPdf, loadReportFonts } from '../lib/pdf/loadFonts';
 
 interface Draft {
   id?: string;
@@ -52,7 +55,7 @@ const emptyDraft = (employeeNo: number): Draft => ({
 });
 
 export function EmployeesPage() {
-  const { data, settings, runAction } = useApp();
+  const { data, settings, runAction, notify } = useApp();
   const [query, setQuery] = useState('');
   const [sector, setSector] = useState('all');
   const [governorate, setGovernorate] = useState('all');
@@ -63,6 +66,12 @@ export function EmployeesPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<Employee | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportEmployee, setExportEmployee] = useState('all');
+  const [exportKind, setExportKind] = useState<'month' | 'year'>('month');
+  const [exportMonth, setExportMonth] = useState(new Date().getMonth() + 1);
+  const [exportYear, setExportYear] = useState(new Date().getFullYear());
+  const [exporting, setExporting] = useState(false);
 
   const rows = useMemo(() => {
     const text = query.trim().toLowerCase();
@@ -168,6 +177,46 @@ export function EmployeesPage() {
     );
   };
 
+  /** استخراج تقرير PDF من السجلات المحفوظة فعليًا */
+  const runExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const { blocks, periodLabel, periodKind, excludedNote } = buildEmployeeReport(
+        { employees: data.employees, visitTimings: data.visitTimings, minutes: data.minutes },
+        {
+          employeeIds: exportEmployee === 'all' ? [] : [exportEmployee],
+          periodKind: exportKind,
+          year: exportYear,
+          month: exportMonth,
+        },
+      );
+      if (!blocks.length) {
+        notify('لا يوجد موظفون مطابقون للاختيار.', 'error');
+        return;
+      }
+      const fonts = await loadReportFonts();
+      const bytes = await buildCashReportPdf({
+        ...fonts,
+        blocks,
+        periodLabel,
+        periodKind,
+        excludedNote,
+      });
+      const selected = data.employees.find((row) => row.id === exportEmployee);
+      const scope = exportEmployee === 'all' ? 'all-employees' : selected?.code || selected?.id || 'employee';
+      const periodSlug =
+        exportKind === 'month' ? `${exportYear}-${String(exportMonth).padStart(2, '0')}` : String(exportYear);
+      downloadPdf(bytes, reportFileName(exportKind, periodSlug, scope));
+      notify('تم إنشاء تقرير PDF.', 'success');
+      setExportOpen(false);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'تعذّر إنشاء تقرير PDF.', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -178,6 +227,9 @@ export function EmployeesPage() {
           <>
             <Button icon="download" onClick={exportCsv} disabled={!rows.length}>
               تصدير CSV
+            </Button>
+            <Button icon="database" onClick={() => setExportOpen(true)} disabled={!data.employees.length}>
+              استخراج بيانات
             </Button>
             <Button variant="primary" icon="plus" onClick={openNew}>
               إضافة موظف
@@ -193,8 +245,9 @@ export function EmployeesPage() {
         hideLabel="إخفاء البيانات"
         showLabel="إظهار البيانات"
         note={`قائمة الموظفين مخفية (${rows.length} موظف) — اضغط «إظهار البيانات» لعرضها. الإخفاء لا يحذف أي سجل.`}
-      >
-        <Toolbar>
+      
+          controls={
+            <Toolbar>
           <SearchInput value={query} onChange={setQuery} placeholder="بحث بالاسم أو الكود…" />
           <Select value={sector} onChange={(e) => setSector(e.target.value)} aria-label="القطاع">
             <option value="all">كل القطاعات</option>
@@ -234,6 +287,8 @@ export function EmployeesPage() {
           </Button>
           <span className="toolbar__spacer">{rows.length} موظف</span>
         </Toolbar>
+          }>
+        
 
         {rows.length ? (
           <TableWrap>
@@ -373,6 +428,61 @@ export function EmployeesPage() {
             </Field>
           </div>
         ) : null}
+      </Modal>
+
+      <Modal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        title="استخراج بيانات"
+        subtitle="تقرير PDF من السجلات المحفوظة — زيارة لكل صف مع عدد الزيارات والمحاضر"
+        footer={
+          <>
+            <Button onClick={() => setExportOpen(false)}>إلغاء</Button>
+            <Button variant="primary" icon="download" onClick={runExport} disabled={exporting}>
+              {exporting ? 'جارٍ الإنشاء…' : 'تصدير PDF'}
+            </Button>
+          </>
+        }
+      >
+        <div className="formgrid">
+          <Field label="الموظف" htmlFor="exp-employee" className="span2">
+            <Select id="exp-employee" value={exportEmployee} onChange={(e) => setExportEmployee(e.target.value)}>
+              <option value="all">كل الموظفين</option>
+              {data.employees.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="نوع التقرير" htmlFor="exp-kind">
+            <Select id="exp-kind" value={exportKind} onChange={(e) => setExportKind(e.target.value as 'month' | 'year')}>
+              <option value="month">تقرير شهري</option>
+              <option value="year">تقرير سنوي</option>
+            </Select>
+          </Field>
+          {exportKind === 'month' ? (
+            <Field label="الشهر" htmlFor="exp-month">
+              <Select id="exp-month" value={exportMonth} onChange={(e) => setExportMonth(Number(e.target.value))}>
+                {Array.from({ length: 12 }, (_, index) => index + 1).map((value) => (
+                  <option key={value} value={value}>
+                    {monthName(value)}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          ) : null}
+          <Field label="السنة" htmlFor="exp-year">
+            <Input
+              id="exp-year"
+              type="number"
+              min={2000}
+              max={2100}
+              value={exportYear}
+              onChange={(e) => setExportYear(Number(e.target.value))}
+            />
+          </Field>
+        </div>
       </Modal>
 
       <Modal

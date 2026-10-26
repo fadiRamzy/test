@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from '../src/App';
@@ -57,15 +57,16 @@ async function pickEmployee(user: ReturnType<typeof userEvent.setup>, controlId:
   await user.click(option);
 }
 
-/** يضبط حقل الوقت (12 ساعة) عبر قوائم الساعة والدقيقة وص/م — التخزين يبقى HH:MM */
+/** يكتب الوقت يدويًا في حقل 12 ساعة («2:30 م») — التخزين يبقى HH:MM */
 async function setTime(user: ReturnType<typeof userEvent.setup>, id: string, value: string) {
   const [hours24, minutes] = value.split(':').map(Number);
-  const container = (document.getElementById(id) as HTMLElement).closest('.timefield') as HTMLElement;
-  const [hourSelect, minuteSelect, periodSelect] = Array.from(container.querySelectorAll('select')) as HTMLSelectElement[];
   const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
-  await user.selectOptions(hourSelect, String(hours12));
-  await user.selectOptions(minuteSelect, String(minutes).padStart(2, '0'));
-  await user.selectOptions(periodSelect, hours24 < 12 ? 'ص' : 'م');
+  const period = hours24 < 12 ? 'ص' : 'م';
+  const text = `${hours12}:${String(minutes).padStart(2, '0')} ${period}`;
+  const input = document.getElementById(id) as HTMLInputElement;
+  await user.clear(input);
+  await user.type(input, text);
+  await user.tab();
 }
 
 describe('إضافة موظف', () => {
@@ -573,7 +574,7 @@ describe('إخفاء وإظهار السجلات', () => {
     expect(await listVisitTimings()).toHaveLength(1);
   });
 
-  it('محاضر يومية: يتبدّل الزر بين إظهار/إخفاء المحاضر ويحفظ السجلات', async () => {
+  it('محاضر يومية: يتبدّل الزر بين إخفاء/إظهار البيانات ويحفظ السجلات', async () => {
     const employee = await seedEmployee();
     const user = userEvent.setup();
     await saveMinute({ employeeId: employee.id, fileReceivedTime: '09:00', responseTime: '09:30', inspectionResult: 'no_notes' });
@@ -581,9 +582,9 @@ describe('إخفاء وإظهار السجلات', () => {
     window.location.hash = '#/minutes';
     renderApp();
 
-    await user.click(await screen.findByRole('button', { name: 'إخفاء المحاضر' }));
+    await user.click(await screen.findByRole('button', { name: 'إخفاء البيانات' }));
     expect(screen.queryByText('9:30 ص')).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'إظهار المحاضر' }));
+    await user.click(screen.getByRole('button', { name: 'إظهار البيانات' }));
     expect(await screen.findByText('9:30 ص')).toBeInTheDocument();
     expect(await listMinutes()).toHaveLength(1);
   });
@@ -921,5 +922,253 @@ describe('إخفاء وإظهار كل القوائم', () => {
     expect(screen.getAllByText('شركة الدلتا').length).toBeGreaterThan(0);
     expect(screen.getByText('كود الموظف')).toBeInTheDocument();
     expect(await listMinutes()).toHaveLength(1);
+  });
+});
+
+describe('إخفاء القائمة مع بقاء الفلاتر', () => {
+  it('توقيت الزيارات: الفلاتر تبقى ظاهرة وتعمل والقائمة مخفية ثم تُعرض النتائج المفلترة', async () => {
+    const employee = await seedEmployee({ code: 'RO-901' });
+    await saveVisitTiming({
+      employeeId: employee.id,
+      visitDate: '2026-03-02',
+      branch: 'فرع المعادي',
+      clientName: 'شركة النور',
+      location: 'المعادي',
+      departureTime: '09:00',
+      returnTime: '10:10',
+    });
+    await saveVisitTiming({
+      employeeId: employee.id,
+      visitDate: '2026-03-03',
+      branch: 'فرع طنطا',
+      clientName: 'شركة الدلتا',
+      location: 'طنطا',
+      departureTime: '09:00',
+      returnTime: '09:35',
+    });
+
+    const user = userEvent.setup();
+    window.location.hash = '#/visit-times';
+    renderApp();
+    await waitFor(() => expect(screen.getAllByText('شركة النور').length).toBeGreaterThan(0));
+
+    await user.click(screen.getByRole('button', { name: 'إخفاء البيانات' }));
+    expect(screen.queryByText('شركة النور')).toBeNull();
+
+    // الفلاتر تبقى ظاهرة وقابلة للاستخدام أثناء الإخفاء
+    const branchFilter = screen.getByLabelText('الفرع في الزيارات');
+    expect(branchFilter).toBeVisible();
+    await user.selectOptions(branchFilter, 'فرع طنطا');
+    expect(screen.getByLabelText('شهر الزيارة')).toBeVisible();
+    expect(screen.getByLabelText('سنة الزيارة')).toBeVisible();
+    expect(screen.getByTestId('visit-count-total').textContent).toContain('1');
+
+    // عند الإظهار تُعرض النتائج المفلترة فقط
+    await user.click(screen.getByRole('button', { name: 'إظهار البيانات' }));
+    expect(screen.getAllByText('شركة الدلتا').length).toBeGreaterThan(0);
+    expect(screen.queryByText('شركة النور')).toBeNull();
+    expect(await listVisitTimings()).toHaveLength(2);
+  });
+
+  it('الموظفون: زر واحد يتبدّل نصّه والفلاتر تبقى متاحة', async () => {
+    await seedEmployee({ name: 'أحمد سالم', code: 'RO-911' });
+    const user = userEvent.setup();
+
+    window.location.hash = '#/employees';
+    renderApp();
+    expect((await screen.findAllByText('أحمد سالم')).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'إخفاء البيانات' }));
+    expect(screen.queryByText('RO-911')).toBeNull();
+    expect(screen.getByLabelText('القطاع')).toBeVisible();
+    expect(screen.getByLabelText('الفرع')).toBeVisible();
+    expect(screen.getAllByRole('button', { name: 'إظهار البيانات' })).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'إظهار البيانات' }));
+    expect(await screen.findByText('RO-911')).toBeInTheDocument();
+  });
+
+  it('محاضر يومية: زر واحد يتبدّل نصّه والفلاتر تبقى متاحة', async () => {
+    const employee = await seedEmployee({ name: 'أحمد سالم', code: 'RO-911' });
+    await saveMinute({ employeeId: employee.id, fileReceivedTime: '09:00', responseTime: '09:30', inspectionResult: 'no_notes' });
+    const user = userEvent.setup();
+    window.location.hash = '#/minutes';
+    renderApp();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'إخفاء البيانات' })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'إخفاء البيانات' }));
+    expect(screen.queryByText('9:30 ص')).toBeNull();
+    expect(screen.getByLabelText('الموظف في المحاضر')).toBeVisible();
+    await user.selectOptions(screen.getByLabelText('الموظف في المحاضر'), employee.id);
+    expect(screen.getByLabelText('شهر المحضر')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'إظهار البيانات' }));
+    expect(await screen.findByText('9:30 ص')).toBeInTheDocument();
+    expect(await listMinutes()).toHaveLength(1);
+  });
+});
+
+describe('ملاحظات الزيارة والوقت اليدوي', () => {
+  it('تُحفظ ملاحظات الزيارة وتظهر في السجلات وفي ملف الموظف', async () => {
+    const employee = await seedEmployee({ code: 'RO-921' });
+    const user = userEvent.setup();
+    window.location.hash = '#/visit-times';
+    renderApp();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة زيارة/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة زيارة/ }));
+    await pickEmployee(user, 'vt-employee', employee.name);
+    await user.type(byId('vt-branch'), 'فرع المعادي');
+    await user.type(byId('vt-client'), 'شركة النور');
+    await user.type(byId('vt-departure'), '2:30 م');
+    await user.tab();
+    await user.type(byId('vt-return'), '3:40 م');
+    await user.tab();
+    await user.type(byId('vt-notes'), 'تمت الزيارة بحضور مدير الفرع');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const [saved] = await listVisitTimings();
+    expect(saved).toMatchObject({
+      departureTime: '14:30',
+      returnTime: '15:40',
+      notes: 'تمت الزيارة بحضور مدير الفرع',
+    });
+    expect(screen.getAllByText('تمت الزيارة بحضور مدير الفرع').length).toBeGreaterThan(0);
+  });
+
+  it('تظهر ملاحظات الزيارة في ملف الموظف', async () => {
+    const employee = await seedEmployee({ code: 'RO-922' });
+    await saveVisitTiming({
+      employeeId: employee.id,
+      visitDate: '2026-03-09',
+      branch: 'فرع طنطا',
+      clientName: 'شركة الدلتا',
+      location: 'طنطا',
+      departureTime: '14:30',
+      returnTime: '15:40',
+      notes: 'تمت الزيارة بحضور مدير الفرع',
+    });
+
+    window.location.hash = `#/employees/${employee.id}`;
+    renderApp();
+    expect(await screen.findByText('تمت الزيارة بحضور مدير الفرع')).toBeInTheDocument();
+    expect(screen.getAllByText('ساعة و10 دقائق').length).toBeGreaterThan(0);
+  });
+
+  it('حقل الوقت يقبل الكتابة اليدوية والاختيار من المنتقي (12 ساعة)', async () => {
+    await seedEmployee();
+    const user = userEvent.setup();
+    window.location.hash = '#/minutes';
+    renderApp();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة محضر/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة محضر/ }));
+
+    // كتابة يدوية
+    await user.type(byId('min-received'), '9:15 ص');
+    await user.tab();
+    expect(byId('min-received').value).toBe('9:15 ص');
+
+    // منتقي الوقت: 3 عصرًا و45 دقيقة
+    const responseField = within(byId('min-response').closest('.timefield') as HTMLElement);
+    await user.click(responseField.getByRole('button', { name: 'اختيار الوقت من القائمة' }));
+    const picker = screen.getByRole('group', { name: 'منتقي الوقت' });
+    await user.selectOptions(within(picker).getByLabelText('الساعة'), '3');
+    await user.selectOptions(within(picker).getByLabelText('الدقيقة'), '45');
+    await user.selectOptions(within(picker).getByLabelText('الفترة'), 'م');
+    expect(byId('min-response').value).toBe('3:45 م');
+    expect(screen.getByTestId('minute-preview').textContent).toContain('6 ساعات و30 دقيقة');
+
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect((await listMinutes())[0]).toMatchObject({ fileReceivedTime: '09:15', responseTime: '15:45' });
+  });
+
+  it('لا تظهر كلمة «اختياري» في تسميات النماذج مع بقاء الحقول اختيارية', async () => {
+    await seedEmployee();
+    const user = userEvent.setup();
+    window.location.hash = '#/visit-times';
+    renderApp();
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة زيارة/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة زيارة/ }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).not.toContain('اختياري');
+    expect(dialog.querySelectorAll('.req')).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(await listVisitTimings()).toHaveLength(1);
+  });
+});
+
+describe('استخراج بيانات الموظفين PDF', () => {
+  it('يفتح نافذة الاستخراج ويولّد PDF من السجلات الفعلية', async () => {
+    const employee = await seedEmployee({ name: 'أبأنوب جرجس', code: 'RO-931' });
+    const today = new Date();
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-05`;
+    await saveVisitTiming({
+      employeeId: employee.id,
+      visitDate: iso,
+      branch: 'فرع طنطا',
+      clientName: 'شركة النور',
+      location: 'طنطا',
+      departureTime: '09:00',
+      returnTime: '09:35',
+    });
+    await saveMinute({ employeeId: employee.id, fileReceivedTime: '09:00', responseTime: '09:20', inspectionResult: 'no_notes' });
+
+    // توفير الخطوط عبر fetch المحاكى (الملفات موجودة في public/fonts)
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const file = url.includes('bold') ? 'public/fonts/cash-arabic-bold.ttf' : 'public/fonts/cash-arabic-regular.ttf';
+      const { readFileSync } = await import('node:fs');
+      const data = readFileSync(file);
+      return new Response(new Uint8Array(data), { status: 200 });
+    }) as typeof fetch;
+
+    let captured: Blob | null = null;
+    const originalCreate = URL.createObjectURL;
+    URL.createObjectURL = ((blob: Blob) => {
+      captured = blob;
+      return 'blob:mock';
+    }) as typeof URL.createObjectURL;
+    URL.revokeObjectURL = (() => undefined) as typeof URL.revokeObjectURL;
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+
+    try {
+      const user = userEvent.setup();
+      window.location.hash = '#/employees';
+      renderApp();
+
+      await user.click(await screen.findByRole('button', { name: 'استخراج بيانات' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('كل الموظفين')).toBeInTheDocument();
+      expect(within(dialog).getByLabelText('نوع التقرير')).toBeInTheDocument();
+      expect(within(dialog).getByLabelText('الشهر')).toBeInTheDocument();
+
+      await user.selectOptions(within(dialog).getByLabelText('الموظف'), employee.id);
+      await user.selectOptions(within(dialog).getByLabelText('نوع التقرير'), 'year');
+      expect(within(dialog).queryByLabelText('الشهر')).toBeNull();
+
+      await user.click(within(dialog).getByRole('button', { name: /تصدير PDF/ }));
+      await waitFor(() => expect(captured).not.toBeNull());
+      expect(captured!.type).toBe('application/pdf');
+      expect(captured!.size).toBeGreaterThan(30000);
+      expect(clickSpy).toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+      URL.createObjectURL = originalCreate;
+      clickSpy.mockRestore();
+    }
+  });
+});
+
+describe('النسخ الاحتياطي المبسّط', () => {
+  it('يبقى التصدير والاستيراد فقط دون أزرار أو أقسام زائدة', async () => {
+    await seedEmployee();
+    window.location.hash = '#/reports';
+    renderApp();
+
+    expect(await screen.findByRole('button', { name: /تصدير نسخة كاملة/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /استيراد نسخة/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /عرض عدد السجلات/ })).toBeNull();
+    expect(screen.queryByText('لم يُعرض العدد بعد')).toBeNull();
   });
 });

@@ -111,8 +111,9 @@ export function AnnualEvaluationsPage() {
         <h1>{settings.organizationName} — التقييم السنوي {year}</h1>
       </div>
 
-      <ListCard id="annual-records" title="الملخص السنوي — جدول الإدخال" note="الجدول مخفي — اضغط «إظهار البيانات» لعرضه.">
-        <Toolbar>
+      <ListCard id="annual-records" title="الملخص السنوي — جدول الإدخال" note="الجدول مخفي — اضغط «إظهار البيانات» لعرضه."
+        controls={
+          <Toolbar>
           <Select value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="السنة">
             {YEARS.map((item) => (
               <option key={item} value={item}>
@@ -131,6 +132,8 @@ export function AnnualEvaluationsPage() {
           </Select>
           <span className="toolbar__spacer">{rows.length} موظف</span>
         </Toolbar>
+        }>
+        
 
         {rows.length ? (
           <TableWrap>
