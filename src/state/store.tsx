@@ -5,6 +5,8 @@ import {
   listAttendanceRecords,
   listLeavePermissions,
   listEmployees,
+  listEmployeeNotes,
+  migrateLegacyEmployeeNotes,
   listFieldVisits,
   listLeaves,
   listMinutes,
@@ -19,6 +21,7 @@ import {
   type AppSettings,
   type DailyMinute,
   type Employee,
+  type EmployeeNote,
   type FieldVisit,
   type Leave,
   type LeavePermissionRecord,
@@ -36,6 +39,7 @@ export interface Toast {
 
 export interface AppData {
   employees: Employee[];
+  employeeNotes: EmployeeNote[];
   evaluations: MonthlyEvaluation[];
   visits: FieldVisit[];
   minutes: DailyMinute[];
@@ -49,6 +53,7 @@ export interface AppData {
 
 const EMPTY: AppData = {
   employees: [],
+  employeeNotes: [],
   evaluations: [],
   visits: [],
   minutes: [],
@@ -94,9 +99,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((toast) => toast.id !== id)), []);
 
   const load = useCallback(async () => {
-    const [employees, evaluations, visits, minutes, visitTimings, observations, leaves, leavePermissions, attendanceRecords, annualNotes, loadedSettings] =
+    await migrateLegacyEmployeeNotes();
+    const [employees, employeeNotes, evaluations, visits, minutes, visitTimings, observations, leaves, leavePermissions, attendanceRecords, annualNotes, loadedSettings] =
       await Promise.all([
       listEmployees(true),
+      listEmployeeNotes(),
       listMonthlyEvaluations(),
       listFieldVisits(),
       listMinutes(),
@@ -108,7 +115,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       listAnnualNotes(),
       readSettings(),
     ]);
-    setData({ employees, evaluations, visits, minutes, visitTimings, observations, leaves, leavePermissions, attendanceRecords, annualNotes });
+    setData({ employees, employeeNotes, evaluations, visits, minutes, visitTimings, observations, leaves, leavePermissions, attendanceRecords, annualNotes });
     setSettings(loadedSettings);
   }, []);
 

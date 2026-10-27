@@ -120,6 +120,17 @@ describe('تقرير PDF الكامل للموظف — تخطيط متكيف ع�
     writeFileSync('/tmp/employee-very-long-notes.pdf',pdf);
   });
 
+  it('يرقم ملاحظات الموظف الخاصة به في PDF مع عدّ الزيارات المدرجة', async () => {
+    const data={...testData,employeeNotes:[
+      {...base('note-pdf-1'),employeeId:employee.id,note:'ملاحظة عربية أولى.'},
+      {...base('note-pdf-2'),employeeId:employee.id,note:'ملاحظة ثانية ذات سطر محفوظ.'},
+      {...base('note-other'),employeeId:'different-employee',note:'لا تظهر في هذا الملف.'},
+    ]};
+    const pdf=await buildCompleteEmployeePdf(data,fonts());
+    expect(pagesIn(pdf)).toBe(1);
+    writeFileSync('/tmp/employee-notes-numbered.pdf',pdf);
+  });
+
   it('يستوعب أكثر من 53 سجلًا بصفحات إضافية بدل رفض التصدير', async () => {
     const minutes = Array.from({length: 60}, (_, i) => ({
       ...base(`minute-${i}`), employeeId: employee.id, date: `2026-${String(i % 12 + 1).padStart(2,'0')}-15`,

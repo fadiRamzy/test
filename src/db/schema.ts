@@ -32,6 +32,12 @@ export interface Employee extends BaseRecord {
   notes: string;
 }
 
+/** ملاحظة منفصلة مرتبطة بموظف واحد. */
+export interface EmployeeNote extends BaseRecord {
+  employeeId: ID;
+  note: string;
+}
+
 /**
  * حالة الموظف — الخيارات المعتمدة: «تعيين» و«مستقيل».
  * القيم الداخلية (active / inactive) بقيت كما هي عن قصد حتى لا تُفقد أو تُعاد كتابة
@@ -347,10 +353,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
 /* ---------------------------------------------------------------------- */
 
 export const DB_NAME = 'risk-officer-suite';
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
 
 export const STORE_NAMES = [
   'employees',
+  'employeeNotes',
   'monthlyEvaluations',
   'fieldVisits',
   'minutes',
@@ -367,6 +374,7 @@ export const STORE_NAMES = [
 export type StoreName = (typeof STORE_NAMES)[number];
 export type EntityName =
   | 'employees'
+  | 'employeeNotes'
   | 'monthlyEvaluations'
   | 'fieldVisits'
   | 'minutes'
@@ -379,6 +387,7 @@ export type EntityName =
 
 export const ENTITY_LABELS: Record<EntityName, string> = {
   employees: 'الموظفون',
+  employeeNotes: 'ملاحظات الموظفين',
   monthlyEvaluations: 'التقييمات الشهرية',
   fieldVisits: 'الزيارات الميدانية',
   minutes: 'محاضر يومية',

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useApp } from '../state/store';
 import { navigate } from '../state/router';
 import {
@@ -14,7 +14,6 @@ import {
   Stat,
   Table,
   TableWrap,
-  Textarea,
   Toolbar,
 } from '../components/ui';
 import {
@@ -29,7 +28,7 @@ import {
 import { leaveTotals, minuteTiming, monthlyTotals, visitTiming } from '../lib/calc';
 import { fmtDate, fmtDurationWords, fmtNumber, fmtTime, monthName } from '../lib/format';
 import { downloadCsv, csvFileName } from '../lib/csv';
-import { saveEmployee } from '../db/repo';
+import { EmployeeNotesManager } from '../components/EmployeeNotes';
 import { buildCompleteEmployeePdf, employeePdfFileName } from '../lib/pdf/completeEmployee';
 import { downloadPdf, loadReportFonts } from '../lib/pdf/loadFonts';
 
@@ -43,18 +42,14 @@ import { downloadPdf, loadReportFonts } from '../lib/pdf/loadFonts';
  * لا تظهر أي سجلات أو مؤشرات تخص موظفين آخرين أو لوحة متابعة عامة.
  */
 export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
-  const { data, runAction, notify } = useApp();
+  const { data, notify } = useApp();
 
   // فلاتر سجلات هذا الموظف (الشهر / السنة / الفرع / بحث نصي) — لا تغيّر أي سجل محفوظ
   const [query, setQuery] = useState('');
   const [monthFilter, setMonthFilter] = useState('all');
   const [yearFilter, setYearFilter] = useState('all');
   const [branchFilter, setBranchFilter] = useState('all');
-  const [profileNotes, setProfileNotes] = useState('');
-  const [savingProfileNotes, setSavingProfileNotes] = useState(false);
-
   const employee = data.employees.find((row) => row.id === employeeId);
-  useEffect(() => setProfileNotes(employee?.notes ?? ''), [employeeId, employee?.notes]);
 
   const allMinutes = useMemo(
     () => data.minutes.filter((row) => row.employeeId === employeeId),
@@ -241,22 +236,12 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
     );
   };
 
-  const saveProfileNotes = async () => {
-    setSavingProfileNotes(true);
-    try {
-      await runAction(() => saveEmployee({ ...employee, notes: profileNotes }), 'تم حفظ ملاحظات الموظف.');
-    } catch {
-      // رسالة الخطأ معروضة عبر runAction.
-    } finally {
-      setSavingProfileNotes(false);
-    }
-  };
-
   const exportCompletePdf = async () => {
     try {
       const fonts = await loadReportFonts();
       const pdf = await buildCompleteEmployeePdf({
         employee,
+        employeeNotes: data.employeeNotes.filter((row) => row.employeeId === employee.id),
         visits: data.visitTimings.filter((row) => row.employeeId === employee.id),
         minutes: data.minutes.filter((row) => row.employeeId === employee.id),
         legacyLeaves: data.leaves.filter((row) => row.employeeId === employee.id),
@@ -373,17 +358,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
         </div>
       </section>
 
-      <Card title="ملاحظات على الموظف" subtitle="تُحفظ هذه الملاحظات ضمن بيانات الموظف وتظهر في ملفه وفي تقرير PDF.">
-        <div className="formgrid">
-          <div className="field span2">
-            <label htmlFor="profile-employee-notes">ملاحظات على الموظف</label>
-            <Textarea id="profile-employee-notes" rows={5} value={profileNotes} onChange={(event) => setProfileNotes(event.target.value)} />
-          </div>
-          <div className="span2 formrow">
-            <Button variant="primary" icon="save" disabled={savingProfileNotes} onClick={saveProfileNotes}>{savingProfileNotes ? 'جارٍ الحفظ…' : 'حفظ الملاحظات'}</Button>
-          </div>
-        </div>
-      </Card>
+      <EmployeeNotesManager employees={data.employees} notes={data.employeeNotes} employeeId={employee.id} />
 
       <h2 className="profile-section">البيانات الأساسية</h2>
       <ListCard
@@ -436,7 +411,6 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
             <dd>{EMPLOYEE_STATUS_LABELS[employee.status]}</dd>
           </div>
         </dl>
-        {employee.notes ? <p className="small muted note-block">ملاحظات: {employee.notes}</p> : null}
       </ListCard>
 
       <h2 className="profile-section">محاضر يومية</h2>

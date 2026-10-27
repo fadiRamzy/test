@@ -3,6 +3,10 @@ import { clearStore, useDatabase } from '../src/db/database';
 import {
   ValidationError,
   deleteEmployee,
+  deleteEmployeeNote,
+  listEmployeeNotes,
+  migrateLegacyEmployeeNotes,
+  saveEmployeeNote,
   deleteMinute,
   listFieldVisits,
   listLeaves,
@@ -88,6 +92,30 @@ describe('الموظفون', () => {
     expect(updated.branches).toBe('فرع ب');
     const { listEmployees } = await import('../src/db/repo');
     expect(await listEmployees()).toHaveLength(1);
+  });
+
+  it('يحفظ الملاحظات كسجلات مستقلة ويدعم تعديل وحذف سجل واحد', async () => {
+    const employee = await makeEmployee({ code: 'RO-N1' });
+    const other = await makeEmployee({ code: 'RO-N2' });
+    const first = await saveEmployeeNote({ employeeId: employee.id, note: 'ملاحظة أولى' });
+    await saveEmployeeNote({ employeeId: employee.id, note: 'ملاحظة ثانية' });
+    await saveEmployeeNote({ id: first.id, employeeId: employee.id, note: 'ملاحظة معدلة' });
+    await saveEmployeeNote({ employeeId: other.id, note: 'ملاحظة موظف آخر' });
+    expect((await listEmployeeNotes()).filter((row) => row.employeeId === employee.id)).toHaveLength(2);
+    expect((await listEmployeeNotes()).find((row) => row.id === first.id)?.note).toBe('ملاحظة معدلة');
+    await deleteEmployeeNote(first.id);
+    expect((await listEmployeeNotes()).filter((row) => row.employeeId === employee.id).map((row) => row.note)).toEqual(['ملاحظة ثانية']);
+  });
+
+  it('يرحّل الملاحظات القديمة دون فقد أو تكرار', async () => {
+    const employee = await makeEmployee({ code: 'RO-LEGACY', notes: 'ملاحظة سابقة\nسطر محفوظ' });
+    await migrateLegacyEmployeeNotes();
+    await migrateLegacyEmployeeNotes();
+    const migrated = await listEmployeeNotes();
+    expect(migrated.filter((row) => row.employeeId === employee.id)).toHaveLength(1);
+    expect(migrated.find((row) => row.employeeId === employee.id)?.note).toBe('ملاحظة سابقة\nسطر محفوظ');
+    const { listEmployees } = await import('../src/db/repo');
+    expect((await listEmployees(true)).find((row) => row.id === employee.id)?.notes).toBe('');
   });
 });
 

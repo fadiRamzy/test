@@ -16,7 +16,6 @@ import {
   Select,
   Table,
   TableWrap,
-  Textarea,
   Toolbar,
 } from '../components/ui';
 import { ValidationError, deleteEmployee, nextEmployeeNo, saveEmployee, setEmployeeArchived } from '../db/repo';
@@ -26,6 +25,7 @@ import { downloadCsv, csvFileName } from '../lib/csv';
 import { buildCashReportPdf, reportFileName } from '../lib/pdf/report';
 import { buildEmployeeReport } from '../lib/pdf/employeeReport';
 import { downloadPdf, loadReportFonts } from '../lib/pdf/loadFonts';
+import { EmployeeNotesManager } from '../components/EmployeeNotes';
 
 interface Draft {
   id?: string;
@@ -172,7 +172,7 @@ export function EmployeesPage() {
         row.employmentDate,
         row.branches,
         EMPLOYEE_STATUS_LABELS[row.status],
-        row.notes,
+        data.employeeNotes.filter((note) => note.employeeId === row.id).map((note) => note.note).join('\n') || row.notes,
       ]),
     );
   };
@@ -237,6 +237,8 @@ export function EmployeesPage() {
           </>
         }
       />
+
+      <EmployeeNotesManager employees={data.employees} notes={data.employeeNotes} />
 
       <ListCard
         id="employees-list"
@@ -422,9 +424,6 @@ export function EmployeesPage() {
                   </option>
                 ))}
               </Select>
-            </Field>
-            <Field label="ملاحظات عامة" htmlFor="emp-notes" className="span2">
-              <Textarea id="emp-notes" rows={2} value={draft.notes} onChange={(e) => set('notes', e.target.value)} />
             </Field>
           </div>
         ) : null}

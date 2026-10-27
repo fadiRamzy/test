@@ -50,6 +50,7 @@ export function openDatabase(name = currentName): Promise<IDBDatabase> {
         });
       };
       create('employees', ['code', 'sector', 'governorate', 'employeeNo', 'status']);
+      create('employeeNotes', ['employeeId', 'createdAt']);
       create('monthlyEvaluations', ['employeeId', 'year']);
       create('fieldVisits', ['employeeId', 'visitDate', 'status']);
       create('minutes', ['employeeId', 'date', 'status']);

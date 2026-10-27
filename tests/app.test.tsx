@@ -6,6 +6,7 @@ import { AppProvider } from '../src/state/store';
 import { clearStore, useDatabase } from '../src/db/database';
 import {
   listEmployees,
+  listEmployeeNotes,
   listMinutes,
   listVisitTimings,
   listLeavePermissions,
@@ -140,12 +141,45 @@ describe('الإجازات والأذونات في الواجهة وملف ال�
     expect(screen.getByText('إذن اختبار')).toBeInTheDocument();
     expect(screen.getByText('1 إجازة · 1 إذن · 2 سجل')).toBeInTheDocument();
 
-    await user.type(byId('profile-employee-notes'), 'ملاحظة خاصة بالتقرير');
-    await user.click(screen.getByRole('button', { name: 'حفظ الملاحظات' }));
-    await waitFor(async () => expect((await listEmployees()).find((row) => row.id === employee.id)?.notes).toBe('ملاحظة خاصة بالتقرير'));
+    await user.type(byId('profile-note-text'), 'ملاحظة خاصة بالتقرير');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+    await waitFor(async () => expect((await listEmployeeNotes()).filter((row) => row.employeeId === employee.id).map((row) => row.note)).toContain('ملاحظة خاصة بالتقرير'));
     refreshedApp.unmount();
     renderApp();
-    expect(await screen.findByDisplayValue('ملاحظة خاصة بالتقرير')).toBeInTheDocument();
+    expect(await screen.findByText('ملاحظة خاصة بالتقرير')).toBeInTheDocument();
+  });
+});
+
+describe('ملاحظات الموظف المنظمة', () => {
+  it('يحفظ ملاحظات منفصلة من قسم الموظفين ويعرض ملاحظات الموظف المحدد بعد إعادة التحميل', async () => {
+    const first = await seedEmployee({ name: 'مها حسن', code: 'RO-NOTE-1' });
+    const second = await seedEmployee({ name: 'سلمى علي', code: 'RO-NOTE-2' });
+    const user = userEvent.setup();
+    window.location.hash = '#/employees';
+    const app = renderApp();
+    await screen.findByRole('heading', { name: 'الموظفون' });
+
+    expect(selectById('employee-note-employee').options).toHaveLength(3);
+    await user.selectOptions(selectById('employee-note-employee'), first.id);
+    await user.type(byId('employee-note-text'), 'ملاحظة خاصة بمها');
+    await user.click(screen.getByRole('button', { name: 'حفظ الملاحظة' }));
+    expect(await screen.findByText('ملاحظة خاصة بمها')).toBeInTheDocument();
+
+    await user.selectOptions(selectById('employee-note-employee'), second.id);
+    await user.type(byId('employee-note-text'), 'ملاحظة خاصة بسلمى');
+    await user.click(screen.getByRole('button', { name: 'حفظ الملاحظة' }));
+    expect(await screen.findByText('ملاحظة خاصة بسلمى')).toBeInTheDocument();
+    await waitFor(async () => expect(await listEmployeeNotes()).toHaveLength(2));
+
+    app.unmount();
+    window.location.hash = `#/employees/${first.id}`;
+    const refreshed = renderApp();
+    expect(await screen.findByText('ملاحظة خاصة بمها')).toBeInTheDocument();
+    expect(screen.queryByText('ملاحظة خاصة بسلمى')).not.toBeInTheDocument();
+    refreshed.unmount();
+    renderApp();
+    expect(await screen.findByText('ملاحظة خاصة بمها')).toBeInTheDocument();
+    expect(screen.queryByText('ملاحظة خاصة بسلمى')).not.toBeInTheDocument();
   });
 });
 
@@ -194,7 +228,7 @@ describe('إضافة موظف', () => {
     await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(await screen.findByText('هدى سامي')).toBeInTheDocument();
+    expect(await within(screen.getByRole('table')).findByText('هدى سامي')).toBeInTheDocument();
     expect(screen.getByText('RO-777')).toBeInTheDocument();
   });
 
@@ -811,13 +845,13 @@ describe('الفلاتر', () => {
     await waitFor(() => expect(screen.getAllByText('أحمد سالم').length).toBeGreaterThan(0));
 
     await user.selectOptions(screen.getByLabelText('الفرع'), 'فرع المعادي');
-    await waitFor(() => expect(screen.queryByText('منى فتحي')).toBeNull());
+    await waitFor(() => expect(within(screen.getByRole('table')).queryByText('منى فتحي')).toBeNull());
     expect(screen.getAllByText('أحمد سالم').length).toBeGreaterThan(0);
 
     // فرع مشترك + حالة: لا نتائج
     await user.selectOptions(screen.getByLabelText('الفرع'), 'فرع طنطا');
     await user.selectOptions(screen.getByLabelText('حالة الموظف'), 'active');
-    await waitFor(() => expect(screen.queryByText('منى فتحي')).toBeNull());
+    await waitFor(() => expect(within(screen.getByRole('table')).queryByText('منى فتحي')).toBeNull());
     expect(screen.getAllByText('أحمد سالم').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: /إعادة تعيين/ }));

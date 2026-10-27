@@ -7,6 +7,7 @@ import {
   type AppSettings,
   type DailyMinute,
   type Employee,
+  type EmployeeNote,
   type EntityName,
   type FieldVisit,
   type Leave,
@@ -21,6 +22,7 @@ export const BACKUP_FORMAT = 1;
 
 export const ENTITIES: EntityName[] = [
   'employees',
+  'employeeNotes',
   'monthlyEvaluations',
   'fieldVisits',
   'minutes',
@@ -34,6 +36,7 @@ export const ENTITIES: EntityName[] = [
 
 export interface BackupData {
   employees: Employee[];
+  employeeNotes: EmployeeNote[];
   monthlyEvaluations: MonthlyEvaluation[];
   fieldVisits: FieldVisit[];
   minutes: DailyMinute[];
@@ -58,6 +61,7 @@ export async function createBackup(): Promise<BackupPayload> {
   const settings = await readSettings();
   const data: BackupData = {
     employees: await getAll<Employee>('employees'),
+    employeeNotes: await getAll<EmployeeNote>('employeeNotes'),
     monthlyEvaluations: await getAll<MonthlyEvaluation>('monthlyEvaluations'),
     fieldVisits: await getAll<FieldVisit>('fieldVisits'),
     minutes: await getAll<DailyMinute>('minutes'),
@@ -102,7 +106,7 @@ export function validateBackup(raw: unknown): ValidationResult {
     const rows = data[entity];
     if (!Array.isArray(rows)) {
       // النسخ الاحتياطية الأقدم من إضافة «توقيت الزيارات» تُقبل بقسم فارغ
-      if (['visitTimings', 'leavePermissions', 'attendanceRecords'].includes(entity)) {
+      if (['visitTimings', 'leavePermissions', 'attendanceRecords', 'employeeNotes'].includes(entity)) {
         counts[entity] = 0;
         warnings.push(`النسخة لا تحتوي قسم «${ENTITY_LABELS[entity]}» — سيُستورد فارغًا.`);
         continue;

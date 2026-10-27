@@ -1072,6 +1072,15 @@ body {
 .timefield__actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .timefield.is-open .timefield__row .input { border-color: var(--brand-500); box-shadow: 0 0 0 3px rgba(27, 90, 138, 0.12); }
 
+.employee-note-form { margin-bottom: 14px; }
+.employee-note-list { display: grid; gap: 8px; margin-top: 12px; }
+.employee-note-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-sunken); }
+.employee-note-content { min-width: 0; flex: 1; }
+.employee-note-owner { display: block; margin-bottom: 5px; color: var(--brand-800); }
+.employee-note-content p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.employee-note-actions { display: flex; flex: 0 0 auto; gap: 5px; }
+.employee-note-empty { margin: 8px 0 0; }
+
 /* احترام تقليل الحركة */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

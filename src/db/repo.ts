@@ -9,6 +9,7 @@ import {
   type AttendanceRecord,
   type DailyMinute,
   type Employee,
+  type EmployeeNote,
   type FieldVisit,
   type Leave,
   type LeavePermissionRecord,
@@ -42,6 +43,54 @@ export async function listEmployees(includeArchived = false): Promise<Employee[]
     .map((row) => ({ ...row, status: normalizeEmployeeStatus(row.status) }))
     .filter((row) => (includeArchived ? true : !row.archived))
     .sort((a, b) => a.employeeNo - b.employeeNo || a.name.localeCompare(b.name, 'ar'));
+}
+
+export async function listEmployeeNotes(): Promise<EmployeeNote[]> {
+  return (await getAll<EmployeeNote>('employeeNotes')).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/** Preserve existing employee.notes values by converting each into a note record once. */
+export async function migrateLegacyEmployeeNotes(): Promise<void> {
+  const [employees, notes] = await Promise.all([getAll<Employee>('employees'), getAll<EmployeeNote>('employeeNotes')]);
+  const known = new Set(notes.map((row) => row.id));
+  for (const employee of employees) {
+    if (!trim(employee.notes)) continue;
+    const legacyId = `legacy-employee-note-${employee.id}`;
+    if (!known.has(legacyId)) {
+      await putRecord('employeeNotes', {
+        id: legacyId,
+        createdAt: employee.updatedAt || nowIso(),
+        updatedAt: nowIso(),
+        employeeId: employee.id,
+        note: employee.notes,
+      });
+      known.add(legacyId);
+    }
+    await putRecord('employees', { ...employee, notes: '', updatedAt: nowIso() });
+  }
+}
+
+export async function saveEmployeeNote(input: { id?: string; employeeId: string; note: string }): Promise<EmployeeNote> {
+  const note = input.note.trim();
+  if (!input.employeeId) fail({ employeeId: 'الموظف مطلوب' });
+  if (!note) fail({ note: 'الملاحظة مطلوبة' });
+  const [employees, existing] = await Promise.all([getAll<Employee>('employees'), getAll<EmployeeNote>('employeeNotes')]);
+  if (!employees.some((row) => row.id === input.employeeId)) fail({ employeeId: 'الموظف المحدد غير موجود' });
+  const current = input.id ? existing.find((row) => row.id === input.id) : undefined;
+  if (input.id && !current) fail({ note: 'الملاحظة غير موجودة' });
+  const record: EmployeeNote = {
+    id: current?.id ?? uid('enote'),
+    createdAt: current?.createdAt ?? nowIso(),
+    updatedAt: nowIso(),
+    employeeId: input.employeeId,
+    note,
+  };
+  await putRecord('employeeNotes', record);
+  return record;
+}
+
+export async function deleteEmployeeNote(id: string): Promise<void> {
+  await deleteRecord('employeeNotes', id);
 }
 
 export async function nextEmployeeNo(): Promise<number> {
@@ -100,7 +149,7 @@ export async function setEmployeeArchived(id: string, archived: boolean): Promis
 
 /** حذف نهائي — يُسمح فقط إذا لم يكن للموظف أي سجلات */
 export async function deleteEmployee(id: string): Promise<void> {
-  const [evaluations, visits, minutes, visitTimings, observations, leaves, requests, attendance] = await Promise.all([
+  const [evaluations, visits, minutes, visitTimings, observations, leaves, requests, attendance, employeeNotes] = await Promise.all([
     getAll<MonthlyEvaluation>('monthlyEvaluations'),
     getAll<FieldVisit>('fieldVisits'),
     getAll<DailyMinute>('minutes'),
@@ -109,6 +158,7 @@ export async function deleteEmployee(id: string): Promise<void> {
     getAll<Leave>('leaves'),
     getAll<LeavePermissionRecord>('leavePermissions'),
     getAll<AttendanceRecord>('attendanceRecords'),
+    getAll<EmployeeNote>('employeeNotes'),
   ]);
   const linked =
     evaluations.filter((row) => row.employeeId === id).length +
@@ -118,7 +168,8 @@ export async function deleteEmployee(id: string): Promise<void> {
     observations.filter((row) => row.employeeId === id).length +
     leaves.filter((row) => row.employeeId === id).length +
     requests.filter((row) => row.employeeId === id).length +
-    attendance.filter((row) => row.employeeId === id).length;
+    attendance.filter((row) => row.employeeId === id).length +
+    employeeNotes.filter((row) => row.employeeId === id).length;
 
   if (linked > 0) {
     fail({ form: `لا يمكن الحذف: للموظف ${linked} سجلًا مرتبطًا. استخدم «أرشفة» بدلًا من الحذف.` });

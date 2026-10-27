@@ -1,4 +1,4 @@
-import type { AnnualNote, AttendanceRecord, DailyMinute, Employee, FieldVisit, Leave, LeavePermissionRecord, MonthlyEvaluation, Observation, VisitTiming } from '../../db/schema';
+import type { AnnualNote, AttendanceRecord, DailyMinute, Employee, EmployeeNote, FieldVisit, Leave, LeavePermissionRecord, MonthlyEvaluation, Observation, VisitTiming } from '../../db/schema';
 import { EMPLOYEE_STATUS_LABELS, INSPECTION_RESULT_LABELS, MINUTE_RESULT_LABELS, MINUTE_STATUS_LABELS, OBSERVATION_STATUS_LABELS, SEVERITY_LABELS } from '../../db/schema';
 import { attendanceDelayMinutes, earlyDepartureMinutes } from '../attendance';
 import { minuteTiming } from '../calc';
@@ -9,6 +9,7 @@ import { wrapText } from './shape';
 
 export interface CompleteEmployeeData {
   employee: Employee;
+  employeeNotes?: EmployeeNote[];
   visits: VisitTiming[];
   minutes: DailyMinute[];
   legacyLeaves: Leave[];
@@ -30,9 +31,9 @@ const CONTENT_W = PAGE_W - MARGIN * 2;
 const TOP = 48;
 const FOOTER_TOP = PAGE_H - 28;
 const BODY_SIZE = 9.4;
-const LINE_H = 11.1;
-const CELL_PAD_X = 3.4;
-const CELL_PAD_Y = 3;
+const LINE_H = 12;
+const CELL_PAD_X = 4;
+const CELL_PAD_Y = 4;
 const C = {
   navy: '0.141 0.231 0.325', // #243B53
   section: '0.259 0.416 0.541', // #426A8A
@@ -128,12 +129,13 @@ export async function buildCompleteEmployeePdf(data: CompleteEmployeeData, fonts
   newPage();
 
   const sectionTitle = (title: string, continued = false) => {
+    y += 2;
     page.text(continued ? `${title} — تابع` : title,{x:MARGIN,top:y,font:'bold',size:11.2,color:C.section,align:'right',maxWidth:CONTENT_W});
-    page.line(MARGIN,y+13.2,PAGE_W-MARGIN,y+13.2,C.border,.55);
-    y += 18;
+    page.line(MARGIN,y+14,PAGE_W-MARGIN,y+14,C.border,.55);
+    y += 20;
   };
   const startSection = (title: string, firstBlockHeight = 20) => {
-    if (y + 18 + firstBlockHeight > contentBottom) newPage();
+    if (y + 20 + firstBlockHeight > contentBottom) newPage();
     sectionTitle(title);
   };
   const rowLines = (row: Record<string,string>, columns: Column[], size = BODY_SIZE) =>
@@ -163,12 +165,12 @@ export async function buildCompleteEmployeePdf(data: CompleteEmployeeData, fonts
   };
   const drawTitleBand = (title: string, x: number, width: number) => {
     drawTitleBandAt(title,x,width,y);
-    y+=15;
+    y+=18;
   };
   const drawRowPart = (wrapped: string[][], columns: Column[], x: number, width: number,
     firstLine: number, takeLines: number, index: number, size = BODY_SIZE) => {
     const visible=Math.max(1,...wrapped.map(lines=>Math.min(takeLines,Math.max(0,lines.length-firstLine))));
-    const height=Math.max(15,visible*LINE_H+CELL_PAD_Y*2);
+    const height=Math.max(18,visible*LINE_H+CELL_PAD_Y*2);
     page.rect(x,y,width,height,{fill:index%2?C.alt:C.white});
     page.rect(x,y,width,height,{stroke:C.border,lineWidth:.4});
     let right=x+width;
@@ -190,7 +192,7 @@ export async function buildCompleteEmployeePdf(data: CompleteEmployeeData, fonts
     const bandH=options.titleBand&&table.title?15:0;
     const wrappedRows=table.rows.map(row=>rowLines(row,cols,size));
     const firstLines=wrappedRows.length?rowLineCount(wrappedRows[0]):1;
-    const firstH=Math.max(15,firstLines*LINE_H+CELL_PAD_Y*2);
+    const firstH=Math.max(18,firstLines*LINE_H+CELL_PAD_Y*2);
     startSection(title,bandH+headerH+Math.min(firstH,contentBottom-TOP));
     const openPart=(continued:boolean)=>{
       if(continued){newPage();sectionTitle(title,true);}
@@ -201,8 +203,8 @@ export async function buildCompleteEmployeePdf(data: CompleteEmployeeData, fonts
     for(let index=0;index<table.rows.length;index++){
       const wrapped=wrappedRows[index];
       const totalLines=rowLineCount(wrapped);
-      const wholeHeight=Math.max(15,totalLines*LINE_H+CELL_PAD_Y*2);
-      const fullPageLines=Math.floor((contentBottom-(TOP+18+bandH+headerH)-2*CELL_PAD_Y)/LINE_H);
+      const wholeHeight=Math.max(18,totalLines*LINE_H+CELL_PAD_Y*2);
+      const fullPageLines=Math.floor((contentBottom-(TOP+20+bandH+headerH)-2*CELL_PAD_Y)/LINE_H);
       if(totalLines<=fullPageLines && y+wholeHeight>contentBottom)openPart(true);
       let firstLine=0;
       while(firstLine<totalLines){
@@ -231,14 +233,14 @@ export async function buildCompleteEmployeePdf(data: CompleteEmployeeData, fonts
     const count=Math.max(rightTable.rows.length,leftTable.rows.length);
     const headerH=17, bandH=options.titleBand?15:0;
     const firstLines=Math.max(rightLines[0]??0,leftLines[0]??0,1);
-    startSection(title,bandH+headerH+Math.min(Math.max(15,firstLines*LINE_H+CELL_PAD_Y*2),contentBottom-TOP));
+    startSection(title,bandH+headerH+Math.min(Math.max(18,firstLines*LINE_H+CELL_PAD_Y*2),contentBottom-TOP));
     const openPart=(continued:boolean)=>{
       if(continued){newPage();sectionTitle(title,true);}
       if(options.titleBand&&(rightTable.title||leftTable.title)){
         const bandY=y;
         if(rightTable.title)drawTitleBandAt(rightTable.title,MARGIN+half+gap,half,bandY);
         if(leftTable.title)drawTitleBandAt(leftTable.title,MARGIN,half,bandY);
-        y=bandY+15;
+        y=bandY+18;
       }
       const headerTop=y;
       drawHeader(rightCols,MARGIN+half+gap,half,headerH);
@@ -252,8 +254,8 @@ export async function buildCompleteEmployeePdf(data: CompleteEmployeeData, fonts
       const rightWrapped=rightRow?rowLines(rightRow,rightCols,options.bodySize??BODY_SIZE):[];
       const leftWrapped=leftRow?rowLines(leftRow,leftCols,options.bodySize??BODY_SIZE):[];
       const lines=Math.max(rightRow?rowLineCount(rightWrapped):0,leftRow?rowLineCount(leftWrapped):0,1);
-      const wholeHeight=Math.max(15,lines*LINE_H+CELL_PAD_Y*2);
-      const maxLines=Math.floor((contentBottom-(TOP+18+headerH+bandH)-CELL_PAD_Y*2)/LINE_H);
+      const wholeHeight=Math.max(18,lines*LINE_H+CELL_PAD_Y*2);
+      const maxLines=Math.floor((contentBottom-(TOP+20+headerH+bandH)-CELL_PAD_Y*2)/LINE_H);
       if(lines<=maxLines&&y+wholeHeight>contentBottom)openPart(true);
       let firstLine=0;
       while(firstLine<lines){
@@ -284,47 +286,43 @@ export async function buildCompleteEmployeePdf(data: CompleteEmployeeData, fonts
     const rowRecords:Record<string,string>[]=[];
     for(let i=0;i<infoPairs.length;i+=2)rowRecords.push({label1:infoPairs[i][0],value1:infoPairs[i][1],label2:infoPairs[i+1]?.[0]??'',value2:infoPairs[i+1]?.[1]??''});
     const cols:Column[]=[{label:'البيان',width:60,value:'label1'},{label:'القيمة',width:CONTENT_W/2-60,value:'value1'},{label:'البيان',width:60,value:'label2'},{label:'القيمة',width:CONTENT_W/2-60,value:'value2'}];
-    startSection('بيانات الموظف',rowRecords.length*18);
+    const infoRowHeight=20;
+    startSection('بيانات الموظف',rowRecords.length*infoRowHeight);
     rowRecords.forEach((row,index)=>{
       let right=PAGE_W-MARGIN;
       cols.forEach(col=>{
         const cx=right-col.width,isLabel=col.value.startsWith('label'),text=row[col.value];
-        page.rect(cx,y,col.width,18,{fill:isLabel?C.headerFill:index%2?C.alt:C.white});
-        page.rect(cx,y,col.width,18,{stroke:C.border,lineWidth:.4});
-        if(text)page.text(text,{x:cx+3,top:y+4,font:isLabel?'bold':'regular',size:9,color:isLabel?C.headerText:C.body,align:'right',maxWidth:col.width-6});
+        page.rect(cx,y,col.width,infoRowHeight,{fill:isLabel?C.headerFill:index%2?C.alt:C.white});
+        page.rect(cx,y,col.width,infoRowHeight,{stroke:C.border,lineWidth:.4});
+        if(text)page.text(text,{x:cx+4,top:y+5,font:isLabel?'bold':'regular',size:9,color:isLabel?C.headerText:C.body,align:'right',maxWidth:col.width-8});
         right=cx;
       });
-      y+=18;
+      y+=infoRowHeight;
     });
     y+=3;
   }
 
-  if(val(employee.notes)){
-    const noteLines=val(employee.notes).split(/\r?\n/).flatMap(line=>line?wrapText(line,9.5,CONTENT_W-12,fonts.regular.metrics):['']);
-    const title='ملاحظات على الموظف';
-    startSection(title,Math.min(noteLines.length*11.4+8,contentBottom-TOP));
-    let first=0;
-    while(first<noteLines.length){
-      const capacity=Math.max(1,Math.floor((contentBottom-y-8)/11.4));
-      const take=Math.min(noteLines.length-first,capacity);
-      const h=take*11.4+8;
-      page.rect(MARGIN,y,CONTENT_W,h,{fill:C.note});page.rect(MARGIN,y,CONTENT_W,h,{stroke:C.border,lineWidth:.5});
-      noteLines.slice(first,first+take).forEach((line,index)=>{if(line)page.text(line,{x:MARGIN+6,top:y+3+index*11.4,font:'regular',size:9.5,color:C.body,align:'right',maxWidth:CONTENT_W-12});});
-      y+=h;first+=take;
-      if(first<noteLines.length){newPage();sectionTitle(title,true);}
-    }
-    y+=3;
+  const profileNotes = [
+    ...(val(employee.notes) ? [val(employee.notes)] : []),
+    ...(data.employeeNotes ?? []).filter((row) => row.employeeId === employee.id && val(row.note)).map((row) => val(row.note)),
+  ];
+  if(profileNotes.length){
+    const noteRows=profileNotes.map((note,index)=>({note:`${index+1}. ${note}`}));
+    drawPaginatedTable('ملاحظات على الموظف',{columns:[{label:'الملاحظات',width:CONTENT_W,value:'note'}],rows:noteRows},MARGIN,CONTENT_W,{bodySize:9.5,keepColumns:true});
   }
 
   if(tables.visits.length){
+    const visitCount=tables.visits.length;
+    const visitWord=visitCount===2?'زيارتان':visitCount>=3&&visitCount<=10?'زيارات':'زيارة';
+    const visitTitle=`الزيارات الميدانية (${visitCount} ${visitWord})`;
     const sorted=tables.visits,cut=Math.ceil(sorted.length/2);
     const rightRows=sorted.slice(0,cut).map(row=>({date:row.date,branch:row.branch,customer:row.customer}));
     const leftRows=sorted.slice(cut).map(row=>({date:row.date,branch:row.branch,customer:row.customer}));
     const gap=8,half=(CONTENT_W-gap)/2;
     const cols=(w:number):Column[]=>[{label:'تاريخ الزيارة',width:w*.29,value:'date'},{label:'الفرع',width:w*.27,value:'branch'},{label:'اسم العميل',width:w*.44,value:'customer'}];
     const rightTable:TableData={columns:cols(half),rows:rightRows},leftTable:TableData={columns:cols(half),rows:leftRows};
-    if(!leftRows.length)drawPaginatedTable('الزيارات الميدانية',rightTable,MARGIN,CONTENT_W,{bodySize:9.1,keepColumns:true});
-    else drawPaginatedTwoTables('الزيارات الميدانية',rightTable,leftTable,{bodySize:9.1,keepColumns:true});
+    if(!leftRows.length)drawPaginatedTable(visitTitle,rightTable,MARGIN,CONTENT_W,{bodySize:9.1,keepColumns:true});
+    else drawPaginatedTwoTables(visitTitle,rightTable,leftTable,{bodySize:9.1,keepColumns:true});
   }
 
   if(tables.leaves.length||tables.permissions.length){
