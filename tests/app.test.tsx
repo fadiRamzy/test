@@ -13,6 +13,7 @@ import {
   nextEmployeeNo,
   saveEmployee,
   saveAttendanceRecord,
+  saveLeavePermission,
   saveMinute,
   saveMonthlyEvaluation,
   saveVisitTiming,
@@ -72,6 +73,34 @@ async function setTime(user: ReturnType<typeof userEvent.setup>, id: string, val
   await user.tab();
 }
 
+describe('ألوان ملخص الإجازات والأذونات', () => {
+  it('يفصل بصريًا ويعرض القيم الدقيقة لموظفين بإجماليات مختلفة', async () => {
+    const first = await seedEmployee({ name: 'موظف ملخص أول', code: 'RO-601' });
+    const second = await seedEmployee({ name: 'موظف ملخص ثان', code: 'RO-602' });
+    const today = new Date().toISOString().slice(0, 10);
+    await saveLeavePermission({ employeeId: first.id, requestType: 'leave', category: 'إجازة اعتيادي', date: today, notes: '' });
+    await saveLeavePermission({ employeeId: first.id, requestType: 'permission', category: 'إذن انصرف', date: today, durationHours: 1, notes: '' });
+    await saveLeavePermission({ employeeId: second.id, requestType: 'leave', category: 'إجازة بخصم', date: today, notes: '' });
+    await saveLeavePermission({ employeeId: second.id, requestType: 'permission', category: 'إذن حضور', date: today, durationHours: 2, notes: '' });
+    window.location.hash = '#/leave-permissions';
+    renderApp();
+
+    const firstHeading = await screen.findByRole('heading', { name: first.name });
+    const firstCard = firstHeading.closest('.leave-summary-employee') as HTMLElement;
+    const secondCard = screen.getByRole('heading', { name: second.name }).closest('.leave-summary-employee') as HTMLElement;
+    const metric = (card: HTMLElement, label: string) => {
+      const item = Array.from(card.querySelectorAll('.leave-metric')).find((node) => node.querySelector('span')?.textContent === label);
+      return { value: item?.querySelector('strong')?.textContent, className: item?.className };
+    };
+    expect(metric(firstCard, 'إجازة اعتيادي').value).toBe('1');
+    expect(metric(firstCard, 'ساعات مستخدمة').value).toBe('1');
+    expect(metric(firstCard, 'إجازة اعتيادي').className).toContain('leave-metric--leave');
+    expect(metric(firstCard, 'أذونات انصراف').className).toContain('leave-metric--permission');
+    expect(metric(secondCard, 'إجازة بخصم').value).toBe('1');
+    expect(metric(secondCard, 'ساعات مستخدمة').value).toBe('2');
+  });
+});
+
 describe('الإجازات والأذونات في الواجهة وملف الموظف', () => {
   it('يحفظ الإجازة والإذن ويعرضهما فورًا وبعد إعادة تحميل التطبيق في قائمة الموظف', async () => {
     const employee = await seedEmployee();
@@ -84,7 +113,7 @@ describe('الإجازات والأذونات في الواجهة وملف ال�
     await user.selectOptions(selectById('lp-employee'), employee.id);
     await user.type(byId('lp-notes'), 'إجازة اختبار');
     await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
-    expect(await screen.findByText('إجازة اعتيادي')).toBeInTheDocument();
+    expect(await screen.findByText('إجازة اختبار')).toBeInTheDocument();
     await waitFor(async () => expect(await listLeavePermissions()).toHaveLength(1));
 
     await user.click(screen.getByRole('button', { name: /إضافة سجل/ }));
@@ -98,8 +127,8 @@ describe('الإجازات والأذونات في الواجهة وملف ال�
     await waitFor(async () => expect(await listLeavePermissions()).toHaveLength(2));
 
     app.unmount();
-    renderApp();
-    expect(await screen.findByText('إجازة اعتيادي')).toBeInTheDocument();
+    const refreshedApp = renderApp();
+    expect(await screen.findByText('إجازة اختبار')).toBeInTheDocument();
     expect(await screen.findByText('إذن حضور')).toBeInTheDocument();
 
     window.location.hash = `#/employees/${employee.id}`;
@@ -107,6 +136,13 @@ describe('الإجازات والأذونات في الواجهة وملف ال�
     expect(screen.getByText('إجازة اختبار')).toBeInTheDocument();
     expect(screen.getByText('إذن اختبار')).toBeInTheDocument();
     expect(screen.getByText('1 إجازة · 1 إذن · 2 سجل')).toBeInTheDocument();
+
+    await user.type(byId('profile-employee-notes'), 'ملاحظة خاصة بالتقرير');
+    await user.click(screen.getByRole('button', { name: 'حفظ الملاحظات' }));
+    await waitFor(async () => expect((await listEmployees()).find((row) => row.id === employee.id)?.notes).toBe('ملاحظة خاصة بالتقرير'));
+    refreshedApp.unmount();
+    renderApp();
+    expect(await screen.findByDisplayValue('ملاحظة خاصة بالتقرير')).toBeInTheDocument();
   });
 });
 

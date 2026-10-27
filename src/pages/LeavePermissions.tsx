@@ -38,6 +38,10 @@ interface Draft {
   notes: string;
 }
 
+function LeaveMetric({ label, value, tone }: { label: string; value: string | number; tone: string }) {
+  return <div className={`leave-metric leave-metric--${tone}`}><span>{label}</span><strong>{typeof value === 'number' ? fmtNumber(value) : value}</strong></div>;
+}
+
 const emptyDraft = (): Draft => ({
   employeeId: '',
   requestType: 'leave',
@@ -128,36 +132,47 @@ export function LeavePermissionsPage() {
       />
 
       <Card title="ملخص الشهر والفلاتر" subtitle="الحد الشهري للأذونات: 4 طلبات وبحد أقصى 4 ساعات لكل موظف">
-        <Toolbar>
-          <Select aria-label="الموظف" value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)}>
-            <option value="all">كل الموظفين</option>
-            {data.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
-          </Select>
-          <Select aria-label="الشهر" value={monthFilter} onChange={(event) => setMonthFilter(event.target.value)}>
-            <option value="all">كل الشهور</option>
-            {MONTHS_AR.map((month, index) => <option key={month} value={String(index + 1).padStart(2, '0')}>{month}</option>)}
-          </Select>
-          <Select aria-label="السنة" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}>
-            <option value="all">كل السنوات</option>
-            {yearOptions.map((year) => <option key={year} value={year}>{year}</option>)}
-          </Select>
-        </Toolbar>
+        <div className="leave-filter-panel">
+          <div className="leave-filter-panel__label">تصفية الملخص والسجلات</div>
+          <Toolbar>
+            <Select aria-label="الموظف" value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)}>
+              <option value="all">كل الموظفين</option>
+              {data.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
+            </Select>
+            <Select aria-label="الشهر" value={monthFilter} onChange={(event) => setMonthFilter(event.target.value)}>
+              <option value="all">كل الشهور</option>
+              {MONTHS_AR.map((month, index) => <option key={month} value={String(index + 1).padStart(2, '0')}>{month}</option>)}
+            </Select>
+            <Select aria-label="السنة" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}>
+              <option value="all">كل السنوات</option>
+              {yearOptions.map((year) => <option key={year} value={year}>{year}</option>)}
+            </Select>
+          </Toolbar>
+        </div>
         {summaries.length ? (
-          <TableWrap>
-            <Table>
-              <thead><tr>
-                <th>الموظف</th><th className="num">إجازات اعتيادي</th><th className="num">إجازات عارضة</th><th className="num">إجازات بخصم</th><th className="num">إجمالي الإجازات</th>
-                <th className="num">أذونات انصراف</th><th className="num">أذونات حضور</th><th className="num">إجمالي الأذونات</th><th className="num">ساعات مستخدمة</th><th className="num">ساعات متبقية للشهر</th>
-              </tr></thead>
-              <tbody>{summaries.map((summary) => (
-                <tr key={summary.employee.id}>
-                  <td>{summary.employee.name}</td>
-                  <td className="num">{summary.regularLeaves}</td><td className="num">{summary.casualLeaves}</td><td className="num">{summary.deductedLeaves}</td><td className="num"><strong>{summary.totalLeaves}</strong></td>
-                  <td className="num">{summary.departurePermissions}</td><td className="num">{summary.attendancePermissions}</td><td className="num"><strong>{summary.totalPermissions}</strong></td><td className="num">{fmtNumber(summary.permissionHours)}</td><td className="num">{monthFilter !== 'all' && yearFilter !== 'all' ? fmtNumber(summary.remainingHours) : '—'}</td>
-                </tr>
-              ))}</tbody>
-            </Table>
-          </TableWrap>
+          <div className="leave-summary-list">
+            {summaries.map((summary) => {
+              const allowanceSelected = monthFilter !== 'all' && yearFilter !== 'all';
+              const exceeded = summary.totalPermissions > 4 || summary.permissionHours > 4;
+              const approaching = summary.totalPermissions >= 3 || summary.permissionHours >= 3;
+              const quotaTone = exceeded ? 'error' : approaching || summary.remainingHours === 0 ? 'warning' : 'remaining';
+              return <section className="leave-summary-employee" key={summary.employee.id}>
+                <h3>{summary.employee.name}</h3>
+                <div className="leave-metric-grid">
+                  <LeaveMetric label="إجازة اعتيادي" value={summary.regularLeaves} tone="leave" />
+                  <LeaveMetric label="إجازة عارضة" value={summary.casualLeaves} tone="leave" />
+                  <LeaveMetric label="إجازة بخصم" value={summary.deductedLeaves} tone="leave" />
+                  <LeaveMetric label="إجمالي الإجازات" value={summary.totalLeaves} tone="total" />
+                  <LeaveMetric label="أذونات انصراف" value={summary.departurePermissions} tone="permission" />
+                  <LeaveMetric label="أذونات حضور" value={summary.attendancePermissions} tone="permission" />
+                  <LeaveMetric label="إجمالي الأذونات" value={summary.totalPermissions} tone={approaching ? 'warning' : 'permission'} />
+                  <LeaveMetric label="ساعات مستخدمة" value={summary.permissionHours} tone={approaching ? 'warning' : 'hours'} />
+                  <LeaveMetric label="أذونات متبقية للشهر" value={allowanceSelected ? summary.remainingEntries : '—'} tone={allowanceSelected ? quotaTone : 'neutral'} />
+                  <LeaveMetric label="ساعات متبقية للشهر" value={allowanceSelected ? summary.remainingHours : '—'} tone={allowanceSelected ? quotaTone : 'neutral'} />
+                </div>
+              </section>;
+            })}
+          </div>
         ) : <EmptyState title="لا يوجد موظفون مطابقون" />}
       </Card>
 
