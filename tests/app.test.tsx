@@ -8,9 +8,11 @@ import {
   listEmployees,
   listMinutes,
   listVisitTimings,
+  listLeavePermissions,
   listMonthlyEvaluations,
   nextEmployeeNo,
   saveEmployee,
+  saveAttendanceRecord,
   saveMinute,
   saveMonthlyEvaluation,
   saveVisitTiming,
@@ -48,6 +50,7 @@ async function seedEmployee(overrides: Partial<Parameters<typeof saveEmployee>[0
 }
 
 const byId = (id: string) => document.getElementById(id) as HTMLInputElement;
+const selectById = (id: string) => document.getElementById(id) as HTMLSelectElement;
 
 /** يختار موظفًا من قائمة الاختيار المخصّصة (بدل <select>) */
 async function pickEmployee(user: ReturnType<typeof userEvent.setup>, controlId: string, name: string) {
@@ -68,6 +71,71 @@ async function setTime(user: ReturnType<typeof userEvent.setup>, id: string, val
   await user.type(input, text);
   await user.tab();
 }
+
+describe('الإجازات والأذونات في الواجهة وملف الموظف', () => {
+  it('يحفظ الإجازة والإذن ويعرضهما فورًا وبعد إعادة تحميل التطبيق في قائمة الموظف', async () => {
+    const employee = await seedEmployee();
+    const user = userEvent.setup();
+    window.location.hash = '#/leave-permissions';
+    const app = renderApp();
+
+    await screen.findByRole('heading', { name: 'الإجازات والأذونات' });
+    await user.click(screen.getByRole('button', { name: /إضافة سجل/ }));
+    await user.selectOptions(selectById('lp-employee'), employee.id);
+    await user.type(byId('lp-notes'), 'إجازة اختبار');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+    expect(await screen.findByText('إجازة اعتيادي')).toBeInTheDocument();
+    await waitFor(async () => expect(await listLeavePermissions()).toHaveLength(1));
+
+    await user.click(screen.getByRole('button', { name: /إضافة سجل/ }));
+    await user.selectOptions(selectById('lp-employee'), employee.id);
+    await user.selectOptions(selectById('lp-request-type'), 'permission');
+    await user.selectOptions(selectById('lp-category'), 'إذن حضور');
+    await user.selectOptions(selectById('lp-duration'), '1');
+    await user.type(byId('lp-notes'), 'إذن اختبار');
+    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
+    expect(await screen.findByText('إذن حضور')).toBeInTheDocument();
+    await waitFor(async () => expect(await listLeavePermissions()).toHaveLength(2));
+
+    app.unmount();
+    renderApp();
+    expect(await screen.findByText('إجازة اعتيادي')).toBeInTheDocument();
+    expect(await screen.findByText('إذن حضور')).toBeInTheDocument();
+
+    window.location.hash = `#/employees/${employee.id}`;
+    expect(await screen.findByRole('heading', { name: 'طلبات الإجازات والأذونات' })).toBeInTheDocument();
+    expect(screen.getByText('إجازة اختبار')).toBeInTheDocument();
+    expect(screen.getByText('إذن اختبار')).toBeInTheDocument();
+    expect(screen.getByText('1 إجازة · 1 إذن · 2 سجل')).toBeInTheDocument();
+  });
+});
+
+describe('تفاصيل وملخص تأخيرات الحضور والانصراف', () => {
+  it('يخفي التفاصيل مبدئيًا، ويعرض حدث التأخير عند إظهارها مع ملخص الموظف فقط', async () => {
+    const employee = await seedEmployee();
+    const date = new Date().toISOString().slice(0, 10);
+    await saveAttendanceRecord({ employeeId: employee.id, date, arrivalTime: '09:16', departureTime: '16:30', notes: 'ملاحظة حضور' });
+    await saveAttendanceRecord({ employeeId: employee.id, date, arrivalTime: '09:15', departureTime: '17:00', notes: 'في المهلة' });
+    const user = userEvent.setup();
+    window.location.hash = '#/attendance-delays';
+    renderApp();
+
+    await screen.findByRole('heading', { name: 'تأخيرات الحضور والانصراف' });
+    expect(screen.getByRole('button', { name: 'إظهار التفاصيل' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'الملاحظات' })).not.toBeInTheDocument();
+    const summary = screen.getByRole('heading', { name: 'ملخص الشهر والفلاتر' }).closest('section') as HTMLElement;
+    expect(within(summary).getByRole('columnheader', { name: 'مرات تأخير الحضور' })).toBeInTheDocument();
+    expect(within(summary).getByRole('columnheader', { name: 'إجمالي دقائق تأخير الحضور' })).toBeInTheDocument();
+    expect(within(summary).queryByText('مرات الانصراف المبكر')).not.toBeInTheDocument();
+    expect(within(summary).getByText('16')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'إظهار التفاصيل' }));
+    expect(screen.getByRole('button', { name: 'إخفاء التفاصيل' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'الملاحظات' })).toBeInTheDocument();
+    expect(screen.getByText('ملاحظة حضور')).toBeInTheDocument();
+    expect(screen.getAllByText('9:16 ص').length).toBeGreaterThan(0);
+  });
+});
 
 describe('إضافة موظف', () => {
   it('يحفظ موظفًا جديدًا ويظهره في الجدول', async () => {

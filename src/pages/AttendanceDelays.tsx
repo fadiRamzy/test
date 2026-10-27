@@ -69,20 +69,16 @@ export function AttendanceDelaysPage() {
         <Select aria-label="السنة" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}><option value="all">كل السنوات</option>{years.map((year) => <option key={year} value={year}>{year}</option>)}</Select>
       </Toolbar>
       {summaries.length ? <TableWrap><Table>
-        <thead><tr><th>الموظف</th><th className="num">مرات التأخير</th><th className="num">إجمالي التأخير</th><th>تفاصيل التأخير</th><th className="num">مرات الانصراف المبكر</th><th className="num">إجمالي الانصراف المبكر</th><th>تفاصيل الانصراف المبكر</th></tr></thead>
+        <thead><tr><th>الموظف</th><th className="num">مرات تأخير الحضور</th><th className="num">إجمالي دقائق تأخير الحضور</th></tr></thead>
         <tbody>{summaries.map((summary) => <tr key={summary.employee.id}>
           <td>{summary.employee.name}</td>
           <td className="num"><Badge tone={summary.lateCount ? 'danger' : 'neutral'}>{fmtNumber(summary.lateCount)}</Badge></td>
-          <td className="num">{fmtDurationWords(summary.lateMinutes)}</td>
-          <td className="wrap small">{summary.lateRecords.length ? summary.lateRecords.map((row) => `${fmtDate(row.date)} — ${fmtTime(row.arrivalTime)} (${fmtDurationWords(attendanceDelayMinutes(row.arrivalTime))})`).join('، ') : '—'}</td>
-          <td className="num"><Badge tone={summary.earlyCount ? 'warning' : 'neutral'}>{fmtNumber(summary.earlyCount)}</Badge></td>
-          <td className="num">{fmtDurationWords(summary.earlyMinutes)}</td>
-          <td className="wrap small">{summary.earlyRecords.length ? summary.earlyRecords.map((row) => `${fmtDate(row.date)} — ${fmtTime(row.departureTime)} (${fmtDurationWords(earlyDepartureMinutes(row.departureTime))})`).join('، ') : '—'}</td>
+          <td className="num">{fmtNumber(summary.lateMinutes)}</td>
         </tr>)}</tbody>
       </Table></TableWrap> : <EmptyState title="لا يوجد موظفون مطابقون" />}
     </Card>
 
-    <ListCard id="attendance-records" title="سجلات الحضور والانصراف" subtitle={`${rows.length} سجل في الفترة المختارة`} note={`قائمة السجلات مخفية (${rows.length} سجل) — اضغط «إظهار البيانات» لعرضها.`}>
+    <ListCard id="attendance-records" title="سجلات الحضور والانصراف" subtitle={`${rows.length} سجل في الفترة المختارة`} defaultCollapsed hideLabel="إخفاء التفاصيل" showLabel="إظهار التفاصيل" note={`قائمة السجلات مخفية (${rows.length} سجل) — اضغط «إظهار التفاصيل» لعرضها.`}>
       {rows.length ? <TableWrap><Table>
         <thead><tr><th>الموظف</th><th>التاريخ</th><th>الحضور</th><th>التأخير</th><th>الانصراف</th><th>الانصراف المبكر</th><th>الملاحظات</th><th>إجراءات</th></tr></thead>
         <tbody>{rows.map((row) => {

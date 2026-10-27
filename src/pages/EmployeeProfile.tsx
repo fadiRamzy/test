@@ -137,6 +137,17 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
     [data.leaves, employeeId],
   );
 
+  const leavePermissionRecords = useMemo(
+    () => data.leavePermissions
+      .filter((row) => row.employeeId === employeeId)
+      .sort((a, b) => (a.date < b.date ? 1 : -1)),
+    [data.leavePermissions, employeeId],
+  );
+  const leavePermissionCounts = useMemo(() => ({
+    leaves: leavePermissionRecords.filter((row) => row.requestType === 'leave').length,
+    permissions: leavePermissionRecords.filter((row) => row.requestType === 'permission').length,
+  }), [leavePermissionRecords]);
+
   const legacyVisits = useMemo(
     () => data.visits.filter((row) => row.employeeId === employeeId).sort((a, b) => (a.visitDate < b.visitDate ? 1 : -1)),
     [data.visits, employeeId],
@@ -652,6 +663,40 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
           </TableWrap>
         </ListCard>
       ) : null}
+
+      <ListCard
+        id="profile-leave-permission-records"
+        title="طلبات الإجازات والأذونات"
+        subtitle={`${leavePermissionCounts.leaves} إجازة · ${leavePermissionCounts.permissions} إذن · ${leavePermissionRecords.length} سجل`}
+        note="قائمة الطلبات مخفية — اضغط «إظهار البيانات» لعرضها."
+      >
+        {leavePermissionRecords.length ? (
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <th>التاريخ</th>
+                  <th>نوع الطلب</th>
+                  <th>نوع الإجازة أو الإذن</th>
+                  <th className="num">مدة الإذن</th>
+                  <th>السبب / الملاحظات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leavePermissionRecords.map((row) => (
+                  <tr key={row.id}>
+                    <td className="nowrap">{fmtDate(row.date)}</td>
+                    <td><Badge tone={row.requestType === 'leave' ? 'info' : 'warning'}>{row.requestType === 'leave' ? 'إجازة' : 'إذن'}</Badge></td>
+                    <td>{row.category}</td>
+                    <td className="num">{row.durationHours ? (row.durationHours === 1 ? 'ساعة واحدة' : 'ساعتان') : '—'}</td>
+                    <td className="wrap small">{row.notes || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableWrap>
+        ) : <EmptyState title="لا توجد إجازات أو أذونات مسجلة لهذا الموظف" />}
+      </ListCard>
 
       {legacyVisits.length ? (
         <ListCard id="profile-legacy-visits" title="زيارات ميدانية (سجلات سابقة)" subtitle={`${legacyVisits.length} سجل`} note="القائمة مخفية — اضغط «إظهار البيانات» لعرضها.">
