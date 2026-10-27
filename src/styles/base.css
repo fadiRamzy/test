@@ -1073,6 +1073,7 @@ body {
 .timefield.is-open .timefield__row .input { border-color: var(--brand-500); box-shadow: 0 0 0 3px rgba(27, 90, 138, 0.12); }
 
 .employee-note-form { margin-bottom: 14px; }
+.employee-note-toggle { display: flex; justify-content: flex-start; margin-bottom: 8px; }
 .employee-note-list { display: grid; gap: 8px; margin-top: 12px; }
 .employee-note-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-sunken); }
 .employee-note-content { min-width: 0; flex: 1; }

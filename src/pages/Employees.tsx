@@ -238,8 +238,6 @@ export function EmployeesPage() {
         }
       />
 
-      <EmployeeNotesManager employees={data.employees} notes={data.employeeNotes} />
-
       <ListCard
         id="employees-list"
         title="قائمة الموظفين"
@@ -360,6 +358,8 @@ export function EmployeesPage() {
           />
         )}
       </ListCard>
+
+      <EmployeeNotesManager employees={data.employees} notes={data.employeeNotes} collapsibleNotes />
 
       <Modal
         open={Boolean(draft)}

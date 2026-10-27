@@ -181,6 +181,33 @@ describe('ملاحظات الموظف المنظمة', () => {
     expect(await screen.findByText('ملاحظة خاصة بمها')).toBeInTheDocument();
     expect(screen.queryByText('ملاحظة خاصة بسلمى')).not.toBeInTheDocument();
   });
+
+  it('يضع الموظفين قبل الملاحظات ويخفي القائمة فقط مع إبقاء النموذج والموظفين ظاهرين', async () => {
+    const employee = await seedEmployee({ name: 'سماح محمود', code: 'RO-NOTE-3' });
+    const user = userEvent.setup();
+    window.location.hash = '#/employees';
+    renderApp();
+    await screen.findByRole('heading', { name: 'قائمة الموظفين' });
+
+    const employeeHeading = screen.getByRole('heading', { name: 'قائمة الموظفين' });
+    const notesHeading = screen.getByRole('heading', { name: 'ملاحظات على الموظف' });
+    expect(Boolean(employeeHeading.compareDocumentPosition(notesHeading) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(within(screen.getByRole('table')).getByText('سماح محمود')).toBeInTheDocument();
+
+    await user.selectOptions(selectById('employee-note-employee'), employee.id);
+    await user.type(byId('employee-note-text'), 'ملاحظة تظهر وتختفي');
+    await user.click(screen.getByRole('button', { name: 'حفظ الملاحظة' }));
+    expect(await screen.findByText('ملاحظة تظهر وتختفي')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'إخفاء الملاحظات' }));
+    expect(screen.getByRole('button', { name: 'إظهار الملاحظات' })).toBeInTheDocument();
+    expect(screen.getByText('ملاحظة تظهر وتختفي')).not.toBeVisible();
+    expect(within(screen.getByRole('table')).getByText('سماح محمود')).toBeInTheDocument();
+    expect(byId('employee-note-text')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'إظهار الملاحظات' }));
+    expect(await screen.findByText('ملاحظة تظهر وتختفي')).toBeInTheDocument();
+  });
 });
 
 describe('تفاصيل وملخص تأخيرات الحضور والانصراف', () => {

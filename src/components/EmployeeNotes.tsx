@@ -8,17 +8,20 @@ export function EmployeeNotesManager({
   employees,
   notes,
   employeeId,
+  collapsibleNotes = false,
 }: {
   employees: Employee[];
   notes: EmployeeNote[];
   /** Set in a profile; omitted in the general employees section. */
   employeeId?: string;
+  collapsibleNotes?: boolean;
 }) {
   const { runAction } = useApp();
   const [selectedEmployee, setSelectedEmployee] = useState(employeeId ?? employees[0]?.id ?? '');
   const [text, setText] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [notesCollapsed, setNotesCollapsed] = useState(false);
   const profileMode = Boolean(employeeId);
 
   useEffect(() => {
@@ -95,24 +98,39 @@ export function EmployeeNotesManager({
         </div>
       </div>
 
-      {rows.length ? (
-        <div className="employee-note-list" aria-label="الملاحظات المحفوظة">
-          {rows.map((row) => (
-            <article className="employee-note-item" key={row.id}>
-              <div className="employee-note-content">
-                {!employeeId ? <strong className="employee-note-owner">{employeeById.get(row.employeeId)?.name ?? 'موظف غير موجود'}</strong> : null}
-                <p dir="auto">{row.note}</p>
-              </div>
-              <div className="employee-note-actions">
-                <IconButton icon="edit" label="تعديل الملاحظة" onClick={() => edit(row)} />
-                <IconButton icon="trash" label="حذف الملاحظة" tone="danger" onClick={() => remove(row.id)} />
-              </div>
-            </article>
-          ))}
+      {collapsibleNotes ? (
+        <div className="employee-note-toggle">
+          <Button
+            size="sm"
+            icon={notesCollapsed ? 'list' : 'close'}
+            aria-expanded={!notesCollapsed}
+            aria-controls="employee-notes-list"
+            onClick={() => setNotesCollapsed((value) => !value)}
+          >
+            {notesCollapsed ? 'إظهار الملاحظات' : 'إخفاء الملاحظات'}
+          </Button>
         </div>
-      ) : (
-        <p className="small muted employee-note-empty">لا توجد ملاحظات محفوظة لهذا الموظف.</p>
-      )}
+      ) : null}
+      <div id={collapsibleNotes ? 'employee-notes-list' : undefined} hidden={collapsibleNotes && notesCollapsed}>
+        {rows.length ? (
+          <div className="employee-note-list" aria-label="الملاحظات المحفوظة">
+            {rows.map((row) => (
+              <article className="employee-note-item" key={row.id}>
+                <div className="employee-note-content">
+                  {!employeeId ? <strong className="employee-note-owner">{employeeById.get(row.employeeId)?.name ?? 'موظف غير موجود'}</strong> : null}
+                  <p dir="auto">{row.note}</p>
+                </div>
+                <div className="employee-note-actions">
+                  <IconButton icon="edit" label="تعديل الملاحظة" onClick={() => edit(row)} />
+                  <IconButton icon="trash" label="حذف الملاحظة" tone="danger" onClick={() => remove(row.id)} />
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="small muted employee-note-empty">لا توجد ملاحظات محفوظة لهذا الموظف.</p>
+        )}
+      </div>
     </Card>
   );
 }
