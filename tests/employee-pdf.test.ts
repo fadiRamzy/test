@@ -45,18 +45,19 @@ const fonts = () => {
   };
 };
 const pagesIn = (pdf: Uint8Array) => (Buffer.from(pdf).toString('latin1').match(/\/Type \/Page\b/g) ?? []).length;
+const only = (keys: Array<keyof CompleteEmployeeData>) => Object.fromEntries(Object.entries(testData).map(([key,value]) => [key, keys.includes(key as keyof CompleteEmployeeData) ? value : key === 'employee' ? value : []])) as CompleteEmployeeData;
 
-describe('تقرير PDF الكامل للموظف', () => {
-  it('يُنتج ملفًا مقروءًا متعدد الصفحات بخط Times New Roman مضمّن ويصفّي السجلات حسب الموظف', async () => {
+describe('تقرير PDF الكامل للموظف — صفحة A4 واحدة', () => {
+  it('ينشئ صفحة A4 واحدة بخط Times New Roman مضمّن، مع سجلات جميع الأقسام دون تكرار', async () => {
     const pdf = await buildCompleteEmployeePdf(testData, fonts());
     const raw = Buffer.from(pdf).toString('latin1');
-    expect(pagesIn(pdf)).toBeGreaterThanOrEqual(1);
-    expect(pagesIn(pdf)).toBeLessThanOrEqual(5);
+    expect(pagesIn(pdf)).toBe(1);
+    expect(raw).toContain('/MediaBox [0 0 595.28 841.89]');
     expect(raw).toContain('/TimesNewRomanPSMT');
     expect(raw).toContain('/TimesNewRomanPS-BoldMT');
     expect(raw).toContain('/ToUnicode');
     expect(raw).not.toContain('CASH إدارة المخاطر');
-    expect(pdf.length).toBeGreaterThan(20_000);
+    expect(pdf.length).toBeGreaterThan(10_000);
     writeFileSync('/tmp/employee-complete-preview.pdf', pdf);
   });
 
@@ -65,28 +66,25 @@ describe('تقرير PDF الكامل للموظف', () => {
     ['visits-only', { ...testData, minutes: [], legacyLeaves: [], leavePermissions: [], attendance: [], fieldVisits: [], annualNotes: [], observations: [] }],
     ['leave-permissions', { ...testData, visits: [], minutes: [], attendance: [], fieldVisits: [], annualNotes: [], observations: [] }],
     ['attendance-delays', { ...testData, visits: [], minutes: [], legacyLeaves: [], leavePermissions: [], fieldVisits: [], annualNotes: [], observations: [] }],
-    ['mixed-records', testData],
-  ])('supports the %s profile and stays within five pages', async (_name, fixture) => {
+    ['minutes-only', { ...testData, visits: [], legacyLeaves: [], leavePermissions: [], attendance: [], fieldVisits: [], annualNotes: [], observations: [] }],
+  ])('يجعل تقرير %s في صفحة واحدة', async (_name, fixture) => {
     const pdf = await buildCompleteEmployeePdf(fixture as CompleteEmployeeData, fonts());
-    expect(pagesIn(pdf)).toBeGreaterThanOrEqual(1);
-    expect(pagesIn(pdf)).toBeLessThanOrEqual(5);
+    expect(pagesIn(pdf)).toBe(1);
     writeFileSync(`/tmp/employee-${_name}.pdf`, pdf);
   });
 
-  it('paginates a large record set without dropping records', async () => {
+  it('يعرض الاسم والملاحظات العربية الطويلة على صفحة واحدة إذا أمكن، دون قصّ النص', async () => {
+    const longData = { ...testData, employee: { ...employee, name: 'عبد الرحمن مصطفى عبد الله محمد إبراهيم حسن الشاذلي', notes: 'ملاحظة عربية طويلة تشمل متابعة دقيقة للملفات والزيارات والإجراءات الإدارية. '.repeat(8) } };
+    const pdf = await buildCompleteEmployeePdf(longData, fonts());
+    expect(pagesIn(pdf)).toBe(1);
+    writeFileSync('/tmp/employee-long-arabic.pdf', pdf);
+  });
+
+  it('يرفض الحجم المستحيل بوضوح بدل إسقاط سجلات أو إنشاء صفحات إضافية', async () => {
     const minutes = Array.from({length: 60}, (_, i) => ({
       ...base(`minute-${i}`), employeeId: employee.id, date: `2026-${String(i % 12 + 1).padStart(2,'0')}-15`,
       fileRequestTime: '09:00', fileReceivedTime: '09:15', responseTime: '10:00', inspectionResult: 'no_notes',
     })) as DailyMinute[];
-    const pdf = await buildCompleteEmployeePdf({ ...testData, visits: [], minutes, legacyLeaves: [], leavePermissions: [], attendance: [], fieldVisits: [], annualNotes: [], observations: [] }, fonts());
-    expect(pagesIn(pdf)).toBeGreaterThan(1);
-    expect(pagesIn(pdf)).toBeLessThanOrEqual(5);
-  });
-
-  it('wraps extended Arabic profile notes and names across the dossier', async () => {
-    const longData = { ...testData, employee: { ...employee, name: 'عبد الرحمن مصطفى عبد الله محمد إبراهيم حسن الشاذلي', notes: 'ملاحظة عربية طويلة تشمل متابعة دقيقة للملفات والزيارات والإجراءات الإدارية. '.repeat(14) } };
-    const pdf = await buildCompleteEmployeePdf(longData, fonts());
-    expect(pagesIn(pdf)).toBeLessThanOrEqual(5);
-    writeFileSync('/tmp/employee-long-arabic.pdf', pdf);
+    await expect(buildCompleteEmployeePdf({ ...only([]), minutes }, fonts())).rejects.toThrow(/لم يُحذف أي سجل/);
   });
 });

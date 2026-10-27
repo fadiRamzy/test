@@ -1,8 +1,8 @@
 import type { AnnualNote, AttendanceRecord, DailyMinute, Employee, FieldVisit, Leave, LeavePermissionRecord, MonthlyEvaluation, Observation, VisitTiming } from '../../db/schema';
-import { EMPLOYEE_STATUS_LABELS, INSPECTION_RESULT_LABELS, OBSERVATION_STATUS_LABELS, SEVERITY_LABELS } from '../../db/schema';
+import { EMPLOYEE_STATUS_LABELS, INSPECTION_RESULT_LABELS, MINUTE_RESULT_LABELS, MINUTE_STATUS_LABELS, OBSERVATION_STATUS_LABELS, SEVERITY_LABELS } from '../../db/schema';
 import { attendanceDelayMinutes, earlyDepartureMinutes } from '../attendance';
 import { minuteTiming } from '../calc';
-import { fmtDate, fmtDurationWords, fmtTime, fmtNumber } from '../format';
+import { fmtDurationWords, fmtNumber, fmtTime } from '../format';
 import type { PdfFontSource } from './writer';
 import { PdfDocument, type PdfPage } from './writer';
 import { wrapText } from './shape';
@@ -20,158 +20,302 @@ export interface CompleteEmployeeData {
   observations: Observation[];
 }
 
-type Column = { label: string; width: number };
-type TableSection = { title: string; columns: Column[]; rows: string[][] };
+type Column = { label: string; width: number; value: string };
+type TableData = { title?: string; columns: Column[]; rows: Record<string, string>[]; compact?: boolean };
 
-const PAGE_W = 612;
-const PAGE_H = 792;
-const MARGIN = 42;
+const PAGE_W = 595.28; // A4 portrait, points
+const PAGE_H = 841.89;
+const MARGIN = 20; // 7.1 mm
 const CONTENT_W = PAGE_W - MARGIN * 2;
-const TOP = 54;
-const BOTTOM = 42;
-const BODY_SIZE = 11;
-const LINE_H = 13.8;
-const C = { navy: '0.043 0.165 0.29', muted: '0.31 0.36 0.41', border: '0.72 0.76 0.80', head: '0.91 0.93 0.95', alt: '0.965 0.975 0.982', teal: '0.08 0.43 0.48', white: '1 1 1' };
-const present = (v: unknown): string => v === null || v === undefined || String(v).trim() === '' ? '' : String(v);
-const date = (v?: string | null) => v ? fmtDate(v) : '';
-const time = (v?: string | null) => v ? fmtTime(v) : '';
-const duration = (v: number | null) => v === null ? '' : fmtDurationWords(v);
-const pair = (label: string, v: unknown) => { const text = present(v); return text ? `${label}: ${text}` : ''; };
+const TOP = 48;
+const FOOTER_TOP = PAGE_H - 28;
+const BODY_SIZE = 9.4;
+const LINE_H = 11.1;
+const CELL_PAD_X = 3.4;
+const CELL_PAD_Y = 3;
+const C = {
+  navy: '0.122 0.227 0.373', // #1F3A5F
+  body: '0.133 0.133 0.133',
+  muted: '0.39 0.43 0.48',
+  border: '0.78 0.83 0.88',
+  alt: '0.957 0.969 0.980',
+  white: '1 1 1',
+  note: '0.945 0.965 0.980',
+};
+const val = (value: unknown): string => value === null || value === undefined ? '' : String(value).trim();
+const d = (value?: string | null) => value ? value.slice(0,10) : '';
+const t = (value?: string | null) => value ? fmtTime(value) : '';
+const mins = (value: number | null) => value === null ? '' : fmtDurationWords(value);
+const recordDate = (start?: string, end?: string) => start ? `${d(start)}${end && end !== start ? ` – ${d(end)}` : ''}` : '';
+const pair = (label: string, value: unknown) => val(value) ? `${label}: ${val(value)}` : '';
+const notEmpty = (record: Record<string, string>) => Object.values(record).some(Boolean);
 
-function collectSections(input: CompleteEmployeeData): TableSection[] {
-  const id = input.employee.id;
-  const visits: string[][] = [
-    ...input.visits.filter(x => x.employeeId === id).filter(x => present(x.branch) || present(x.clientName)).map(x => [present(x.branch), present(x.clientName)]),
-    ...input.fieldVisits.filter(x => x.employeeId === id && present(x.branch)).map(x => [present(x.branch), '']),
-  ];
-  const minutes = input.minutes.filter(x => x.employeeId === id).sort((a,b) => (a.date ?? '').localeCompare(b.date ?? ''))
-    .map(x => {
-      const calc = minuteTiming(x);
-      return [date(x.date), time(x.fileRequestTime), time(x.fileReceivedTime), time(x.responseTime), x.inspectionResult ? INSPECTION_RESULT_LABELS[x.inspectionResult] : '', duration(calc.minutes), calc.invalid ? 'بيانات غير مكتملة' : calc.delayed ? 'متأخر' : calc.minutes === null ? '' : 'في الوقت'];
-    }).filter(r => r.some(Boolean));
-  const oldLeaves = input.legacyLeaves.filter(x => x.employeeId === id);
-  const newRows = input.leavePermissions.filter(x => x.employeeId === id);
+function employeeTables(input: CompleteEmployeeData) {
+  const employeeId = input.employee.id;
+  const visits = [
+    ...input.visits.filter(x => x.employeeId === employeeId).map(x => ({ sortDate: val(x.visitDate), date: d(x.visitDate), branch: val(x.branch), customer: val(x.clientName) })),
+    ...input.fieldVisits.filter(x => x.employeeId === employeeId).map(x => ({ sortDate: val(x.visitDate), date: d(x.visitDate), branch: val(x.branch), customer: '' })),
+  ].filter(notEmpty).sort((a,b) => a.sortDate.localeCompare(b.sortDate)).map(({date,branch,customer})=>({date,branch,customer}));
+
+  const minutes = input.minutes.filter(x => x.employeeId === employeeId).sort((a,b) => (a.date ?? '').localeCompare(b.date ?? '')).map(row => {
+    const timing = minuteTiming(row);
+    const request = val(row.fileRequestTime);
+    const received = val(row.fileReceivedTime) || val(row.minuteReceivedTime);
+    const response = val(row.responseTime) || val(row.finalResponseTime);
+    const result = row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : row.result ? MINUTE_RESULT_LABELS[row.result] : '';
+    const extra = [
+      pair('الفرع', row.branch), pair('المرجع', row.clientRef), pair('نوع التمويل', row.financingType),
+      row.amount !== null && row.amount !== undefined ? pair('المبلغ', fmtNumber(row.amount)) : '',
+      pair('الحالة', row.status ? MINUTE_STATUS_LABELS[row.status] : ''), pair('ملاحظات', row.notes),
+    ].filter(Boolean).join(' | ');
+    return {
+      date: d(row.date), request: t(request), received: t(received), response: t(response), result,
+      duration: mins(timing.minutes), delay: timing.invalid ? 'غير مكتمل' : timing.delayed ? 'متأخر' : timing.minutes !== null ? 'في الوقت' : '',
+      extra,
+    };
+  }).filter(notEmpty);
+
+  const old = input.legacyLeaves.filter(x => x.employeeId === employeeId);
+  const saved = input.leavePermissions.filter(x => x.employeeId === employeeId);
   const leaves = [
-    ...oldLeaves.filter(x => !x.type.includes('إذن')).map(x => [x.endDate && x.endDate !== x.startDate ? `${date(x.startDate)} – ${date(x.endDate)}` : date(x.startDate), present(x.type), x.unit === 'days' ? (x.days == null ? '' : `${fmtNumber(x.days)} يوم`) : (x.hours == null ? '' : `${fmtNumber(x.hours)} ساعة`), present(x.notes)]),
-    ...newRows.filter(x => x.requestType === 'leave').map(x => [date(x.date), present(x.category), '', present(x.notes)]),
-  ].filter(r => r.some(Boolean));
+    ...old.filter(x => !x.type.includes('إذن')).map(x => ({ sortDate:val(x.startDate), date: recordDate(x.startDate,x.endDate), type: val(x.type), duration: x.unit === 'days' && x.days !== null ? `${fmtNumber(x.days)} يوم` : x.unit === 'hours' && x.hours !== null ? `${fmtNumber(x.hours)} ساعة` : '', notes: val(x.notes) })),
+    ...saved.filter(x => x.requestType === 'leave').map(x => ({ sortDate:val(x.date), date: d(x.date), type: val(x.category), duration: '', notes: val(x.notes) })),
+  ].filter(notEmpty).sort((a,b) => a.sortDate.localeCompare(b.sortDate)).map(({date,type,duration,notes})=>({date,type,duration,notes}));
   const permissions = [
-    ...oldLeaves.filter(x => x.type.includes('إذن')).map(x => [x.endDate && x.endDate !== x.startDate ? `${date(x.startDate)} – ${date(x.endDate)}` : date(x.startDate), present(x.type), x.unit === 'days' ? (x.days == null ? '' : `${fmtNumber(x.days)} يوم`) : (x.hours == null ? '' : `${fmtNumber(x.hours)} ساعة`), present(x.notes)]),
-    ...newRows.filter(x => x.requestType === 'permission').map(x => [date(x.date), present(x.category), x.durationHours ? `${fmtNumber(x.durationHours)} ساعة` : '', present(x.notes)]),
-  ].filter(r => r.some(Boolean));
-  const attendance = input.attendance.filter(x => x.employeeId === id).sort((a,b) => a.date.localeCompare(b.date));
-  const late = attendance.filter(x => attendanceDelayMinutes(x.arrivalTime) > 0).map(x => [date(x.date), time(x.arrivalTime), duration(attendanceDelayMinutes(x.arrivalTime)), present(x.notes)]);
-  const early = attendance.filter(x => earlyDepartureMinutes(x.departureTime) > 0).map(x => [date(x.date), time(x.departureTime), duration(earlyDepartureMinutes(x.departureTime)), present(x.notes)]);
-  const observationRows = input.observations.filter(x => x.employeeId === id).sort((a,b) => (a.date || '').localeCompare(b.date || '')).map(x => [date(x.date), pair('المصدر',x.source), pair('الفرع',x.branch), pair('المرجع',x.reference), pair('التصنيف',x.category), pair('الخطورة',SEVERITY_LABELS[x.severity] ?? x.severity), pair('التفاصيل',x.details), pair('الإجراء',x.correctiveAction), pair('الحالة',OBSERVATION_STATUS_LABELS[x.status] ?? x.status), pair('متابعة',x.followUpNotes)].filter(Boolean).join(' | ')).filter(Boolean).map(x => [x]);
-  const annual = input.annualNotes.filter(x => x.employeeId === id).sort((a,b) => a.year-b.year).map(x => [String(x.year),present(x.notes)]).filter(r => r.some(Boolean));
-  return [
-    { title: 'الزيارات الميدانية', columns: [{label:'الفرع',width:CONTENT_W*.44},{label:'اسم العميل',width:CONTENT_W*.56}], rows: visits },
-    { title: 'الدقائق اليومية', columns: [
-      {label:'التاريخ',width:66},{label:'طلب الملف',width:61},{label:'استلام الملف',width:68},{label:'الرد',width:52},{label:'نتيجة الفحص',width:92},{label:'المدة',width:77},{label:'حالة التأخير',width:CONTENT_W-416},
-    ], rows: minutes },
-    { title: 'الإجازات', columns: [{label:'التاريخ',width:112},{label:'النوع',width:120},{label:'المدة',width:88},{label:'السبب / الملاحظات',width:CONTENT_W-320}], rows: leaves },
-    { title: 'الأذونات', columns: [{label:'التاريخ',width:112},{label:'النوع',width:120},{label:'المدة',width:88},{label:'السبب / الملاحظات',width:CONTENT_W-320}], rows: permissions },
-    { title: 'تأخيرات الحضور', columns: [{label:'التاريخ',width:130},{label:'وقت الحضور',width:118},{label:'مدة التأخير',width:116},{label:'ملاحظات',width:CONTENT_W-364}], rows: late },
-    { title: 'الانصراف المبكر', columns: [{label:'التاريخ',width:130},{label:'وقت الانصراف',width:118},{label:'مدة التبكير',width:116},{label:'ملاحظات',width:CONTENT_W-364}], rows: early },
-    { title: 'الملاحظات والمتابعات', columns: [{label:'التاريخ والتفاصيل',width:CONTENT_W}], rows: observationRows },
-    { title: 'الملاحظات السنوية', columns: [{label:'السنة',width:90},{label:'الملاحظة',width:CONTENT_W-90}], rows: annual },
-  ];
+    ...old.filter(x => x.type.includes('إذن')).map(x => ({ sortDate:val(x.startDate), date: recordDate(x.startDate,x.endDate), type: val(x.type), duration: x.unit === 'days' && x.days !== null ? `${fmtNumber(x.days)} يوم` : x.unit === 'hours' && x.hours !== null ? `${fmtNumber(x.hours)} ساعة` : '', notes: val(x.notes) })),
+    ...saved.filter(x => x.requestType === 'permission').map(x => ({ sortDate:val(x.date), date: d(x.date), type: val(x.category), duration: x.durationHours ? `${fmtNumber(x.durationHours)} ساعة` : '', notes: val(x.notes) })),
+  ].filter(notEmpty).sort((a,b) => a.sortDate.localeCompare(b.sortDate)).map(({date,type,duration,notes})=>({date,type,duration,notes}));
+
+  const ownAttendance = input.attendance.filter(x => x.employeeId === employeeId).sort((a,b) => a.date.localeCompare(b.date));
+  const late = ownAttendance.filter(x => attendanceDelayMinutes(x.arrivalTime) > 0).map(x => ({ date: d(x.date), time: t(x.arrivalTime), duration: mins(attendanceDelayMinutes(x.arrivalTime)), notes: val(x.notes) }));
+  const early = ownAttendance.filter(x => earlyDepartureMinutes(x.departureTime) > 0).map(x => ({ date: d(x.date), time: t(x.departureTime), duration: mins(earlyDepartureMinutes(x.departureTime)), notes: val(x.notes) }));
+
+  const observations = input.observations.filter(x => x.employeeId === employeeId).sort((a,b) => (a.date ?? '').localeCompare(b.date ?? '')).map(x => ({
+    date: d(x.date), details: [pair('المصدر',x.source), pair('الفرع',x.branch), pair('المرجع',x.reference), pair('التصنيف',x.category), pair('الخطورة',SEVERITY_LABELS[x.severity] ?? x.severity), pair('التفاصيل',x.details), pair('الإجراء',x.correctiveAction), pair('تاريخ الإخطار',d(x.notificationDate)), pair('الحالة',OBSERVATION_STATUS_LABELS[x.status] ?? x.status), pair('تاريخ الإغلاق',d(x.resolutionDate)), pair('متكررة',typeof x.recurrence === 'boolean' ? (x.recurrence ? 'نعم' : 'لا') : ''), pair('المتابعة',x.followUpNotes)].filter(Boolean).join(' | '),
+  })).filter(notEmpty);
+  const annual = input.annualNotes.filter(x => x.employeeId === employeeId).sort((a,b) => a.year-b.year).map(x => ({ year: String(x.year), note: val(x.notes) })).filter(notEmpty);
+
+  return { visits, minutes, leaves, permissions, late, early, observations, annual };
+}
+
+function usableColumns(columns: Column[], rows: Record<string, string>[]): Column[] {
+  return columns.filter(column => rows.some(row => Boolean(row[column.value])));
 }
 
 export async function buildCompleteEmployeePdf(data: CompleteEmployeeData, fonts: { regular: PdfFontSource; bold: PdfFontSource }): Promise<Uint8Array> {
   const doc = new PdfDocument(PAGE_W, PAGE_H);
   doc.addFont('TimesNewRomanPSMT', 'F1', fonts.regular);
   doc.addFont('TimesNewRomanPS-BoldMT', 'F2', fonts.bold);
-  const pages: PdfPage[] = [];
-  let page!: PdfPage;
+  const page: PdfPage = doc.newPage();
+  const records = employeeTables(data);
   let y = TOP;
-  const newPage = () => {
-    page = doc.newPage(); pages.push(page); y = TOP;
-    page.text(data.employee.name, { x:MARGIN, top:16, font:'bold', size:pages.length === 1 ? 20 : 13, color:C.navy, align:'right', maxWidth:CONTENT_W });
-    if (pages.length === 1) page.text('الملف الوظيفي', {x:MARGIN,top:39,font:'regular',size:10,color:C.muted,align:'right',maxWidth:CONTENT_W});
+  const contentBottom = FOOTER_TOP - 9;
+
+  const failOverflow = (section: string): never => {
+    const totalRecords = Object.values(records).reduce((sum, value) => sum + value.length, 0);
+    throw new Error(`تعذّر احتواء تقرير «${section}» على صفحة A4 واحدة مع الاحتفاظ بكل السجلات (${totalRecords} سجلًا إجمالًا). لم يُحذف أي سجل؛ اختصر الملاحظات أو قلّل عدد السجلات ثم أعد التصدير.`);
   };
-  newPage();
-  const ensure = (height: number, section?: TableSection) => {
-    if (y + height <= PAGE_H - BOTTOM) return;
-    newPage();
-    if (section) drawSectionTitle(section.title, true);
+  const ensure = (height: number, section: string) => {
+    if (y + height > contentBottom) failOverflow(section);
   };
-  const drawSectionTitle = (title: string, continuation = false) => {
-    ensure(29);
-    page.rect(MARGIN,y,CONTENT_W,25,{fill:C.navy});
-    page.text(continuation ? `${title} — تابع` : title,{x:MARGIN+8,top:y+4,font:'bold',size:14,color:C.white,align:'right',maxWidth:CONTENT_W-16});
-    y+=30;
+  const sectionTitle = (title: string, gapAfter = 3) => {
+    ensure(16 + gapAfter, title);
+    page.text(title, { x:MARGIN, top:y, font:'bold', size:11.2, color:C.navy, align:'right', maxWidth:CONTENT_W });
+    page.line(MARGIN, y+13.2, PAGE_W-MARGIN, y+13.2, C.border, .55);
+    y += 16 + gapAfter;
   };
-  const drawTableHeader = (section: TableSection) => {
-    const h=24; ensure(h,section);
-    page.rect(MARGIN,y,CONTENT_W,h,{fill:C.head});
-    let right=MARGIN+CONTENT_W;
-    for(const col of section.columns){
-      const x=right-col.width;
-      page.rect(x,y,col.width,h,{stroke:C.border,lineWidth:.45});
-      page.text(col.label,{x:x+3,top:y+5,font:'bold',size:9.3,color:C.navy,align:'right',maxWidth:col.width-6});
-      right=x;
+  const rowLines = (row: Record<string,string>, columns: Column[], size = BODY_SIZE) => columns.map(col => row[col.value] ? wrapText(row[col.value], size, col.width-CELL_PAD_X*2, fonts.regular.metrics) : ['']);
+  const tableHeight = (table: TableData, width: number, headerHeight = 17, keepColumns = false) => {
+    const cols = keepColumns ? [...table.columns] : usableColumns(table.columns, table.rows);
+    const available = width - (table.title ? 0 : 0);
+    const widths = cols.map(col => col.width);
+    const total = widths.reduce((a,b)=>a+b,0);
+    if (total && Math.abs(total-available) > 0.5) cols.forEach(col => { col.width = col.width * available / total; });
+    return (table.title ? 14 : 0) + headerHeight + table.rows.reduce((sum,row) => sum + Math.max(15, Math.max(...rowLines(row,cols).map(lines=>lines.length))*LINE_H + CELL_PAD_Y*2),0);
+  };
+  const drawTable = (table: TableData, x: number, width: number, section: string, options: { titleBand?: boolean; headerHeight?: number; bodySize?: number; keepColumns?: boolean } = {}) => {
+    const cols = options.keepColumns ? [...table.columns] : usableColumns(table.columns, table.rows);
+    if (!table.rows.length || !cols.length) return 0;
+    const headerHeight = options.headerHeight ?? 17;
+    const bodySize = options.bodySize ?? BODY_SIZE;
+    let available = width;
+    if (options.titleBand && table.title) {
+      ensure(15, section);
+      page.rect(x,y,width,14,{fill:C.navy});
+      page.text(table.title,{x:x+4,top:y+1.6,font:'bold',size:9.2,color:C.white,align:'right',maxWidth:width-8});
+      y += 15; available = width;
     }
-    y+=h;
-  };
-  const drawSection = (section: TableSection) => {
-    if (!section.rows.length) return;
-    const rowHeight = (row: string[]) => Math.max(25, Math.max(...row.map((text,i)=> text ? wrapText(text,BODY_SIZE,section.columns[i].width-10,fonts.regular.metrics).length : 1))*LINE_H+8);
-    if (y + 30 + 24 + rowHeight(section.rows[0]) > PAGE_H - BOTTOM) newPage();
-    drawSectionTitle(section.title);
-    drawTableHeader(section);
-    let alternate=false;
-    for (const row of section.rows) {
-      const cellLines = row.map((text,i)=> text ? wrapText(text,BODY_SIZE,section.columns[i].width-10,fonts.regular.metrics) : ['']);
-      const h=Math.max(25,Math.max(...cellLines.map(x=>x.length))*LINE_H+8);
-      if(h>PAGE_H-TOP-BOTTOM-55) throw new Error(`تعذر عرض سجل طويل دون تقسيمه: ${section.title}`);
-      if(y+h>PAGE_H-BOTTOM){ newPage(); drawSectionTitle(section.title,true); drawTableHeader(section); alternate=false; }
-      page.rect(MARGIN,y,CONTENT_W,h,{fill:alternate?C.alt:C.white});
-      page.rect(MARGIN,y,CONTENT_W,h,{stroke:C.border,lineWidth:.4});
-      let right=MARGIN+CONTENT_W;
-      row.forEach((_,i)=>{
-        const col=section.columns[i], x=right-col.width;
-        if(i>0) page.line(x,y,x,y+h,C.border,.35);
-        cellLines[i].forEach((line,j)=>page.text(line,{x:x+4,top:y+4+j*LINE_H,font:'regular',size:BODY_SIZE,color:C.navy,align:'right',maxWidth:col.width-8}));
-        right=x;
+    const total = cols.reduce((sum,col)=>sum+col.width,0);
+    if (Math.abs(total-available) > 0.5) cols.forEach(col => { col.width = col.width * available / total; });
+    ensure(headerHeight,section);
+    let right=x+width;
+    for (const col of cols) {
+      const cx=right-col.width;
+      page.rect(cx,y,col.width,headerHeight,{fill:C.navy});
+      page.rect(cx,y,col.width,headerHeight,{stroke:C.border,lineWidth:.45});
+      page.text(col.label,{x:cx+CELL_PAD_X,top:y+4,font:'bold',size:9.0,color:C.white,align:'right',maxWidth:col.width-CELL_PAD_X*2});
+      right=cx;
+    }
+    y += headerHeight;
+    table.rows.forEach((row,index)=>{
+      const wrapped=rowLines(row,cols,bodySize);
+      const h=Math.max(15,Math.max(...wrapped.map(lines=>lines.length))*LINE_H+CELL_PAD_Y*2);
+      ensure(h,section);
+      page.rect(x,y,width,h,{fill:index%2 ? C.alt : C.white});
+      page.rect(x,y,width,h,{stroke:C.border,lineWidth:.4});
+      right=x+width;
+      cols.forEach((col,i)=>{
+        const cx=right-col.width;
+        if(i>0) page.line(cx,y,cx,y+h,C.border,.35);
+        wrapped[i].forEach((line,lineIndex)=>page.text(line,{x:cx+CELL_PAD_X,top:y+CELL_PAD_Y+lineIndex*LINE_H,font:'regular',size:bodySize,color:C.body,align:'right',maxWidth:col.width-CELL_PAD_X*2}));
+        right=cx;
       });
-      y+=h; alternate=!alternate;
-    }
+      y+=h;
+    });
+    return y;
   };
-  const e=data.employee;
-  const details=[
-    ['رقم الموظف',present(e.employeeNo)],['الكود',present(e.code)],['الحالة',`${EMPLOYEE_STATUS_LABELS[e.status] ?? e.status}${e.archived?' (مؤرشف)':''}`],['القطاع',present(e.sector)],['المحافظة',present(e.governorate)],['المسمى الوظيفي',present(e.jobTitle)],['تاريخ التعيين',date(e.employmentDate)],['الفروع',present(e.branches)],
-  ].filter(x=>x[1]);
-  drawSectionTitle('البيانات الأساسية');
-  const factCols=[{label:'البيان',width:110},{label:'التفاصيل',width:CONTENT_W-110}];
-  drawTableHeader({title:'البيانات الأساسية',columns:factCols,rows:[]});
-  for(let i=0;i<details.length;i+=2){
-    const row=[details[i],details[i+1]].filter(Boolean) as string[][];
-    const text=row.map(pair=>pair.join(': ')).join('   |   ');
-    const lines=wrapText(text,BODY_SIZE,CONTENT_W-16,fonts.regular.metrics);
-    const h=Math.max(26,lines.length*LINE_H+8); ensure(h);
-    page.rect(MARGIN,y,CONTENT_W,h,{fill:i%4===0?C.alt:C.white}); page.rect(MARGIN,y,CONTENT_W,h,{stroke:C.border,lineWidth:.4});
-    lines.forEach((line,j)=>page.text(line,{x:MARGIN+7,top:y+5+j*LINE_H,font:'regular',size:BODY_SIZE,color:C.navy,align:'right',maxWidth:CONTENT_W-14})); y+=h;
-  }
-  if (present(e.notes)) {
-    drawSectionTitle('ملاحظات الموظف');
-    const noteLines=wrapText(e.notes,11,CONTENT_W-22,fonts.regular.metrics);
-    let idx=0;
-    while(idx<noteLines.length){
-      const maxLines=Math.max(1,Math.floor((PAGE_H-BOTTOM-y-46)/14));
-      if(maxLines<1 || y+34>PAGE_H-BOTTOM){newPage(); drawSectionTitle('ملاحظات الموظف');}
-      const count=Math.max(1,Math.floor((PAGE_H-BOTTOM-y-36)/14));
-      const chunk=noteLines.slice(idx,idx+count);
-      const h=chunk.length*14+20; ensure(h);
-      page.rect(MARGIN,y,CONTENT_W,h,{fill:'0.93 0.97 0.97'}); page.rect(MARGIN,y,CONTENT_W,h,{stroke:'0.58 0.76 0.77',lineWidth:.7});
-      chunk.forEach((line,j)=>page.text(line,{x:MARGIN+11,top:y+9+j*14,font:'regular',size:10.5,color:C.navy,align:'right',maxWidth:CONTENT_W-22}));
-      y+=h; idx+=chunk.length;
+  const drawTwoTables = (title: string, rightTable: TableData, leftTable: TableData, options: { titleBand?: boolean; oneFullIfSolo?: boolean; bodySize?: number } = {}) => {
+    if (!rightTable.rows.length && !leftTable.rows.length) return;
+    sectionTitle(title);
+    const gap=8;
+    if (options.oneFullIfSolo && (!rightTable.rows.length || !leftTable.rows.length)) {
+      const table=rightTable.rows.length ? rightTable : leftTable;
+      const total=table.columns.reduce((a,c)=>a+c.width,0) || CONTENT_W;
+      table.columns.forEach(col=>col.width=col.width*CONTENT_W/total);
+      drawTable(table,MARGIN,CONTENT_W,title,{titleBand:options.titleBand,bodySize:options.bodySize});
+      y+=3;
+      return;
     }
+    const half=(CONTENT_W-gap)/2;
+    // Arabic reading order: right-hand table first, then left-hand table.
+    const leftStartY=y;
+    const rightHeight=tableHeight(rightTable,half) + (options.titleBand && rightTable.title ? 15 : 0);
+    const leftHeight=tableHeight(leftTable,half) + (options.titleBand && leftTable.title ? 15 : 0);
+    ensure(Math.max(rightHeight,leftHeight),title);
+    y=leftStartY;
+    drawTable(rightTable,MARGIN+half+gap,half,title,{titleBand:options.titleBand,bodySize:options.bodySize});
+    const rightEndY=y;
+    y=leftStartY;
+    drawTable(leftTable,MARGIN,half,title,{titleBand:options.titleBand,bodySize:options.bodySize});
+    y=Math.max(rightEndY,y)+3;
+  };
+  // Name and dossier identifier.
+  const heading=`ملف الموظف / ${val(data.employee.name)}`;
+  const headingLines=wrapText(heading,16,CONTENT_W,fonts.bold.metrics);
+  ensure(headingLines.length*18+4,'العنوان');
+  headingLines.forEach((line,index)=>page.text(line,{x:MARGIN,top:13+index*18,font:'bold',size:16,color:C.navy,align:'right',maxWidth:CONTENT_W}));
+  y=TOP;
+  const employee=data.employee;
+  const infoPairs = ([
+    ['كود الموظف',val(employee.code)],['رقم الموظف',val(employee.employeeNo)],['تاريخ التعيين',d(employee.employmentDate)],['الوظيفة',val(employee.jobTitle)],
+    ['القطاع',val(employee.sector)],['الفروع المكلف بها',val(employee.branches)],['المحافظة',val(employee.governorate)],['الحالة',`${EMPLOYEE_STATUS_LABELS[employee.status] ?? val(employee.status)}${employee.archived?' (مؤرشف)':''}`],
+  ] as [string,string][]).filter(([,value])=>Boolean(value));
+  if(infoPairs.length){
+    sectionTitle('بيانات الموظف');
+    const rowRecords:Record<string,string>[]=[];
+    for(let i=0;i<infoPairs.length;i+=2){
+      rowRecords.push({label1:infoPairs[i][0],value1:infoPairs[i][1],label2:infoPairs[i+1]?.[0]??'',value2:infoPairs[i+1]?.[1]??''});
+    }
+    const cols:Column[]=[{label:'البيان',width:60,value:'label1'},{label:'القيمة',width:CONTENT_W/2-60,value:'value1'},{label:'البيان',width:60,value:'label2'},{label:'القيمة',width:CONTENT_W/2-60,value:'value2'}];
+    const rows=rowRecords;
+    ensure(rows.length*18,'بيانات الموظف');
+    rows.forEach((row,index)=>{
+      const totalWidth=cols.reduce((s,c)=>s+c.width,0); cols.forEach(c=>c.width=c.width*CONTENT_W/totalWidth);
+      const h=18;
+      let right=PAGE_W-MARGIN;
+      cols.forEach(col=>{
+        const cx=right-col.width;
+        const isLabel=col.value.startsWith('label');
+        page.rect(cx,y,col.width,h,{fill:isLabel?C.navy:index%2?C.alt:C.white});
+        page.rect(cx,y,col.width,h,{stroke:C.border,lineWidth:.4});
+        const text=row[col.value];
+        if(text) page.text(text,{x:cx+3,top:y+4,font:isLabel?'bold':'regular',size:9.0,color:isLabel?C.white:C.body,align:'right',maxWidth:col.width-6});
+        right=cx;
+      });
+      y+=h;
+    });
+    y+=3;
   }
-  for(const section of collectSections(data)) drawSection(section);
-  if(pages.length>5) throw new Error(`يتطلب التقرير ${pages.length} صفحات، والحد الأقصى خمسة؛ لم يتم إسقاط أي سجلات.`);
-  pages.forEach((p,i)=>p.text(`صفحة ${i+1} من ${pages.length}`,{x:MARGIN,top:PAGE_H-28,font:'regular',size:8.5,color:C.muted,align:'center',maxWidth:CONTENT_W}));
-  pages.forEach(p=>doc.addPage(p));
+
+  // Employee notes: preserve user-entered line breaks, and wrap every line.
+  if(val(employee.notes)){
+    sectionTitle('ملاحظات على الموظف');
+    const noteLines=val(employee.notes).split(/\r?\n/).flatMap(line=>line ? wrapText(line,9.5,CONTENT_W-12,fonts.regular.metrics) : ['']);
+    const h=noteLines.reduce((sum,line)=>sum+(line?11.4:5),0)+7;
+    ensure(h,'ملاحظات على الموظف');
+    page.rect(MARGIN,y,CONTENT_W,h,{fill:C.note}); page.rect(MARGIN,y,CONTENT_W,h,{stroke:C.border,lineWidth:.5});
+    let noteY=y+3.5;
+    noteLines.forEach(line=>{if(line)page.text(line,{x:MARGIN+6,top:noteY,font:'regular',size:9.5,color:C.body,align:'right',maxWidth:CONTENT_W-12});noteY+=line?11.4:5;});
+    y+=h+3;
+  }
+
+  const tables=employeeTables(data);
+  if(tables.visits.length){
+    sectionTitle('الزيارات الميدانية');
+    const sorted=tables.visits;
+    const cut=Math.ceil(sorted.length/2);
+    const rightRows=sorted.slice(0,cut).map(row=>({date:row.date,branch:row.branch,customer:row.customer}));
+    const leftRows=sorted.slice(cut).map(row=>({date:row.date,branch:row.branch,customer:row.customer}));
+    const cols=(w:number):Column[]=>[{label:'تاريخ الزيارة',width:w*.29,value:'date'},{label:'الفرع',width:w*.27,value:'branch'},{label:'اسم العميل',width:w*.44,value:'customer'}];
+    const gap=8, half=(CONTENT_W-gap)/2;
+    const rightTable:TableData={columns:cols(half),rows:rightRows};
+    const leftTable:TableData={columns:cols(half),rows:leftRows};
+    const height=Math.max(tableHeight(rightTable,half,17,true),leftRows.length?tableHeight(leftTable,half,17,true):0); ensure(height,'الزيارات الميدانية');
+    const startY=y;
+    drawTable(rightTable,MARGIN+half+gap,half,'الزيارات الميدانية',{bodySize:9.1,keepColumns:true}); const endY=y;
+    y=startY;
+    if(leftRows.length) drawTable(leftTable,MARGIN,half,'الزيارات الميدانية',{bodySize:9.1,keepColumns:true});
+    y=Math.max(endY,y)+3;
+  }
+
+  if(tables.leaves.length || tables.permissions.length){
+    const gap=8, half=(CONTENT_W-gap)/2;
+    const makeLeaveTable=(rows:typeof tables.leaves,title:string):TableData=>({title,columns:[
+      {label:'التاريخ',width:half*.28,value:'date'},{label:'النوع',width:half*.35,value:'type'},{label:'المدة',width:half*.18,value:'duration'},{label:'الملاحظات',width:half*.19,value:'notes'},
+    ],rows});
+    drawTwoTables('الإجازات والأذونات',makeLeaveTable(tables.leaves,'الإجازات'),makeLeaveTable(tables.permissions,'الأذونات'),{titleBand:true,oneFullIfSolo:true,bodySize:8.9});
+  }
+
+  if(tables.minutes.length){
+    sectionTitle('محاضر يومية');
+    const rows=tables.minutes;
+    const definitions:Column[]=[
+      {label:'التاريخ',width:52,value:'date'}, {label:'طلب الملف',width:53,value:'request'}, {label:'استلام الملف',width:58,value:'received'},
+      {label:'الرد على الملف',width:58,value:'response'}, {label:'نتيجة الفحص',width:72,value:'result'}, {label:'مدة الفحص',width:58,value:'duration'},
+      {label:'حالة التأخير',width:58,value:'delay'}, {label:'بيانات أخرى',width:170,value:'extra'},
+    ];
+    const columns=usableColumns(definitions,rows);
+    const total=columns.reduce((sum,c)=>sum+c.width,0); columns.forEach(c=>c.width=c.width*CONTENT_W/total);
+    drawTable({columns,rows},MARGIN,CONTENT_W,'محاضر يومية',{bodySize:8.9,headerHeight:17});
+    y+=3;
+  }
+
+  if(tables.late.length || tables.early.length){
+    const makeAttendance=(rows:typeof tables.late,title:string,w:number):TableData=>({title,columns:[
+      {label:'التاريخ',width:w*.23,value:'date'},{label:'الوقت',width:w*.21,value:'time'},{label:'المدة',width:w*.22,value:'duration'},{label:'ملاحظات',width:w*.34,value:'notes'},
+    ],rows});
+    const gap=8, half=(CONTENT_W-gap)/2;
+    drawTwoTables('التأخيرات',makeAttendance(tables.late,'تأخر الحضور',half),makeAttendance(tables.early,'الانصراف المبكر',half),{titleBand:true,oneFullIfSolo:true,bodySize:8.9});
+  }
+
+  if(tables.observations.length){
+    sectionTitle('الملاحظات والمتابعات');
+    const rows=tables.observations;
+    const cols:Column[]=[{label:'التاريخ',width:54,value:'date'},{label:'التفاصيل',width:CONTENT_W-54,value:'details'}];
+    drawTable({columns:cols,rows},MARGIN,CONTENT_W,'الملاحظات والمتابعات',{bodySize:8.8,headerHeight:16}); y+=2;
+  }
+  if(tables.annual.length){
+    const gap=8, half=(CONTENT_W-gap)/2;
+    const annualTable:TableData={columns:[{label:'السنة',width:55,value:'year'},{label:'الملاحظة السنوية',width:half-55,value:'note'}],rows:tables.annual};
+    drawTwoTables('الملاحظات السنوية',annualTable,{columns:[],rows:[]},{oneFullIfSolo:true,bodySize:8.8});
+  }
+
+  // A single-page report is an explicit invariant; refuse export rather than silently omit records.
+  if(y>contentBottom) failOverflow('المحتوى الكامل');
+  page.line(MARGIN,FOOTER_TOP-5,PAGE_W-MARGIN,FOOTER_TOP-5,C.border,.6);
+  page.text('كاش للتمويل متناهي الصغر — ملف الموظف',{x:MARGIN,top:FOOTER_TOP,font:'regular',size:7.2,color:C.muted,align:'right',maxWidth:CONTENT_W*.7});
+  page.text('صفحة 1 من 1',{x:MARGIN,top:FOOTER_TOP,font:'regular',size:7.2,color:C.muted,align:'left',maxWidth:CONTENT_W});
+  doc.addPage(page);
   return doc.build();
 }
 
