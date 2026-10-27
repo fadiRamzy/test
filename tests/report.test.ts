@@ -122,8 +122,9 @@ describe('تشكيل النص العربي و PDF', () => {
     const glyphs = shapeText('اسم الموظف', FONT_TIMES_REGULAR);
     // 10 حروف منطقية => نفس العدد من الأشكال، ولكنها أشكال متصلة (Presentation Forms)
     expect(glyphs.length).toBe(10);
-    const presentation = glyphs.filter((glyph) => glyph.code >= 0xfe70 && glyph.code <= 0xfeff).length;
-    expect(presentation).toBeGreaterThan(5);
+    const logicalArabic = glyphs.filter((glyph) => glyph.code >= 0x0600 && glyph.code <= 0x06ff).length;
+    expect(logicalArabic).toBeGreaterThan(5);
+    expect(glyphs.some((glyph) => glyph.gid !== FONT_TIMES_REGULAR.chars[String(glyph.code)])).toBe(true);
     expect(measureText('اسم', 9, FONT_TIMES_REGULAR)).toBeGreaterThan(0);
   });
 

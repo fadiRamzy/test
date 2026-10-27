@@ -73,8 +73,8 @@ async function setTime(user: ReturnType<typeof userEvent.setup>, id: string, val
   await user.tab();
 }
 
-describe('ألوان ملخص الإجازات والأذونات', () => {
-  it('يفصل بصريًا ويعرض القيم الدقيقة لموظفين بإجماليات مختلفة', async () => {
+describe('جدول ملخص الإجازات والأذونات', () => {
+  it('يعرض كل موظف في صف موحد ويحافظ على القيم والألوان والفلاتر', async () => {
     const first = await seedEmployee({ name: 'موظف ملخص أول', code: 'RO-601' });
     const second = await seedEmployee({ name: 'موظف ملخص ثان', code: 'RO-602' });
     const today = new Date().toISOString().slice(0, 10);
@@ -85,19 +85,22 @@ describe('ألوان ملخص الإجازات والأذونات', () => {
     window.location.hash = '#/leave-permissions';
     renderApp();
 
-    const firstHeading = await screen.findByRole('heading', { name: first.name });
-    const firstCard = firstHeading.closest('.leave-summary-employee') as HTMLElement;
-    const secondCard = screen.getByRole('heading', { name: second.name }).closest('.leave-summary-employee') as HTMLElement;
-    const metric = (card: HTMLElement, label: string) => {
-      const item = Array.from(card.querySelectorAll('.leave-metric')).find((node) => node.querySelector('span')?.textContent === label);
-      return { value: item?.querySelector('strong')?.textContent, className: item?.className };
-    };
-    expect(metric(firstCard, 'إجازة اعتيادي').value).toBe('1');
-    expect(metric(firstCard, 'ساعات مستخدمة').value).toBe('1');
-    expect(metric(firstCard, 'إجازة اعتيادي').className).toContain('leave-metric--leave');
-    expect(metric(firstCard, 'أذونات انصراف').className).toContain('leave-metric--permission');
-    expect(metric(secondCard, 'إجازة بخصم').value).toBe('1');
-    expect(metric(secondCard, 'ساعات مستخدمة').value).toBe('2');
+    await screen.findByRole('heading', { name: 'ملخص الشهر والفلاتر' });
+    const table = document.querySelector('.leave-summary-table') as HTMLTableElement;
+    const firstRow = await within(table).findByRole('row', { name: new RegExp(first.name) });
+    const secondRow = within(table).getByRole('row', { name: new RegExp(second.name) });
+    expect(table.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(firstRow.querySelector('.leave-summary-name')?.textContent).toBe(first.name);
+    expect(firstRow.children[1].textContent).toBe('1');
+    expect(firstRow.children[1].className).toContain('leave-summary-leave');
+    expect(firstRow.children[5].className).toContain('leave-summary-permission');
+    expect(firstRow.children[8].textContent).toBe('1');
+    expect(secondRow.children[3].textContent).toBe('1');
+    expect(secondRow.children[8].textContent).toBe('2');
+    expect(table.querySelectorAll('thead th')).toHaveLength(11);
+    await userEvent.setup().selectOptions(screen.getByRole('combobox', { name: 'الموظف' }), first.id);
+    expect(table.querySelectorAll('tbody tr')).toHaveLength(1);
+    expect(table.querySelector('tbody tr')?.textContent).toContain(first.name);
   });
 });
 
@@ -123,13 +126,13 @@ describe('الإجازات والأذونات في الواجهة وملف ال�
     await user.selectOptions(selectById('lp-duration'), '1');
     await user.type(byId('lp-notes'), 'إذن اختبار');
     await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
-    expect(await screen.findByText('إذن حضور')).toBeInTheDocument();
+    expect(await screen.findAllByText('إذن حضور')).not.toHaveLength(0);
     await waitFor(async () => expect(await listLeavePermissions()).toHaveLength(2));
 
     app.unmount();
     const refreshedApp = renderApp();
     expect(await screen.findByText('إجازة اختبار')).toBeInTheDocument();
-    expect(await screen.findByText('إذن حضور')).toBeInTheDocument();
+    expect(await screen.findAllByText('إذن حضور')).not.toHaveLength(0);
 
     window.location.hash = `#/employees/${employee.id}`;
     expect(await screen.findByRole('heading', { name: 'طلبات الإجازات والأذونات' })).toBeInTheDocument();

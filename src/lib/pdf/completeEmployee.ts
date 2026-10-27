@@ -1,19 +1,8 @@
-import type {
-  AnnualNote,
-  AttendanceRecord,
-  DailyMinute,
-  Employee,
-  FieldVisit,
-  Leave,
-  LeavePermissionRecord,
-  MonthlyEvaluation,
-  Observation,
-  VisitTiming,
-} from '../../db/schema';
-import { EMPLOYEE_STATUS_LABELS, EVALUATION_CRITERIA, INSPECTION_RESULT_LABELS, OBSERVATION_STATUS_LABELS, SEVERITY_LABELS, VISIT_STATUS_LABELS } from '../../db/schema';
+import type { AnnualNote, AttendanceRecord, DailyMinute, Employee, FieldVisit, Leave, LeavePermissionRecord, MonthlyEvaluation, Observation, VisitTiming } from '../../db/schema';
+import { EMPLOYEE_STATUS_LABELS, INSPECTION_RESULT_LABELS, OBSERVATION_STATUS_LABELS, SEVERITY_LABELS } from '../../db/schema';
 import { attendanceDelayMinutes, earlyDepartureMinutes } from '../attendance';
-import { minuteTiming, monthlyTotals, visitTiming } from '../calc';
-import { fmtDate, fmtDurationWords, fmtTime, fmtNumber, monthName } from '../format';
+import { minuteTiming } from '../calc';
+import { fmtDate, fmtDurationWords, fmtTime, fmtNumber } from '../format';
 import type { PdfFontSource } from './writer';
 import { PdfDocument, type PdfPage } from './writer';
 import { wrapText } from './shape';
@@ -31,250 +20,159 @@ export interface CompleteEmployeeData {
   observations: Observation[];
 }
 
-interface PdfRow { date: string; detail: string; }
-interface PdfSection { title: string; rows: PdfRow[]; }
+type Column = { label: string; width: number };
+type TableSection = { title: string; columns: Column[]; rows: string[][] };
 
 const PAGE_W = 612;
 const PAGE_H = 792;
-const MARGIN = 23;
-const TABLE_W = PAGE_W - MARGIN * 2;
-const DATE_W = 62;
-const DETAIL_W = TABLE_W - DATE_W;
-const COLORS = {
-  header: '0.749 0.749 0.749',
-  border: '0.60 0.60 0.60',
-  alt: '0.949 0.949 0.949',
-  white: '1 1 1',
-  navy: '0.043 0.165 0.29',
-  muted: '0.30 0.30 0.30',
-};
+const MARGIN = 42;
+const CONTENT_W = PAGE_W - MARGIN * 2;
+const TOP = 54;
+const BOTTOM = 42;
+const BODY_SIZE = 11;
+const LINE_H = 13.8;
+const C = { navy: '0.043 0.165 0.29', muted: '0.31 0.36 0.41', border: '0.72 0.76 0.80', head: '0.91 0.93 0.95', alt: '0.965 0.975 0.982', teal: '0.08 0.43 0.48', white: '1 1 1' };
+const present = (v: unknown): string => v === null || v === undefined || String(v).trim() === '' ? '' : String(v);
+const date = (v?: string | null) => v ? fmtDate(v) : '';
+const time = (v?: string | null) => v ? fmtTime(v) : '';
+const duration = (v: number | null) => v === null ? '' : fmtDurationWords(v);
+const pair = (label: string, v: unknown) => { const text = present(v); return text ? `${label}: ${text}` : ''; };
 
-const value = (text: string | number | null | undefined) => text === null || text === undefined || text === '' ? '—' : String(text);
-const duration = (minutes: number | null) => minutes === null ? '—' : fmtDurationWords(minutes);
-const time = (value?: string | null) => value ? fmtTime(value) : '—';
-const date = (value?: string | null) => value ? fmtDate(value) : '—';
-const sep = (...items: string[]) => items.filter(Boolean).join('  |  ');
-
-function collectSections(input: CompleteEmployeeData): { sections: PdfSection[]; summary: string[] } {
-  const { employee } = input;
-  const visits = input.visits.filter((row) => row.employeeId === employee.id).sort((a, b) => (a.visitDate || '').localeCompare(b.visitDate || ''));
-  const minutes = input.minutes.filter((row) => row.employeeId === employee.id).sort((a, b) => (a.date || a.createdAt || '').localeCompare(b.date || b.createdAt || ''));
-  const legacyRecords = input.legacyLeaves.filter((row) => row.employeeId === employee.id);
-  const legacyLeaves = legacyRecords.filter((row) => !row.type.includes('إذن'));
-  const legacyPermissions = legacyRecords.filter((row) => row.type.includes('إذن'));
-  const requests = input.leavePermissions.filter((row) => row.employeeId === employee.id);
-  const leaves = requests.filter((row) => row.requestType === 'leave');
-  const permissions = requests.filter((row) => row.requestType === 'permission');
-  const attendance = input.attendance.filter((row) => row.employeeId === employee.id).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const fieldVisits = input.fieldVisits.filter((row) => row.employeeId === employee.id);
-  const evaluations = input.evaluations.filter((row) => row.employeeId === employee.id).sort((a, b) => a.year - b.year || a.month - b.month);
-  const annualNotes = input.annualNotes.filter((row) => row.employeeId === employee.id).sort((a, b) => a.year - b.year);
-  const observations = input.observations.filter((row) => row.employeeId === employee.id).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-
-  const visitsByYear = new Map<string, Map<number, number>>();
-  for (const row of visits) {
-    if (!row.visitDate) continue;
-    const year = row.visitDate.slice(0, 4);
-    const month = Number(row.visitDate.slice(5, 7));
-    if (!visitsByYear.has(year)) visitsByYear.set(year, new Map());
-    const group = visitsByYear.get(year)!;
-    group.set(month, (group.get(month) ?? 0) + 1);
-  }
-  const visitDistribution = Array.from(visitsByYear.entries()).map(([year, months]) => {
-    const yearTotal = Array.from(months.values()).reduce((sum, count) => sum + count, 0);
-    return `${year} (${yearTotal}): ${Array.from(months.entries()).sort(([a], [b]) => a - b).map(([month, count]) => `${monthName(month)} ${count}`).join('، ')}`;
-  });
-  const lateRows = attendance.filter((row) => attendanceDelayMinutes(row.arrivalTime) > 0);
-  const earlyRows = attendance.filter((row) => earlyDepartureMinutes(row.departureTime) > 0);
-  const lateTotal = lateRows.reduce((sum, row) => sum + attendanceDelayMinutes(row.arrivalTime), 0);
-  const earlyTotal = earlyRows.reduce((sum, row) => sum + earlyDepartureMinutes(row.departureTime), 0);
-  const legacyLeaveRows = legacyLeaves.map((row) => ({
-    date: `${date(row.startDate)}${row.endDate && row.endDate !== row.startDate ? ` – ${date(row.endDate)}` : ''}`,
-    detail: sep(`طلب: إجازة`, `النوع: ${value(row.type)}`, `المدة: ${row.unit === 'days' ? `${value(row.days)} يوم` : `${value(row.hours)} ساعة`}`, `ملاحظات: ${value(row.notes)}`),
-  }));
-  const newLeaveRows = leaves.map((row) => ({
-    date: date(row.date),
-    detail: sep('طلب: إجازة', `النوع: ${row.category}`, `ملاحظات: ${value(row.notes)}`),
-  }));
-  const legacyPermissionRows = legacyPermissions.map((row) => ({
-    date: `${date(row.startDate)}${row.endDate && row.endDate !== row.startDate ? ` – ${date(row.endDate)}` : ''}`,
-    detail: sep('طلب: إذن', `النوع: ${value(row.type)}`, `المدة: ${row.unit === 'days' ? `${value(row.days)} يوم` : `${value(row.hours)} ساعة`}`, `ملاحظات: ${value(row.notes)}`),
-  }));
-  const permissionRows = [
-    ...legacyPermissionRows,
-    ...permissions.map((row) => ({
-      date: date(row.date),
-      detail: sep('طلب: إذن', `النوع: ${row.category}`, `المدة: ${row.durationHours ? `${row.durationHours} ساعة` : '—'}`, `ملاحظات: ${value(row.notes)}`),
-    })),
+function collectSections(input: CompleteEmployeeData): TableSection[] {
+  const id = input.employee.id;
+  const visits: string[][] = [
+    ...input.visits.filter(x => x.employeeId === id).filter(x => present(x.branch) || present(x.clientName)).map(x => [present(x.branch), present(x.clientName)]),
+    ...input.fieldVisits.filter(x => x.employeeId === id && present(x.branch)).map(x => [present(x.branch), '']),
   ];
-  const minuteRows = minutes.map((row) => {
-    const timing = minuteTiming(row);
-    const extras = [
-      row.branch ? `الفرع: ${row.branch}` : '', row.clientRef ? `المرجع: ${row.clientRef}` : '',
-      row.financingType ? `التمويل: ${row.financingType}` : '', row.amount !== null && row.amount !== undefined ? `المبلغ: ${fmtNumber(row.amount)}` : '',
-      row.minuteReceivedTime ? `وقت الاستلام السابق: ${time(row.minuteReceivedTime)}` : '',
-      row.finalResponseTime ? `الرد السابق: ${time(row.finalResponseTime)}` : '',
-      row.result ? `النتيجة السابقة: ${row.result}` : '', row.status ? `الحالة السابقة: ${row.status}` : '',
-      row.notes ? `ملاحظات: ${row.notes}` : '',
-    ].filter(Boolean);
-    return {
-      date: date(row.date),
-      detail: sep(
-        row.createdAt ? `تاريخ التسجيل: ${date(row.createdAt.slice(0, 10))}` : '',
-        `طلب الملف: ${time(row.fileRequestTime)}`, `استلام: ${time(row.fileReceivedTime)}`, `الرد: ${time(row.responseTime)}`,
-        `الفحص: ${row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : value(row.result)}`,
-        `المدة: ${duration(timing.minutes)}`, `التأخير: ${timing.invalid ? 'بيانات غير مكتملة' : timing.delayed ? 'متأخر' : 'لا يوجد'}`,
-        ...extras,
-      ),
-    };
-  });
-
-  const sections: PdfSection[] = [
-    { title: `الزيارات الموقوتة (${visits.length}) — تفاصيل كاملة`, rows: visits.map((row) => {
-      const calc = visitTiming(row);
-      return {
-        date: date(row.visitDate),
-        detail: sep(`الفرع: ${value(row.branch)}`, `العميل: ${value(row.clientName)}`, `المكان: ${value(row.location)}`, `تحرك: ${time(row.departureTime)}`, `رجوع: ${time(row.returnTime)}`, `المدة: ${duration(calc.minutes)}`, `ملاحظات: ${value(row.notes)}`),
-      };
-    }) },
-    { title: `المحاضر اليومية (${minutes.length}) — جميع التوقيتات والنتائج`, rows: minuteRows },
-    { title: `الإجازات (${legacyLeaves.length + leaves.length}) — سجلات النظام القديمة والجديدة`, rows: [...legacyLeaveRows, ...newLeaveRows] },
-    { title: `الأذونات (${legacyPermissions.length + permissions.length}) — سجلات الإذن القديمة والجديدة`, rows: permissionRows },
-    { title: `الحضور والانصراف — ${lateRows.length} تأخيرًا / ${fmtDurationWords(lateTotal)}، ${earlyRows.length} انصرافًا مبكرًا / ${fmtDurationWords(earlyTotal)}`, rows: attendance.map((row) => {
-      const late = attendanceDelayMinutes(row.arrivalTime);
-      const early = earlyDepartureMinutes(row.departureTime);
-      return {
-        date: date(row.date),
-        detail: sep(`الحضور: ${time(row.arrivalTime)}`, `التأخير: ${late ? fmtDurationWords(late) : row.arrivalTime ? 'لا يوجد' : '—'}`, `الانصراف: ${time(row.departureTime)}`, `مبكر: ${early ? fmtDurationWords(early) : row.departureTime ? 'لا يوجد' : '—'}`, `ملاحظات: ${value(row.notes)}`),
-      };
-    }) },
-    { title: `التقييمات الشهرية (${evaluations.length})`, rows: evaluations.map((row) => {
-      const total = monthlyTotals(row.scores, row.visits);
-      const scores = EVALUATION_CRITERIA.map((criterion) => `${criterion.name}: ${value(row.scores?.[criterion.id])}`).join('، ');
-      return { date: `${monthName(row.month)} ${row.year}`, detail: sep(`زيارات: ${value(row.visits)}`, `المجموع: ${total.total}`, scores, `ملاحظات: ${value(row.notes)}`) };
-    }) },
-    { title: `الملاحظات السنوية (${annualNotes.length})`, rows: annualNotes.map((row) => ({ date: String(row.year), detail: `ملاحظات: ${value(row.notes)}` })) },
-    { title: `الملاحظات والمتابعات (${observations.length})`, rows: observations.map((row) => ({
-      date: date(row.date),
-      detail: sep(`المصدر: ${value(row.source)}`, `الفرع: ${value(row.branch)}`, `المرجع: ${value(row.reference)}`, `التصنيف: ${value(row.category)}`, `الخطورة: ${SEVERITY_LABELS[row.severity] ?? value(row.severity)}`, `التفاصيل: ${value(row.details)}`, `الإجراء: ${value(row.correctiveAction)}`, `تاريخ الإخطار: ${date(row.notificationDate)}`, `الحالة: ${OBSERVATION_STATUS_LABELS[row.status] ?? value(row.status)}`, `تاريخ الإغلاق: ${date(row.resolutionDate)}`, `تكرار: ${row.recurrence ? 'نعم' : 'لا'}`, `متابعة: ${value(row.followUpNotes)}`),
-    })) },
-    { title: `الزيارات الميدانية السابقة (${fieldVisits.length})`, rows: fieldVisits.map((row) => ({
-      date: date(row.visitDate),
-      detail: sep(`المنطقة: ${value(row.region)}`, `الفرع: ${value(row.branch)}`, `النوع: ${value(row.visitType)}`, `المرجع: ${value(row.reference)}`, `الحالة: ${VISIT_STATUS_LABELS[row.status] ?? value(row.status)}`, `تسليم التقرير: ${date(row.reportSubmittedAt)}`, `مراجعة التقرير: ${date(row.reportReviewedAt)}`, `التعديلات: ${value(row.revisions)}`, `التقييم: ${value(row.finalAssessment)}`, `ملاحظات: ${value(row.notes)}`),
-    })) },
+  const minutes = input.minutes.filter(x => x.employeeId === id).sort((a,b) => (a.date ?? '').localeCompare(b.date ?? ''))
+    .map(x => {
+      const calc = minuteTiming(x);
+      return [date(x.date), time(x.fileRequestTime), time(x.fileReceivedTime), time(x.responseTime), x.inspectionResult ? INSPECTION_RESULT_LABELS[x.inspectionResult] : '', duration(calc.minutes), calc.invalid ? 'بيانات غير مكتملة' : calc.delayed ? 'متأخر' : calc.minutes === null ? '' : 'في الوقت'];
+    }).filter(r => r.some(Boolean));
+  const oldLeaves = input.legacyLeaves.filter(x => x.employeeId === id);
+  const newRows = input.leavePermissions.filter(x => x.employeeId === id);
+  const leaves = [
+    ...oldLeaves.filter(x => !x.type.includes('إذن')).map(x => [x.endDate && x.endDate !== x.startDate ? `${date(x.startDate)} – ${date(x.endDate)}` : date(x.startDate), present(x.type), x.unit === 'days' ? (x.days == null ? '' : `${fmtNumber(x.days)} يوم`) : (x.hours == null ? '' : `${fmtNumber(x.hours)} ساعة`), present(x.notes)]),
+    ...newRows.filter(x => x.requestType === 'leave').map(x => [date(x.date), present(x.category), '', present(x.notes)]),
+  ].filter(r => r.some(Boolean));
+  const permissions = [
+    ...oldLeaves.filter(x => x.type.includes('إذن')).map(x => [x.endDate && x.endDate !== x.startDate ? `${date(x.startDate)} – ${date(x.endDate)}` : date(x.startDate), present(x.type), x.unit === 'days' ? (x.days == null ? '' : `${fmtNumber(x.days)} يوم`) : (x.hours == null ? '' : `${fmtNumber(x.hours)} ساعة`), present(x.notes)]),
+    ...newRows.filter(x => x.requestType === 'permission').map(x => [date(x.date), present(x.category), x.durationHours ? `${fmtNumber(x.durationHours)} ساعة` : '', present(x.notes)]),
+  ].filter(r => r.some(Boolean));
+  const attendance = input.attendance.filter(x => x.employeeId === id).sort((a,b) => a.date.localeCompare(b.date));
+  const late = attendance.filter(x => attendanceDelayMinutes(x.arrivalTime) > 0).map(x => [date(x.date), time(x.arrivalTime), duration(attendanceDelayMinutes(x.arrivalTime)), present(x.notes)]);
+  const early = attendance.filter(x => earlyDepartureMinutes(x.departureTime) > 0).map(x => [date(x.date), time(x.departureTime), duration(earlyDepartureMinutes(x.departureTime)), present(x.notes)]);
+  const observationRows = input.observations.filter(x => x.employeeId === id).sort((a,b) => (a.date || '').localeCompare(b.date || '')).map(x => [date(x.date), pair('المصدر',x.source), pair('الفرع',x.branch), pair('المرجع',x.reference), pair('التصنيف',x.category), pair('الخطورة',SEVERITY_LABELS[x.severity] ?? x.severity), pair('التفاصيل',x.details), pair('الإجراء',x.correctiveAction), pair('الحالة',OBSERVATION_STATUS_LABELS[x.status] ?? x.status), pair('متابعة',x.followUpNotes)].filter(Boolean).join(' | ')).filter(Boolean).map(x => [x]);
+  const annual = input.annualNotes.filter(x => x.employeeId === id).sort((a,b) => a.year-b.year).map(x => [String(x.year),present(x.notes)]).filter(r => r.some(Boolean));
+  return [
+    { title: 'الزيارات الميدانية', columns: [{label:'الفرع',width:CONTENT_W*.44},{label:'اسم العميل',width:CONTENT_W*.56}], rows: visits },
+    { title: 'الدقائق اليومية', columns: [
+      {label:'التاريخ',width:66},{label:'طلب الملف',width:61},{label:'استلام الملف',width:68},{label:'الرد',width:52},{label:'نتيجة الفحص',width:92},{label:'المدة',width:77},{label:'حالة التأخير',width:CONTENT_W-416},
+    ], rows: minutes },
+    { title: 'الإجازات', columns: [{label:'التاريخ',width:112},{label:'النوع',width:120},{label:'المدة',width:88},{label:'السبب / الملاحظات',width:CONTENT_W-320}], rows: leaves },
+    { title: 'الأذونات', columns: [{label:'التاريخ',width:112},{label:'النوع',width:120},{label:'المدة',width:88},{label:'السبب / الملاحظات',width:CONTENT_W-320}], rows: permissions },
+    { title: 'تأخيرات الحضور', columns: [{label:'التاريخ',width:130},{label:'وقت الحضور',width:118},{label:'مدة التأخير',width:116},{label:'ملاحظات',width:CONTENT_W-364}], rows: late },
+    { title: 'الانصراف المبكر', columns: [{label:'التاريخ',width:130},{label:'وقت الانصراف',width:118},{label:'مدة التبكير',width:116},{label:'ملاحظات',width:CONTENT_W-364}], rows: early },
+    { title: 'الملاحظات والمتابعات', columns: [{label:'التاريخ والتفاصيل',width:CONTENT_W}], rows: observationRows },
+    { title: 'الملاحظات السنوية', columns: [{label:'السنة',width:90},{label:'الملاحظة',width:CONTENT_W-90}], rows: annual },
   ];
-  const monthlyBreakdown = visitDistribution.length ? visitDistribution.join('  |  ') : 'لا توجد زيارات مؤرخة';
-  const summary = [
-    `إجمالي الزيارات الموقوتة: ${fmtNumber(visits.length)}${visits.filter((row) => !row.visitDate).length ? ` (غير مؤرخة: ${visits.filter((row) => !row.visitDate).length})` : ''}`,
-    `التوزيع الشهري: ${monthlyBreakdown}`,
-    `محاضر يومية: ${fmtNumber(minutes.length)} · الإجازات: ${fmtNumber(legacyLeaves.length + leaves.length)} · الأذونات: ${fmtNumber(legacyPermissions.length + permissions.length)}`,
-    `تأخيرات الحضور: ${fmtNumber(lateRows.length)} حدث / ${fmtDurationWords(lateTotal)} · الانصراف المبكر: ${fmtNumber(earlyRows.length)} حدث / ${fmtDurationWords(earlyTotal)}`,
-    `زيارات ميدانية سابقة: ${fmtNumber(fieldVisits.length)} · تقييمات شهرية: ${fmtNumber(evaluations.length)} · ملاحظات: ${fmtNumber(observations.length + annualNotes.length)}`,
-  ];
-  return { sections, summary };
-}
-
-function measureLayout(data: CompleteEmployeeData, font: PdfFontSource, bodySize: number) {
-  const { sections, summary } = collectSections(data);
-  const lineHeight = bodySize * 1.19;
-  const rows: Array<{ section?: string; date?: string; detail?: string; lines?: string[]; dateLines?: string[]; header?: boolean; height: number }> = [];
-  const employee = data.employee;
-  const facts = [
-    `رقم الموظف: ${value(employee.employeeNo)}`, `الكود: ${value(employee.code)}`, `الحالة: ${EMPLOYEE_STATUS_LABELS[employee.status] ?? value(employee.status)}${employee.archived ? ' (مؤرشف)' : ''}`,
-    `القطاع: ${value(employee.sector)}`, `المحافظة: ${value(employee.governorate)}`, `المسمى الوظيفي: ${value(employee.jobTitle)}`,
-    `تاريخ التعيين: ${date(employee.employmentDate)}`, `الفروع: ${value(employee.branches)}`,
-  ].join('  |  ');
-  const note = value(employee.notes);
-  const nameLines = wrapText(employee.name, 14, TABLE_W, font.metrics);
-  const titleHeight = Math.max(17, nameLines.length * 16 + 2);
-  const addIntroSection = (title: string, details: string[]) => {
-    rows.push({ section: title, height: bodySize + 4.5 });
-    for (const detail of details) {
-      const lines = wrapText(detail, bodySize, TABLE_W - 10, font.metrics);
-      rows.push({ detail, lines, height: Math.max(bodySize * 1.55, lines.length * lineHeight + 3.4) });
-    }
-  };
-  addIntroSection('بيانات الموظف', [facts]);
-  addIntroSection('ملاحظات على الموظف', [note]);
-  addIntroSection('ملخص السجلات', summary);
-  rows.push({ header: true, date: 'التاريخ', detail: 'التفاصيل', dateLines: ['التاريخ'], lines: ['التفاصيل'], height: bodySize * 1.75 });
-  for (const section of sections) {
-    rows.push({ section: section.title, height: bodySize + 4.5 });
-    const details = section.rows.length ? section.rows : [{ date: '—', detail: 'لا توجد سجلات مسجلة' }];
-    for (const row of details) {
-      const lines = wrapText(row.detail, bodySize, DETAIL_W - 7, font.metrics);
-      const dateLines = wrapText(row.date, bodySize * 0.92, DATE_W - 5, font.metrics);
-      const lineCount = Math.max(lines.length, dateLines.length);
-      rows.push({ date: row.date, detail: row.detail, lines, dateLines, height: Math.max(bodySize * 1.65, lineCount * lineHeight + 3.4) });
-    }
-  }
-  const total = 12 + titleHeight + 2 + rows.reduce((sum, row) => sum + row.height, 0) + 10;
-  return { rows, total, facts, note, summary, sections, nameLines, titleHeight };
 }
 
 export async function buildCompleteEmployeePdf(data: CompleteEmployeeData, fonts: { regular: PdfFontSource; bold: PdfFontSource }): Promise<Uint8Array> {
-  const regularDoc = new PdfDocument(PAGE_W, PAGE_H);
-  regularDoc.addFont('TimesNewRomanPSMT', 'F1', fonts.regular);
-  regularDoc.addFont('TimesNewRomanPS-BoldMT', 'F2', fonts.bold);
-  const candidates = [10, 9.5, 9, 8.5, 8, 7.5, 7, 6.5, 6, 5.5, 5];
-  let layout = measureLayout(data, fonts.regular, candidates[candidates.length - 1]);
-  let bodySize = candidates[candidates.length - 1];
-  for (const candidate of candidates) {
-    const measured = measureLayout(data, fonts.regular, candidate);
-    if (measured.total <= PAGE_H - 12) { layout = measured; bodySize = candidate; break; }
-  }
-  if (layout.total > PAGE_H - 12) {
-    const recordCount = layout.sections.reduce((sum, section) => sum + section.rows.length, 0);
-    throw new Error(`عدد السجلات (${recordCount}) أكبر من أن يُعرض كاملًا في صفحة واحدة مع الحفاظ على وضوح مقروء. لم يتم إنشاء تقرير ناقص.`);
-  }
-
-  const page: PdfPage = regularDoc.newPage();
-  layout.nameLines.forEach((line, index) => page.text(line, { x: MARGIN, top: 12 + index * 16, font: 'bold', size: 14, color: COLORS.navy, align: 'right', maxWidth: TABLE_W }));
-  let y = 12 + layout.titleHeight + 2;
-  let alternate = false;
-  const drawBand = (top: number, height: number, fill: string, label: string, size: number, bold = false) => {
-    page.rect(MARGIN, top, TABLE_W, height, { fill });
-    page.rect(MARGIN, top, TABLE_W, height, { stroke: COLORS.border, lineWidth: 0.45 });
-    page.text(label, { x: MARGIN + 4, top: top + Math.max(1.2, (height - size) / 2), font: bold ? 'bold' : 'regular', size, color: COLORS.navy, align: 'right', maxWidth: TABLE_W - 8 });
+  const doc = new PdfDocument(PAGE_W, PAGE_H);
+  doc.addFont('TimesNewRomanPSMT', 'F1', fonts.regular);
+  doc.addFont('TimesNewRomanPS-BoldMT', 'F2', fonts.bold);
+  const pages: PdfPage[] = [];
+  let page!: PdfPage;
+  let y = TOP;
+  const newPage = () => {
+    page = doc.newPage(); pages.push(page); y = TOP;
+    page.text(data.employee.name, { x:MARGIN, top:16, font:'bold', size:pages.length === 1 ? 20 : 13, color:C.navy, align:'right', maxWidth:CONTENT_W });
+    if (pages.length === 1) page.text('الملف الوظيفي', {x:MARGIN,top:39,font:'regular',size:10,color:C.muted,align:'right',maxWidth:CONTENT_W});
   };
-  const drawData = (row: { section?: string; date?: string; detail?: string; lines?: string[]; dateLines?: string[]; header?: boolean; height: number }) => {
-    const height = row.height;
-    const isSection = Boolean(row.section && !row.detail);
-    if (row.header) {
-      page.rect(MARGIN, y, TABLE_W, height, { fill: COLORS.header });
-      page.rect(MARGIN, y, TABLE_W, height, { stroke: COLORS.border, lineWidth: 0.45 });
-      page.line(MARGIN + TABLE_W - DATE_W, y, MARGIN + TABLE_W - DATE_W, y + height, COLORS.border, 0.42);
-      page.text(row.lines?.[0] ?? '', { x: MARGIN + 3, top: y + 1.4, font: 'bold', size: bodySize, color: COLORS.navy, align: 'right', maxWidth: DETAIL_W - 6 });
-      page.text(row.dateLines?.[0] ?? '', { x: MARGIN + DETAIL_W + 2, top: y + 1.4, font: 'bold', size: bodySize * 0.92, color: COLORS.navy, align: 'right', maxWidth: DATE_W - 4 });
-      y += height;
-      alternate = false;
-      return;
-    }
-    if (isSection) {
-      drawBand(y, height, COLORS.header, row.section!, bodySize + 0.7, true);
-      y += height;
-      alternate = false;
-      return;
-    }
-    const fill = alternate ? COLORS.alt : COLORS.white;
-    page.rect(MARGIN, y, TABLE_W, height, { fill });
-    page.rect(MARGIN, y, TABLE_W, height, { stroke: COLORS.border, lineWidth: 0.42 });
-    const dateWidth = row.date ? DATE_W : 0;
-    if (dateWidth) page.line(MARGIN + TABLE_W - DATE_W, y, MARGIN + TABLE_W - DATE_W, y + height, COLORS.border, 0.42);
-    const detailWidth = TABLE_W - dateWidth;
-    (row.lines ?? []).forEach((line, index) => {
-      page.text(line, { x: MARGIN + 3, top: y + 1.6 + index * bodySize * 1.19, font: 'regular', size: bodySize, color: COLORS.navy, align: 'right', maxWidth: detailWidth - 6 });
-    });
-    if (dateWidth) (row.dateLines ?? []).forEach((line, index) => {
-      page.text(line, { x: MARGIN + detailWidth + 2, top: y + 1.6 + index * bodySize * 1.19, font: 'regular', size: bodySize * 0.92, color: COLORS.muted, align: 'right', maxWidth: DATE_W - 4 });
-    });
-    y += height;
-    alternate = !alternate;
+  newPage();
+  const ensure = (height: number, section?: TableSection) => {
+    if (y + height <= PAGE_H - BOTTOM) return;
+    newPage();
+    if (section) drawSectionTitle(section.title, true);
   };
-
-  for (const row of layout.rows) drawData(row);
-  regularDoc.addPage(page);
-  return regularDoc.build();
+  const drawSectionTitle = (title: string, continuation = false) => {
+    ensure(29);
+    page.rect(MARGIN,y,CONTENT_W,25,{fill:C.navy});
+    page.text(continuation ? `${title} — تابع` : title,{x:MARGIN+8,top:y+4,font:'bold',size:14,color:C.white,align:'right',maxWidth:CONTENT_W-16});
+    y+=30;
+  };
+  const drawTableHeader = (section: TableSection) => {
+    const h=24; ensure(h,section);
+    page.rect(MARGIN,y,CONTENT_W,h,{fill:C.head});
+    let right=MARGIN+CONTENT_W;
+    for(const col of section.columns){
+      const x=right-col.width;
+      page.rect(x,y,col.width,h,{stroke:C.border,lineWidth:.45});
+      page.text(col.label,{x:x+3,top:y+5,font:'bold',size:9.3,color:C.navy,align:'right',maxWidth:col.width-6});
+      right=x;
+    }
+    y+=h;
+  };
+  const drawSection = (section: TableSection) => {
+    if (!section.rows.length) return;
+    const rowHeight = (row: string[]) => Math.max(25, Math.max(...row.map((text,i)=> text ? wrapText(text,BODY_SIZE,section.columns[i].width-10,fonts.regular.metrics).length : 1))*LINE_H+8);
+    if (y + 30 + 24 + rowHeight(section.rows[0]) > PAGE_H - BOTTOM) newPage();
+    drawSectionTitle(section.title);
+    drawTableHeader(section);
+    let alternate=false;
+    for (const row of section.rows) {
+      const cellLines = row.map((text,i)=> text ? wrapText(text,BODY_SIZE,section.columns[i].width-10,fonts.regular.metrics) : ['']);
+      const h=Math.max(25,Math.max(...cellLines.map(x=>x.length))*LINE_H+8);
+      if(h>PAGE_H-TOP-BOTTOM-55) throw new Error(`تعذر عرض سجل طويل دون تقسيمه: ${section.title}`);
+      if(y+h>PAGE_H-BOTTOM){ newPage(); drawSectionTitle(section.title,true); drawTableHeader(section); alternate=false; }
+      page.rect(MARGIN,y,CONTENT_W,h,{fill:alternate?C.alt:C.white});
+      page.rect(MARGIN,y,CONTENT_W,h,{stroke:C.border,lineWidth:.4});
+      let right=MARGIN+CONTENT_W;
+      row.forEach((_,i)=>{
+        const col=section.columns[i], x=right-col.width;
+        if(i>0) page.line(x,y,x,y+h,C.border,.35);
+        cellLines[i].forEach((line,j)=>page.text(line,{x:x+4,top:y+4+j*LINE_H,font:'regular',size:BODY_SIZE,color:C.navy,align:'right',maxWidth:col.width-8}));
+        right=x;
+      });
+      y+=h; alternate=!alternate;
+    }
+  };
+  const e=data.employee;
+  const details=[
+    ['رقم الموظف',present(e.employeeNo)],['الكود',present(e.code)],['الحالة',`${EMPLOYEE_STATUS_LABELS[e.status] ?? e.status}${e.archived?' (مؤرشف)':''}`],['القطاع',present(e.sector)],['المحافظة',present(e.governorate)],['المسمى الوظيفي',present(e.jobTitle)],['تاريخ التعيين',date(e.employmentDate)],['الفروع',present(e.branches)],
+  ].filter(x=>x[1]);
+  drawSectionTitle('البيانات الأساسية');
+  const factCols=[{label:'البيان',width:110},{label:'التفاصيل',width:CONTENT_W-110}];
+  drawTableHeader({title:'البيانات الأساسية',columns:factCols,rows:[]});
+  for(let i=0;i<details.length;i+=2){
+    const row=[details[i],details[i+1]].filter(Boolean) as string[][];
+    const text=row.map(pair=>pair.join(': ')).join('   |   ');
+    const lines=wrapText(text,BODY_SIZE,CONTENT_W-16,fonts.regular.metrics);
+    const h=Math.max(26,lines.length*LINE_H+8); ensure(h);
+    page.rect(MARGIN,y,CONTENT_W,h,{fill:i%4===0?C.alt:C.white}); page.rect(MARGIN,y,CONTENT_W,h,{stroke:C.border,lineWidth:.4});
+    lines.forEach((line,j)=>page.text(line,{x:MARGIN+7,top:y+5+j*LINE_H,font:'regular',size:BODY_SIZE,color:C.navy,align:'right',maxWidth:CONTENT_W-14})); y+=h;
+  }
+  if (present(e.notes)) {
+    drawSectionTitle('ملاحظات الموظف');
+    const noteLines=wrapText(e.notes,11,CONTENT_W-22,fonts.regular.metrics);
+    let idx=0;
+    while(idx<noteLines.length){
+      const maxLines=Math.max(1,Math.floor((PAGE_H-BOTTOM-y-46)/14));
+      if(maxLines<1 || y+34>PAGE_H-BOTTOM){newPage(); drawSectionTitle('ملاحظات الموظف');}
+      const count=Math.max(1,Math.floor((PAGE_H-BOTTOM-y-36)/14));
+      const chunk=noteLines.slice(idx,idx+count);
+      const h=chunk.length*14+20; ensure(h);
+      page.rect(MARGIN,y,CONTENT_W,h,{fill:'0.93 0.97 0.97'}); page.rect(MARGIN,y,CONTENT_W,h,{stroke:'0.58 0.76 0.77',lineWidth:.7});
+      chunk.forEach((line,j)=>page.text(line,{x:MARGIN+11,top:y+9+j*14,font:'regular',size:10.5,color:C.navy,align:'right',maxWidth:CONTENT_W-22}));
+      y+=h; idx+=chunk.length;
+    }
+  }
+  for(const section of collectSections(data)) drawSection(section);
+  if(pages.length>5) throw new Error(`يتطلب التقرير ${pages.length} صفحات، والحد الأقصى خمسة؛ لم يتم إسقاط أي سجلات.`);
+  pages.forEach((p,i)=>p.text(`صفحة ${i+1} من ${pages.length}`,{x:MARGIN,top:PAGE_H-28,font:'regular',size:8.5,color:C.muted,align:'center',maxWidth:CONTENT_W}));
+  pages.forEach(p=>doc.addPage(p));
+  return doc.build();
 }
 
 export function employeePdfFileName(employee: Employee): string {

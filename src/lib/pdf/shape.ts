@@ -3,8 +3,11 @@
  * الخطوط المضمّنة لا تدعم GSUB، لذلك تُستخدم أشكال الحروف العربية (Presentation Forms)
  * مع خوارزمية وصل قياسية وترتيب بصري RTL — النتيجة نصّ حقيقي قابل للبحث والنسخ.
  */
+import bidiFactory from 'bidi-js';
 import type { FontMetrics } from '../pdf-times-fonts';
 import { ARABIC_FORMS, ARABIC_JOINING, ARABIC_MARKS, LAM_ALEF, type ArabicForm } from '../pdf-arabic';
+
+const bidi = bidiFactory();
 
 export interface PlacedGlyph {
   /** معرّف الشكل داخل الخط */
@@ -15,11 +18,6 @@ export interface PlacedGlyph {
 
 const isArabicLetter = (code: number) => ARABIC_JOINING[code] !== undefined;
 const isMark = (code: number) => ARABIC_MARKS.has(code);
-const isArabicPunct = (code: number) =>
-  code === 0x060c || code === 0x061b || code === 0x061f || code === 0x00ab || code === 0x00bb;
-const isDigit = (code: number) => (code >= 0x30 && code <= 0x39) || (code >= 0x660 && code <= 0x669) || (code >= 0x6f0 && code <= 0x6f9);
-const isLatin = (code: number) => (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a);
-const isNeutral = (code: number) => !isArabicLetter(code) && !isMark(code) && !isLatin(code) && !isDigit(code) && !isArabicPunct(code);
 
 /** أنواع تشكيل الحروف */
 function letterForm(chars: number[], index: number, previousJoins: boolean): ArabicForm {
@@ -70,84 +68,43 @@ function shapeArabicRun(chars: number[], metrics: FontMetrics): PlacedGlyph[] {
 
     const form = letterForm(chars, index, previousJoins);
     const presentation = ARABIC_FORMS[code][form] ?? code;
-    out.push({ gid: metrics.chars[String(presentation)] ?? metrics.chars[String(code)] ?? 0, code: presentation });
+    // Draw the contextual presentation glyph, but map it back to the logical Unicode character.
+    out.push({ gid: metrics.chars[String(presentation)] ?? metrics.chars[String(code)] ?? 0, code });
     previousJoins = ARABIC_JOINING[code] === 'D';
   }
 
   return out;
 }
 
-type Direction = 'ltr' | 'rtl' | 'neutral';
-
-interface Run {
-  direction: Direction;
-  chars: number[];
-}
-
-function classify(code: number): Direction {
-  if (isArabicLetter(code) || isArabicPunct(code)) return 'rtl';
-  if (isLatin(code) || isDigit(code)) return 'ltr';
-  if (isNeutral(code)) return 'neutral';
-  return 'rtl';
-}
-
-function splitRuns(text: string): Run[] {
-  const chars = Array.from(text).map((char) => char.codePointAt(0) ?? 0);
-  const runs: Run[] = [];
-  for (const code of chars) {
-    const direction = classify(code);
-    const last = runs[runs.length - 1];
-    if (last && last.direction === direction) {
-      last.chars.push(code);
-    } else {
-      runs.push({ direction, chars: [code] });
-    }
-  }
-  return runs;
-}
-
-/** يحلّ المحايدات: تتبع اتجاه الجار إن وُجد وإلا RTL (الأساس عربي) */
-function resolveNeutrals(input: Run[]): Run[] {
-  const runs = input.map((run, index) => {
-    if (run.direction !== 'neutral') return run;
-    const before = input[index - 1];
-    const after = input[index + 1];
-    if (before?.direction === 'ltr' && after?.direction === 'ltr') return { ...run, direction: 'ltr' as Direction };
-    if (before?.direction === 'ltr' && !after) return { ...run, direction: 'ltr' as Direction };
-    return { ...run, direction: 'rtl' as Direction };
-  });
-
-  const merged: Run[] = [];
-  for (const run of runs) {
-    const last = merged[merged.length - 1];
-    if (last && last.direction === run.direction) last.chars.push(...run.chars);
-    else merged.push({ ...run, chars: [...run.chars] });
-  }
-  return merged;
-}
-
-/**
- * يحوّل نصًا منطقيًا إلى Glyphs بترتيب بصري من اليسار إلى اليمين.
- * (الاتجاه الأساسي عربي RTL)
- */
+/** Apply the Unicode Bidirectional Algorithm, then shape Arabic joining runs in logical order. */
 export function shapeText(text: string, metrics: FontMetrics): PlacedGlyph[] {
   if (!text) return [];
-  const runs = resolveNeutrals(splitRuns(text));
-  const visual: PlacedGlyph[] = [];
-
-  for (let index = runs.length - 1; index >= 0; index -= 1) {
-    const run = runs[index];
-    if (run.direction === 'rtl') {
-      const shaped = shapeArabicRun(run.chars, metrics);
-      for (let i = shaped.length - 1; i >= 0; i -= 1) visual.push(shaped[i]);
-    } else {
-      for (const code of run.chars) {
-        visual.push({ gid: metrics.chars[String(code)] ?? metrics.chars[String(0x20)] ?? 0, code });
+  const levels = bidi.getEmbeddingLevels(text, 'rtl');
+  const visualText = bidi.getReorderedString(text, levels);
+  const chars = Array.from(visualText).map(char => char.codePointAt(0) ?? 0);
+  const result: PlacedGlyph[] = [];
+  let index = 0;
+  while (index < chars.length) {
+    const code = chars[index];
+    const type = bidi.getBidiCharTypeName(String.fromCodePoint(code));
+    const isRtlArabic = isArabicLetter(code) || (isMark(code) && index > 0 && isArabicLetter(chars[index - 1]));
+    if (isRtlArabic && (type === 'R' || type === 'AL' || type === 'NSM')) {
+      const visualRun: number[] = [];
+      while (index < chars.length) {
+        const current = chars[index];
+        const currentType = bidi.getBidiCharTypeName(String.fromCodePoint(current));
+        if (!(isArabicLetter(current) || isMark(current)) || !(currentType === 'R' || currentType === 'AL' || currentType === 'NSM')) break;
+        visualRun.push(current);
+        index += 1;
       }
+      const shaped = shapeArabicRun(visualRun.reverse(), metrics);
+      result.push(...shaped.reverse());
+      continue;
     }
+    result.push({ gid: metrics.chars[String(code)] ?? metrics.chars[String(0x20)] ?? 0, code });
+    index += 1;
   }
-
-  return visual;
+  return result;
 }
 
 /** عرض Glyphs بوحدات النص (مقياس 1/1000) */

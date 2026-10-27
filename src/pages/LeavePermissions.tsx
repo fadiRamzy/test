@@ -38,10 +38,6 @@ interface Draft {
   notes: string;
 }
 
-function LeaveMetric({ label, value, tone }: { label: string; value: string | number; tone: string }) {
-  return <div className={`leave-metric leave-metric--${tone}`}><span>{label}</span><strong>{typeof value === 'number' ? fmtNumber(value) : value}</strong></div>;
-}
-
 const emptyDraft = (): Draft => ({
   employeeId: '',
   requestType: 'leave',
@@ -150,29 +146,33 @@ export function LeavePermissionsPage() {
           </Toolbar>
         </div>
         {summaries.length ? (
-          <div className="leave-summary-list">
-            {summaries.map((summary) => {
+          <TableWrap className="leave-summary-wrap"><Table className="leave-summary-table">
+            <thead><tr>
+              <th>الموظف</th>
+              <th>اعتيادي</th><th>عارضة</th><th>بخصم</th><th>إجمالي الإجازات</th>
+              <th>إذن انصراف</th><th>إذن حضور</th><th>إجمالي الأذونات</th><th>ساعات مستخدمة</th>
+              <th>أذونات متبقية للشهر</th><th>ساعات متبقية للشهر</th>
+            </tr></thead>
+            <tbody>{summaries.map((summary) => {
               const allowanceSelected = monthFilter !== 'all' && yearFilter !== 'all';
               const exceeded = summary.totalPermissions > 4 || summary.permissionHours > 4;
               const approaching = summary.totalPermissions >= 3 || summary.permissionHours >= 3;
               const quotaTone = exceeded ? 'error' : approaching || summary.remainingHours === 0 ? 'warning' : 'remaining';
-              return <section className="leave-summary-employee" key={summary.employee.id}>
-                <h3>{summary.employee.name}</h3>
-                <div className="leave-metric-grid">
-                  <LeaveMetric label="إجازة اعتيادي" value={summary.regularLeaves} tone="leave" />
-                  <LeaveMetric label="إجازة عارضة" value={summary.casualLeaves} tone="leave" />
-                  <LeaveMetric label="إجازة بخصم" value={summary.deductedLeaves} tone="leave" />
-                  <LeaveMetric label="إجمالي الإجازات" value={summary.totalLeaves} tone="total" />
-                  <LeaveMetric label="أذونات انصراف" value={summary.departurePermissions} tone="permission" />
-                  <LeaveMetric label="أذونات حضور" value={summary.attendancePermissions} tone="permission" />
-                  <LeaveMetric label="إجمالي الأذونات" value={summary.totalPermissions} tone={approaching ? 'warning' : 'permission'} />
-                  <LeaveMetric label="ساعات مستخدمة" value={summary.permissionHours} tone={approaching ? 'warning' : 'hours'} />
-                  <LeaveMetric label="أذونات متبقية للشهر" value={allowanceSelected ? summary.remainingEntries : '—'} tone={allowanceSelected ? quotaTone : 'neutral'} />
-                  <LeaveMetric label="ساعات متبقية للشهر" value={allowanceSelected ? summary.remainingHours : '—'} tone={allowanceSelected ? quotaTone : 'neutral'} />
-                </div>
-              </section>;
-            })}
-          </div>
+              return <tr key={summary.employee.id}>
+                <th scope="row" className="leave-summary-name">{summary.employee.name}</th>
+                <td className="leave-summary-leave">{fmtNumber(summary.regularLeaves)}</td>
+                <td className="leave-summary-leave">{fmtNumber(summary.casualLeaves)}</td>
+                <td className="leave-summary-leave">{fmtNumber(summary.deductedLeaves)}</td>
+                <td className="leave-summary-total">{fmtNumber(summary.totalLeaves)}</td>
+                <td className="leave-summary-permission">{fmtNumber(summary.departurePermissions)}</td>
+                <td className="leave-summary-permission">{fmtNumber(summary.attendancePermissions)}</td>
+                <td className={`leave-summary-${approaching ? 'warning' : 'permission'}`}>{fmtNumber(summary.totalPermissions)}</td>
+                <td className={`leave-summary-${approaching ? 'warning' : 'hours'}`}>{fmtNumber(summary.permissionHours)}</td>
+                <td className={allowanceSelected ? `leave-summary-${quotaTone}` : 'leave-summary-neutral'}>{allowanceSelected ? fmtNumber(summary.remainingEntries) : '—'}</td>
+                <td className={allowanceSelected ? `leave-summary-${quotaTone}` : 'leave-summary-neutral'}>{allowanceSelected ? fmtNumber(summary.remainingHours) : '—'}</td>
+              </tr>;
+            })}</tbody>
+          </Table></TableWrap>
         ) : <EmptyState title="لا يوجد موظفون مطابقون" />}
       </Card>
 
