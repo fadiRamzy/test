@@ -2,6 +2,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { ensureSettings, isIndexedDbAvailable, readSettings, writeSettings } from '../db/database';
 import {
   listAnnualNotes,
+  listAttendanceRecords,
+  listLeavePermissions,
   listEmployees,
   listFieldVisits,
   listLeaves,
@@ -13,11 +15,13 @@ import {
 import {
   DEFAULT_SETTINGS,
   type AnnualNote,
+  type AttendanceRecord,
   type AppSettings,
   type DailyMinute,
   type Employee,
   type FieldVisit,
   type Leave,
+  type LeavePermissionRecord,
   type MonthlyEvaluation,
   type Observation,
   type VisitTiming,
@@ -38,6 +42,8 @@ export interface AppData {
   visitTimings: VisitTiming[];
   observations: Observation[];
   leaves: Leave[];
+  leavePermissions: LeavePermissionRecord[];
+  attendanceRecords: AttendanceRecord[];
   annualNotes: AnnualNote[];
 }
 
@@ -49,6 +55,8 @@ const EMPTY: AppData = {
   visitTimings: [],
   observations: [],
   leaves: [],
+  leavePermissions: [],
+  attendanceRecords: [],
   annualNotes: [],
 };
 
@@ -86,7 +94,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((toast) => toast.id !== id)), []);
 
   const load = useCallback(async () => {
-    const [employees, evaluations, visits, minutes, visitTimings, observations, leaves, annualNotes, loadedSettings] =
+    const [employees, evaluations, visits, minutes, visitTimings, observations, leaves, leavePermissions, attendanceRecords, annualNotes, loadedSettings] =
       await Promise.all([
       listEmployees(true),
       listMonthlyEvaluations(),
@@ -95,10 +103,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       listVisitTimings(),
       listObservations(),
       listLeaves(),
+      listLeavePermissions(),
+      listAttendanceRecords(),
       listAnnualNotes(),
       readSettings(),
     ]);
-    setData({ employees, evaluations, visits, minutes, visitTimings, observations, leaves, annualNotes });
+    setData({ employees, evaluations, visits, minutes, visitTimings, observations, leaves, leavePermissions, attendanceRecords, annualNotes });
     setSettings(loadedSettings);
   }, []);
 

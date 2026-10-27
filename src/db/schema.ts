@@ -291,6 +291,29 @@ export interface Leave extends BaseRecord {
   notes: string;
 }
 
+export type LeavePermissionRequestType = 'leave' | 'permission';
+export type LeavePermissionCategory = 'إجازة اعتيادي' | 'إجازة عارضة' | 'إجازة بخصم' | 'إذن انصرف' | 'إذن حضور';
+
+/** سجل الإجازة/الإذن الجديد، معزول عن سجلات الإجازات القديمة لتوافقها */
+export interface LeavePermissionRecord extends BaseRecord {
+  employeeId: ID;
+  requestType: LeavePermissionRequestType;
+  category: LeavePermissionCategory;
+  /** تاريخ واحد YYYY-MM-DD */
+  date: string;
+  durationHours: 1 | 2 | null;
+  notes: string;
+}
+
+/** حضور وانصراف يدوي؛ الأوقات اختيارية ومخزنة HH:MM */
+export interface AttendanceRecord extends BaseRecord {
+  employeeId: ID;
+  date: string;
+  arrivalTime: string;
+  departureTime: string;
+  notes: string;
+}
+
 /* -------------------------------- الإعدادات ---------------------------- */
 
 export interface AppSettings {
@@ -324,7 +347,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 /* ---------------------------------------------------------------------- */
 
 export const DB_NAME = 'risk-officer-suite';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 
 export const STORE_NAMES = [
   'employees',
@@ -334,6 +357,8 @@ export const STORE_NAMES = [
   'visitTimings',
   'observations',
   'leaves',
+  'leavePermissions',
+  'attendanceRecords',
   'annualNotes',
   'settings',
   'meta',
@@ -348,6 +373,8 @@ export type EntityName =
   | 'visitTimings'
   | 'observations'
   | 'leaves'
+  | 'leavePermissions'
+  | 'attendanceRecords'
   | 'annualNotes';
 
 export const ENTITY_LABELS: Record<EntityName, string> = {
@@ -358,6 +385,8 @@ export const ENTITY_LABELS: Record<EntityName, string> = {
   visitTimings: 'توقيت الزيارات',
   observations: 'الملاحظات',
   leaves: 'الإجازات والأذونات',
+  leavePermissions: 'طلبات الإجازات والأذونات',
+  attendanceRecords: 'تأخيرات الحضور والانصراف',
   annualNotes: 'ملاحظات التقييم السنوي',
 };
 

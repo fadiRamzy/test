@@ -389,12 +389,12 @@ describe('توقيت الزيارات', () => {
 });
 
 describe('التنقل الرئيسي', () => {
-  it('يعرض ثلاثة أقسام فقط بالترتيب المطلوب', async () => {
+  it('يعرض أقسام التنقل المطلوبة بالترتيب', async () => {
     await seedEmployee();
     renderApp();
     const nav = await screen.findByRole('navigation', { name: 'التنقل الرئيسي' });
     const links = within(nav).getAllByRole('link');
-    expect(links.map((link) => link.textContent)).toEqual(['الموظفون', 'محاضر يومية', 'توقيت الزيارات']);
+    expect(links.map((link) => link.textContent)).toEqual(['الموظفون', 'محاضر يومية', 'توقيت الزيارات', 'الإجازات والأذونات', 'تأخيرات الحضور والانصراف']);
   });
 });
 

@@ -3,12 +3,14 @@ import { nowIso } from '../lib/utils';
 import {
   ENTITY_LABELS,
   type AnnualNote,
+  type AttendanceRecord,
   type AppSettings,
   type DailyMinute,
   type Employee,
   type EntityName,
   type FieldVisit,
   type Leave,
+  type LeavePermissionRecord,
   type MonthlyEvaluation,
   type Observation,
   type VisitTiming,
@@ -25,6 +27,8 @@ export const ENTITIES: EntityName[] = [
   'visitTimings',
   'observations',
   'leaves',
+  'leavePermissions',
+  'attendanceRecords',
   'annualNotes',
 ];
 
@@ -36,6 +40,8 @@ export interface BackupData {
   visitTimings: VisitTiming[];
   observations: Observation[];
   leaves: Leave[];
+  leavePermissions: LeavePermissionRecord[];
+  attendanceRecords: AttendanceRecord[];
   annualNotes: AnnualNote[];
 }
 
@@ -58,6 +64,8 @@ export async function createBackup(): Promise<BackupPayload> {
     visitTimings: await getAll<VisitTiming>('visitTimings'),
     observations: await getAll<Observation>('observations'),
     leaves: await getAll<Leave>('leaves'),
+    leavePermissions: await getAll<LeavePermissionRecord>('leavePermissions'),
+    attendanceRecords: await getAll<AttendanceRecord>('attendanceRecords'),
     annualNotes: await getAll<AnnualNote>('annualNotes'),
   };
   const counts = {} as Record<EntityName, number>;
@@ -94,9 +102,9 @@ export function validateBackup(raw: unknown): ValidationResult {
     const rows = data[entity];
     if (!Array.isArray(rows)) {
       // النسخ الاحتياطية الأقدم من إضافة «توقيت الزيارات» تُقبل بقسم فارغ
-      if (entity === 'visitTimings') {
+      if (['visitTimings', 'leavePermissions', 'attendanceRecords'].includes(entity)) {
         counts[entity] = 0;
-        warnings.push('النسخة لا تحتوي قسم «توقيت الزيارات» — سيُستورد فارغًا.');
+        warnings.push(`النسخة لا تحتوي قسم «${ENTITY_LABELS[entity]}» — سيُستورد فارغًا.`);
         continue;
       }
       errors.push(`قسم «${ENTITY_LABELS[entity]}» مفقود أو ليس قائمة.`);
@@ -117,7 +125,7 @@ export function validateBackup(raw: unknown): ValidationResult {
   if (!errors.length) {
     const employeeIds = new Set((data.employees as Employee[]).map((row) => row.id));
     for (const entity of ENTITIES.filter((name) => name !== 'employees')) {
-      const orphan = (data[entity] as Array<{ employeeId?: string }>).filter(
+      const orphan = ((data[entity] as Array<{ employeeId?: string }> | undefined) ?? []).filter(
         (row) => row.employeeId && !employeeIds.has(row.employeeId),
       ).length;
       if (orphan) warnings.push(`${ENTITY_LABELS[entity]}: ${orphan} سجلًا يشير إلى موظف غير موجود.`);

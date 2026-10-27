@@ -56,6 +56,8 @@ export function openDatabase(name = currentName): Promise<IDBDatabase> {
       create('visitTimings', ['employeeId', 'visitDate']);
       create('observations', ['employeeId', 'date', 'status', 'category']);
       create('leaves', ['employeeId', 'startDate']);
+      create('leavePermissions', ['employeeId', 'date', 'requestType']);
+      create('attendanceRecords', ['employeeId', 'date']);
       create('annualNotes', ['employeeId', 'year']);
       create('settings');
       create('meta');

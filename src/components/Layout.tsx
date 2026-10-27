@@ -15,6 +15,8 @@ const NAV: NavItem[] = [
   { path: '/employees', label: 'الموظفون', icon: 'employees' },
   { path: '/minutes', label: 'محاضر يومية', icon: 'minutes' },
   { path: '/visit-times', label: 'توقيت الزيارات', icon: 'visits' },
+  { path: '/leave-permissions', label: 'الإجازات والأذونات', icon: 'calendar' },
+  { path: '/attendance-delays', label: 'تأخيرات الحضور والانصراف', icon: 'clock' },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {

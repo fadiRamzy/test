@@ -13,6 +13,8 @@ import { ObservationsPage } from './pages/Observations';
 import { LeavesPage } from './pages/Leaves';
 import { ReportsPage } from './pages/Reports';
 import { VisitTimingsPage } from './pages/VisitTimings';
+import { LeavePermissionsPage } from './pages/LeavePermissions';
+import { AttendanceDelaysPage } from './pages/AttendanceDelays';
 
 export function App() {
   const { fatalError, toasts, dismissToast } = useApp();
@@ -54,6 +56,8 @@ function Router({ route }: { route: ReturnType<typeof useRoute> }) {
   if (!first || first === 'employees')
     return second ? <EmployeeProfilePage employeeId={second} /> : <EmployeesPage />;
   if (first === 'visit-times') return <VisitTimingsPage />;
+  if (first === 'leave-permissions') return <LeavePermissionsPage />;
+  if (first === 'attendance-delays') return <AttendanceDelaysPage />;
   if (first === 'dashboard') return <DashboardPage />;
   if (first === 'monthly') return <MonthlyEvaluationsPage />;
   if (first === 'annual') return <AnnualEvaluationsPage />;

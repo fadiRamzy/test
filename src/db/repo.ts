@@ -6,10 +6,12 @@ import {
   SCORE_MAX,
   SCORE_MIN,
   type AnnualNote,
+  type AttendanceRecord,
   type DailyMinute,
   type Employee,
   type FieldVisit,
   type Leave,
+  type LeavePermissionRecord,
   type MonthlyEvaluation,
   type Observation,
   type VisitTiming,
@@ -98,13 +100,15 @@ export async function setEmployeeArchived(id: string, archived: boolean): Promis
 
 /** حذف نهائي — يُسمح فقط إذا لم يكن للموظف أي سجلات */
 export async function deleteEmployee(id: string): Promise<void> {
-  const [evaluations, visits, minutes, visitTimings, observations, leaves] = await Promise.all([
+  const [evaluations, visits, minutes, visitTimings, observations, leaves, requests, attendance] = await Promise.all([
     getAll<MonthlyEvaluation>('monthlyEvaluations'),
     getAll<FieldVisit>('fieldVisits'),
     getAll<DailyMinute>('minutes'),
     getAll<VisitTiming>('visitTimings'),
     getAll<Observation>('observations'),
     getAll<Leave>('leaves'),
+    getAll<LeavePermissionRecord>('leavePermissions'),
+    getAll<AttendanceRecord>('attendanceRecords'),
   ]);
   const linked =
     evaluations.filter((row) => row.employeeId === id).length +
@@ -112,7 +116,9 @@ export async function deleteEmployee(id: string): Promise<void> {
     minutes.filter((row) => row.employeeId === id).length +
     visitTimings.filter((row) => row.employeeId === id).length +
     observations.filter((row) => row.employeeId === id).length +
-    leaves.filter((row) => row.employeeId === id).length;
+    leaves.filter((row) => row.employeeId === id).length +
+    requests.filter((row) => row.employeeId === id).length +
+    attendance.filter((row) => row.employeeId === id).length;
 
   if (linked > 0) {
     fail({ form: `لا يمكن الحذف: للموظف ${linked} سجلًا مرتبطًا. استخدم «أرشفة» بدلًا من الحذف.` });
@@ -493,4 +499,114 @@ export async function saveLeave(input: Partial<Leave>): Promise<Leave> {
 
 export async function deleteLeave(id: string): Promise<void> {
   await deleteRecord('leaves', id);
+}
+
+/* --------------------- الإجازات والأذونات الجديدة ---------------------- */
+
+export async function listLeavePermissions(): Promise<LeavePermissionRecord[]> {
+  const rows = await getAll<LeavePermissionRecord>('leavePermissions');
+  return rows.sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
+export function permissionMonthUsage(
+  rows: LeavePermissionRecord[],
+  employeeId: string,
+  date: string,
+  excludeId?: string,
+): { entries: number; hours: number } {
+  const month = date.slice(0, 7);
+  return rows.reduce(
+    (usage, row) => {
+      if (
+        row.id !== excludeId &&
+        row.employeeId === employeeId &&
+        row.requestType === 'permission' &&
+        row.date.startsWith(month)
+      ) {
+        usage.entries += 1;
+        usage.hours += row.durationHours === 2 ? 2 : row.durationHours === 1 ? 1 : 0;
+      }
+      return usage;
+    },
+    { entries: 0, hours: 0 },
+  );
+}
+
+export async function saveLeavePermission(input: Partial<LeavePermissionRecord>): Promise<LeavePermissionRecord> {
+  const errors: Record<string, string> = {};
+  if (!input.employeeId) errors.employeeId = 'اختر الموظف لحساب ملخصه الشهري.';
+  const dateParts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input.date ?? '');
+  const validDate = dateParts ? new Date(Date.UTC(Number(dateParts[1]), Number(dateParts[2]) - 1, Number(dateParts[3]))) : null;
+  if (!dateParts || !validDate || validDate.getUTCFullYear() !== Number(dateParts[1]) || validDate.getUTCMonth() + 1 !== Number(dateParts[2]) || validDate.getUTCDate() !== Number(dateParts[3])) errors.date = 'اختر تاريخًا صحيحًا لحساب الشهر.';
+  const validCategory =
+    (input.requestType === 'leave' && ['إجازة اعتيادي', 'إجازة عارضة', 'إجازة بخصم'].includes(input.category ?? '')) ||
+    (input.requestType === 'permission' && ['إذن انصرف', 'إذن حضور'].includes(input.category ?? ''));
+  if (!validCategory) errors.category = 'اختر نوع الطلب الصحيح.';
+  if (input.requestType === 'permission' && input.durationHours !== 1 && input.durationHours !== 2)
+    errors.durationHours = 'اختر مدة الإذن.';
+  if (Object.keys(errors).length) fail(errors);
+
+  const rows = await getAll<LeavePermissionRecord>('leavePermissions');
+  const current = input.id ? rows.find((row) => row.id === input.id) : undefined;
+  const employeeId = input.employeeId as string;
+  const date = input.date as string;
+  if (input.requestType === 'permission') {
+    const usage = permissionMonthUsage(rows, employeeId, date, input.id);
+    const hours = input.durationHours as 1 | 2;
+    const remainingEntries = Math.max(0, 4 - usage.entries);
+    const remainingHours = Math.max(0, 4 - usage.hours);
+    if (usage.entries + 1 > 4 || usage.hours + hours > 4) {
+      const month = date.slice(5, 7);
+      const year = date.slice(0, 4);
+      fail({
+        permissionLimit: `لا يمكن حفظ الإذن: المتبقي لهذا الموظف في ${month}/${year} هو ${remainingEntries} أذونات و${remainingHours} ساعات، والطلب يتجاوز الحد الشهري (4 أذونات و4 ساعات).`,
+      });
+    }
+  }
+
+  const record: LeavePermissionRecord = {
+    id: input.id ?? uid('lp'),
+    createdAt: current?.createdAt ?? nowIso(),
+    updatedAt: nowIso(),
+    employeeId,
+    requestType: input.requestType as 'leave' | 'permission',
+    category: input.category as LeavePermissionRecord['category'],
+    date,
+    durationHours: input.requestType === 'permission' ? (input.durationHours as 1 | 2) : null,
+    notes: trim(input.notes),
+  };
+  await putRecord('leavePermissions', record);
+  return record;
+}
+
+export async function deleteLeavePermission(id: string): Promise<void> {
+  await deleteRecord('leavePermissions', id);
+}
+
+/* -------------------- تأخيرات الحضور والانصراف ------------------------- */
+
+export async function listAttendanceRecords(): Promise<AttendanceRecord[]> {
+  const rows = await getAll<AttendanceRecord>('attendanceRecords');
+  return rows.sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
+export async function saveAttendanceRecord(input: Partial<AttendanceRecord>): Promise<AttendanceRecord> {
+  const current = input.id ? await getById<AttendanceRecord>('attendanceRecords', input.id) : undefined;
+  const normalizeTime = (value?: string) => (value && TIME_RE.test(value) ? value : '');
+  const record: AttendanceRecord = {
+    id: input.id ?? uid('att'),
+    createdAt: current?.createdAt ?? nowIso(),
+    updatedAt: nowIso(),
+    employeeId: trim(input.employeeId),
+    date: trim(input.date),
+    arrivalTime: normalizeTime(input.arrivalTime),
+    departureTime: normalizeTime(input.departureTime),
+    notes: trim(input.notes),
+  };
+  await putRecord('attendanceRecords', record);
+  return record;
+}
+
+export async function deleteAttendanceRecord(id: string): Promise<void> {
+  await deleteRecord('attendanceRecords', id);
 }
