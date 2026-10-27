@@ -442,6 +442,7 @@ textarea.cell--notes { min-height: 30px; height: 30px; resize: vertical; padding
 .leave-summary-table { min-width: 1120px; border-collapse: separate; border-spacing: 0; }
 .leave-summary-table th, .leave-summary-table td { min-width: 78px; padding: 11px 9px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .leave-summary-table thead th { position: sticky; top: 0; z-index: 1; background: var(--surface-sunken); color: var(--brand-800); font-size: 11px; font-weight: 700; line-height: 1.45; white-space: normal; }
+.leave-summary-table tbody td { font-size: 14px; }
 .leave-summary-table tbody tr:nth-child(even) { background: #f8fafc; }
 .leave-summary-table tbody tr:hover { background: var(--brand-50); }
 .leave-summary-table tbody th.leave-summary-name { min-width: 165px; background: #f3f7fb; color: var(--brand-800); font-weight: 700; text-align: right; white-space: normal; }

@@ -45,10 +45,22 @@ const fonts = () => {
   };
 };
 const pagesIn = (pdf: Uint8Array) => (Buffer.from(pdf).toString('latin1').match(/\/Type \/Page\b/g) ?? []).length;
-const only = (keys: Array<keyof CompleteEmployeeData>) => Object.fromEntries(Object.entries(testData).map(([key,value]) => [key, keys.includes(key as keyof CompleteEmployeeData) ? value : key === 'employee' ? value : []])) as CompleteEmployeeData;
 
-describe('تقرير PDF الكامل للموظف — صفحة A4 واحدة', () => {
-  it('ينشئ صفحة A4 واحدة بخط Times New Roman مضمّن، مع سجلات جميع الأقسام دون تكرار', async () => {
+const volumeFixture = (): CompleteEmployeeData => ({
+  ...testData,
+  visits: Array.from({length:17},(_,i)=>({ ...base(`v53-${i}`),employeeId:employee.id,visitDate:`2026-${String(Math.floor(i/28)+1).padStart(2,'0')}-${String(i%28+1).padStart(2,'0')}`,branch:`فرع ${i+1}`,clientName:`عميل رقم ${i+1}`,location:'',departureTime:'',returnTime:'',notes:'' })) as VisitTiming[],
+  minutes: Array.from({length:12},(_,i)=>({ ...base(`m53-${i}`),employeeId:employee.id,date:`2026-04-${String(i+1).padStart(2,'0')}`,fileRequestTime:'09:00',fileReceivedTime:'09:10',responseTime:'09:40',inspectionResult:'no_notes',notes:`ملاحظة المحضر رقم ${i+1}` })) as DailyMinute[],
+  legacyLeaves: Array.from({length:8},(_,i)=>({ ...base(`l53-${i}`),employeeId:employee.id,type:'إجازة اعتيادي',startDate:`2026-05-${String(i+1).padStart(2,'0')}`,endDate:`2026-05-${String(i+1).padStart(2,'0')}`,unit:'days',days:1,hours:null,notes:`سبب الإجازة ${i+1}` })) as Leave[],
+  leavePermissions: Array.from({length:6},(_,i)=>({ ...base(`lp53-${i}`),employeeId:employee.id,requestType:i<3?'leave':'permission',category:i<3?'إجازة عارضة':i%2?'إذن حضور':'إذن انصرف',date:`2026-06-${String(i+1).padStart(2,'0')}`,durationHours:i<3?null:1,notes:`ملاحظة الطلب ${i+1}` })) as LeavePermissionRecord[],
+  attendance: Array.from({length:4},(_,i)=>({ ...base(`a53-${i}`),employeeId:employee.id,date:`2026-07-${String(i+1).padStart(2,'0')}`,arrivalTime:i<2?'09:20':'09:15',departureTime:i>=2?'16:30':'17:00',notes:`سجل حضور ${i+1}` })) as AttendanceRecord[],
+  observations: Array.from({length:3},(_,i)=>({ ...base(`o53-${i}`),employeeId:employee.id,date:`2026-08-${String(i+1).padStart(2,'0')}`,source:'ملاحظة مباشرة',branch:'ناصر',reference:`OBS-${i+1}`,category:'متابعة',severity:'medium',details:`تفاصيل الملاحظة ${i+1}`,correctiveAction:'متابعة',notificationDate:null,status:'open',resolutionDate:null,recurrence:false,followUpNotes:'' })) as Observation[],
+  annualNotes: Array.from({length:2},(_,i)=>({ ...base(`an53-${i}`),employeeId:employee.id,year:2024+i,notes:`ملاحظة سنوية ${i+1}` })) as AnnualNote[],
+  fieldVisits: [{ ...base('fv53'),employeeId:employee.id,region:'بني سويف',branch:'ناصر',visitDate:'2026-09-01',visitType:'متابعة',reference:'FV-1',status:'completed',reportSubmittedAt:null,reportReviewedAt:null,revisions:0,finalAssessment:'ملتزم',notes:'' }] as FieldVisit[],
+});
+
+
+describe('تقرير PDF الكامل للموظف — تخطيط متكيف على A4', () => {
+  it('ينشئ تقريرًا مقروءًا بخط Times New Roman مضمّن ويستخدم صفحة واحدة للحجم الصغير', async () => {
     const pdf = await buildCompleteEmployeePdf(testData, fonts());
     const raw = Buffer.from(pdf).toString('latin1');
     expect(pagesIn(pdf)).toBe(1);
@@ -73,18 +85,49 @@ describe('تقرير PDF الكامل للموظف — صفحة A4 واحدة', 
     writeFileSync(`/tmp/employee-${_name}.pdf`, pdf);
   });
 
+  it('يعرض نحو 20 سجلًا دون فقدها، ويبقى صفحة واحدة متى اتسع التخطيط', async () => {
+    const twenty = { ...testData, minutes: Array.from({length:8},(_,i)=>({ ...base(`m20-${i}`),employeeId:employee.id,date:`2026-11-${String(i+1).padStart(2,'0')}`,fileRequestTime:'09:00',fileReceivedTime:'09:10',responseTime:'09:40',inspectionResult:'no_notes',notes:`محضر ${i+1}`})) as DailyMinute[] };
+    const pdf=await buildCompleteEmployeePdf(twenty,fonts());
+    expect(pagesIn(pdf)).toBeGreaterThanOrEqual(1);
+    expect(pagesIn(pdf)).toBeLessThanOrEqual(2);
+  });
+
+  it('يحتفظ بجميع 53 سجلًا ويقسم التقرير إلى صفحات تلقائيًا', async () => {
+    const fixture=volumeFixture();
+    const recordCount=fixture.visits.length+fixture.fieldVisits.length+fixture.minutes.length+fixture.legacyLeaves.length+fixture.leavePermissions.length+fixture.attendance.length+fixture.observations.length+fixture.annualNotes.length;
+    expect(recordCount).toBe(53);
+    const pdf=await buildCompleteEmployeePdf(fixture,fonts());
+    expect(pagesIn(pdf)).toBeGreaterThan(1);
+    expect(pagesIn(pdf)).toBeLessThanOrEqual(5);
+    writeFileSync('/tmp/employee-53-records.pdf',pdf);
+  });
+
   it('يعرض الاسم والملاحظات العربية الطويلة على صفحة واحدة إذا أمكن، دون قصّ النص', async () => {
-    const longData = { ...testData, employee: { ...employee, name: 'عبد الرحمن مصطفى عبد الله محمد إبراهيم حسن الشاذلي', notes: 'ملاحظة عربية طويلة تشمل متابعة دقيقة للملفات والزيارات والإجراءات الإدارية. '.repeat(8) } };
+    const longData = { ...testData,
+      employee: { ...employee, name: 'عبد الرحمن مصطفى عبد الله محمد إبراهيم حسن الشاذلي', notes: 'ملاحظة عربية طويلة تشمل متابعة دقيقة للملفات والزيارات والإجراءات الإدارية. '.repeat(8) },
+      visits: testData.visits.map(row => ({ ...row, clientName: row.employeeId === employee.id ? 'اسم عميل عربي طويل جدًا يحتاج مساحة كافية للعرض والالتفاف دون قص أو تداخل '.repeat(3) : row.clientName })),
+    };
     const pdf = await buildCompleteEmployeePdf(longData, fonts());
-    expect(pagesIn(pdf)).toBe(1);
+    expect(pagesIn(pdf)).toBeLessThanOrEqual(2);
     writeFileSync('/tmp/employee-long-arabic.pdf', pdf);
   });
 
-  it('يرفض الحجم المستحيل بوضوح بدل إسقاط سجلات أو إنشاء صفحات إضافية', async () => {
+  it('يقسم الملاحظات الطويلة بين الصفحات مع الإبقاء على النص كاملًا', async () => {
+    const longNotes={...testData,employee:{...employee,notes:'ملاحظة طويلة محفوظة للموظف مع تفاصيل عربية كاملة دون حذف. '.repeat(48)}};
+    const pdf=await buildCompleteEmployeePdf(longNotes,fonts());
+    expect(pagesIn(pdf)).toBeGreaterThan(1);
+    expect(pagesIn(pdf)).toBeLessThanOrEqual(3);
+    writeFileSync('/tmp/employee-very-long-notes.pdf',pdf);
+  });
+
+  it('يستوعب أكثر من 53 سجلًا بصفحات إضافية بدل رفض التصدير', async () => {
     const minutes = Array.from({length: 60}, (_, i) => ({
       ...base(`minute-${i}`), employeeId: employee.id, date: `2026-${String(i % 12 + 1).padStart(2,'0')}-15`,
       fileRequestTime: '09:00', fileReceivedTime: '09:15', responseTime: '10:00', inspectionResult: 'no_notes',
     })) as DailyMinute[];
-    await expect(buildCompleteEmployeePdf({ ...only([]), minutes }, fonts())).rejects.toThrow(/لم يُحذف أي سجل/);
+    const pdf=await buildCompleteEmployeePdf({ ...testData,visits:[],minutes,legacyLeaves:[],leavePermissions:[],attendance:[],fieldVisits:[],annualNotes:[],observations:[] },fonts());
+    expect(pagesIn(pdf)).toBeGreaterThan(1);
+    expect(pagesIn(pdf)).toBeLessThanOrEqual(5);
+    writeFileSync('/tmp/employee-60-minutes.pdf',pdf);
   });
 });
