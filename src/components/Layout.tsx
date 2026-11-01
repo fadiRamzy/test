@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state/store';
 import { useRoute } from '../state/router';
 import { Icon, type IconName } from './Icon';
@@ -11,103 +11,197 @@ interface NavItem {
   icon: IconName;
 }
 
-const NAV: NavItem[] = [
-  { path: '/employees', label: 'الموظفون', icon: 'employees' },
-  { path: '/minutes', label: 'محاضر يومية', icon: 'minutes' },
-  { path: '/visit-times', label: 'توقيت الزيارات', icon: 'visits' },
-  { path: '/leave-permissions', label: 'الإجازات والأذونات', icon: 'calendar' },
-  { path: '/attendance-delays', label: 'تأخيرات الحضور والانصراف', icon: 'clock' },
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: 'الرئيسية',
+    items: [
+      { path: '/dashboard', label: 'لوحة المتابعة', icon: 'dashboard' },
+      { path: '/employees', label: 'الموظفون', icon: 'employees' },
+    ],
+  },
+  {
+    label: 'العمليات الميدانية',
+    items: [
+      { path: '/visits', label: 'الزيارات الميدانية', icon: 'visits' },
+      { path: '/visit-times', label: 'توقيت الزيارات', icon: 'clock' },
+      { path: '/minutes', label: 'المحاضر اليومية', icon: 'minutes' },
+    ],
+  },
+  {
+    label: 'الأداء والمتابعة',
+    items: [
+      { path: '/monthly', label: 'التقييم الشهري', icon: 'calendar' },
+      { path: '/annual', label: 'التقييم السنوي', icon: 'evaluations' },
+      { path: '/observations', label: 'الملاحظات والمتابعات', icon: 'observations' },
+    ],
+  },
+  {
+    label: 'الحضور والإجازات',
+    items: [
+      { path: '/leave-permissions', label: 'الإجازات والأذونات', icon: 'calendar' },
+      { path: '/leaves', label: 'سجل الإجازات', icon: 'calendar' },
+      { path: '/attendance-delays', label: 'تأخيرات الحضور والانصراف', icon: 'clock' },
+    ],
+  },
+  {
+    label: 'الإدارة',
+    items: [{ path: '/reports', label: 'التقارير والنسخ الاحتياطي', icon: 'reports' }],
+  },
 ];
 
-const MORE_NAV: NavItem[] = [
-  { path: '/dashboard', label: 'لوحة المتابعة', icon: 'chart' },
-  { path: '/monthly', label: 'التقييم الشهري', icon: 'calendar' },
-  { path: '/annual', label: 'التقييم السنوي', icon: 'chart' },
-  { path: '/visits', label: 'الزيارات الميدانية', icon: 'visits' },
-  { path: '/observations', label: 'الملاحظات والمتابعات', icon: 'alert' },
-  { path: '/leaves', label: 'الإجازات', icon: 'calendar' },
-  { path: '/reports', label: 'التقارير والنسخ الاحتياطي', icon: 'database' },
-];
+const ALL_NAV_ITEMS = NAV_GROUPS.flatMap((group) => group.items);
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { settings, ready } = useApp();
   const route = useRoute();
-
   const [collapse, setCollapse] = useState<CollapseSignal>({ version: 0, collapsed: false });
-  const moreMenu = useRef<HTMLDetailsElement>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const broadcast = (collapsed: boolean) => setCollapse((prev) => ({ version: prev.version + 1, collapsed }));
+  const isActive = (path: string) => path === '/employees' ? route.path === '/' || route.path === path || route.path.startsWith(`${path}/`) : route.path === path;
+
+  const currentPage = useMemo(() => {
+    if (route.path.startsWith('/employees/')) return 'ملف الموظف';
+    return ALL_NAV_ITEMS.find((item) => isActive(item.path))?.label ?? 'مساحة العمل';
+  }, [route.path]);
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
-    moreMenu.current?.removeAttribute('open');
+    setSidebarOpen(false);
   }, [route.path]);
 
-  const isActive = (path: string) => route.path.startsWith(path);
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSidebarOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [sidebarOpen]);
 
   return (
-    <div className="shell">
-      <header className="topnav print-hide">
-        <a className="topnav__brand" href="#/employees" aria-label="الصفحة الرئيسية — الموظفون">
-          <span className="topnav__logo">
-            <Icon name="shield" size={18} />
-          </span>
-          <span>
-            <strong>نظام إدارة المخاطر</strong>
-            <em>{settings.organizationName}</em>
-          </span>
-        </a>
-        <nav className="topnav__nav" aria-label="التنقل الرئيسي">
-          {NAV.map((item) => (
-            <a
-              key={item.path}
-              href={`#${item.path}`}
-              className={cn('topnav__link', isActive(item.path) && 'is-active')}
-              aria-current={isActive(item.path) ? 'page' : undefined}
-            >
-              <Icon name={item.icon} size={16} />
-              <span>{item.label}</span>
-            </a>
-          ))}
-        </nav>
-        <details className={cn('topnav__more', MORE_NAV.some((item) => isActive(item.path)) && 'is-active')} ref={moreMenu}>
-          <summary role="button" aria-label="المزيد من الأقسام">
-            <Icon name="menu" size={15} />
-            <span>الأقسام</span>
-            <Icon name="chevron-down" size={13} />
-          </summary>
-          <div className="topnav__menu">
-            {MORE_NAV.map((item) => (
-              <a key={item.path} href={`#${item.path}`} className={cn(isActive(item.path) && 'is-active')}>
-                <Icon name={item.icon} size={15} />
-                <span>{item.label}</span>
-              </a>
-            ))}
-          </div>
-        </details>
-        <div className="topnav__tools">
-          <button type="button" className="btn btn--sm" onClick={() => broadcast(true)}>
-            <Icon name="close" size={13} />
-            <span>إخفاء الكل</span>
-          </button>
-          <button type="button" className="btn btn--sm" onClick={() => broadcast(false)}>
-            <Icon name="list" size={13} />
-            <span>إظهار الكل</span>
-          </button>
-          <a className="btn btn--sm topnav__backup" href="#/reports">
-            <Icon name="database" size={14} />
-            <span>النسخ الاحتياطي</span>
+    <div className="app-shell">
+      <aside
+        className={cn('app-sidebar print-hide', sidebarOpen && 'is-open', sidebarCollapsed && 'is-collapsed')}
+        id="app-sidebar"
+        aria-label="القائمة الجانبية"
+      >
+        <div className="sidebar__brand">
+          <a className="sidebar__identity" href="#/dashboard" aria-label="الانتقال إلى لوحة المتابعة" onClick={() => setSidebarOpen(false)}>
+            <span className="sidebar__mark" aria-hidden="true"><Icon name="shield" size={21} strokeWidth={1.6} /></span>
+            <span className="sidebar__brand-copy">
+              <strong>إدارة المخاطر</strong>
+              <small>{settings.organizationName}</small>
+            </span>
           </a>
+          <button
+            type="button"
+            className="sidebar__collapse"
+            aria-label={sidebarCollapsed ? 'توسيع الشريط الجانبي' : 'تصغير الشريط الجانبي'}
+            title={sidebarCollapsed ? 'توسيع الشريط الجانبي' : 'تصغير الشريط الجانبي'}
+            onClick={() => setSidebarCollapsed((value) => !value)}
+          >
+            <Icon name={sidebarCollapsed ? 'chevron-left' : 'chevron-right'} size={16} />
+          </button>
+          <button type="button" className="sidebar__mobile-close" aria-label="إغلاق القائمة" onClick={() => setSidebarOpen(false)}>
+            <Icon name="close" size={18} />
+          </button>
         </div>
-      </header>
-      <CollapseProvider signal={collapse}>
-        <main className="page" id="main-content">
-          {ready ? children : <div className="loading">جارٍ فتح البيانات المحلية…</div>}
-        </main>
-      </CollapseProvider>
-      <footer className="appfoot print-hide">
-        البيانات محفوظة داخل هذا المتصفح على هذا الجهاز فقط — لا مزامنة بين الأجهزة، ويمكن فقدانها عند حذف بيانات
-        المتصفح. <a href="#/reports">صدّر نسخة احتياطية</a> بشكل دوري.
-      </footer>
+
+        <div className="sidebar__body">
+          <nav className="sidebar__nav" aria-label="التنقل الرئيسي">
+            {NAV_GROUPS.map((group) => (
+              <section className="sidebar__group" key={group.label} aria-label={group.label}>
+                <div className="sidebar__group-label">{group.label}</div>
+                <div className="sidebar__links">
+                  {group.items.map((item) => (
+                    <a
+                      key={item.path}
+                      href={`#${item.path}`}
+                      className={cn('sidebar__link', isActive(item.path) && 'is-active')}
+                      aria-current={isActive(item.path) ? 'page' : undefined}
+                      title={sidebarCollapsed ? item.label : undefined}
+                      onClick={() => setSidebarOpen(false)}
+                    >
+                      <span className="sidebar__link-icon"><Icon name={item.icon} size={18} strokeWidth={1.65} /></span>
+                      <span className="sidebar__link-label">{item.label}</span>
+                      {isActive(item.path) && <span className="sidebar__active-dot" aria-hidden="true" />}
+                    </a>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </nav>
+
+          <div className="sidebar__footer">
+            <a className="sidebar__backup" href="#/reports" title={sidebarCollapsed ? 'التقارير والنسخ الاحتياطي' : undefined} onClick={() => setSidebarOpen(false)}>
+              <span className="sidebar__link-icon"><Icon name="database" size={17} /></span>
+              <span className="sidebar__link-label">التقارير والنسخ الاحتياطي</span>
+              <Icon name="chevron-left" size={14} className="sidebar__backup-arrow" />
+            </a>
+            <div className="sidebar__status">
+              <span className="sidebar__status-indicator" />
+              <span className="sidebar__status-copy"><strong>{ready ? 'البيانات جاهزة' : 'جارٍ فتح البيانات'}</strong><small>محفوظة على هذا الجهاز</small></span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {sidebarOpen && <button className="sidebar-scrim" type="button" aria-label="إغلاق القائمة" onClick={() => setSidebarOpen(false)} />}
+
+      <div className="app-frame">
+        <header className="app-topbar print-hide">
+          <div className="app-topbar__start">
+            <button
+              type="button"
+              className="app-topbar__menu"
+              aria-label="فتح قائمة التنقل"
+              aria-controls="app-sidebar"
+              aria-expanded={sidebarOpen}
+              onClick={() => setSidebarOpen(true)}
+            >
+              <Icon name="menu" size={19} />
+            </button>
+            <div className="app-topbar__heading">
+              <span>نظام إدارة المخاطر <Icon name="chevron-left" size={12} /> <strong>{currentPage}</strong></span>
+              <small>مساحة العمل · {settings.organizationName}</small>
+            </div>
+          </div>
+          <div className="app-topbar__tools" aria-label="أدوات العرض">
+            <button type="button" className="btn btn--sm app-tool" onClick={() => broadcast(true)} title="إخفاء جميع القوائم">
+              <Icon name="close" size={14} /><span>إخفاء الكل</span>
+            </button>
+            <button type="button" className="btn btn--sm app-tool" onClick={() => broadcast(false)} title="إظهار جميع القوائم">
+              <Icon name="list" size={14} /><span>إظهار الكل</span>
+            </button>
+            <span className="app-topbar__divider" aria-hidden="true" />
+            <a className="btn btn--sm app-tool app-tool--backup" href="#/reports" title="النسخ الاحتياطي">
+              <Icon name="database" size={14} /><span>النسخ الاحتياطي</span>
+            </a>
+          </div>
+        </header>
+
+        <CollapseProvider signal={collapse}>
+          <main className="page" id="main-content">
+            {ready ? children : <div className="loading">جارٍ فتح البيانات المحلية…</div>}
+          </main>
+        </CollapseProvider>
+
+        <footer className="appfoot print-hide">
+          <span>البيانات محفوظة محليًا على هذا الجهاز فقط</span>
+          <a href="#/reports">صدّر نسخة احتياطية</a>
+        </footer>
+      </div>
     </div>
   );
 }

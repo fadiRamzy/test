@@ -557,23 +557,41 @@ describe('توقيت الزيارات', () => {
 });
 
 describe('التنقل الرئيسي', () => {
-  it('يعرض أقسام التنقل المطلوبة بالترتيب', async () => {
+  it('يعرض كل أقسام التطبيق داخل شريط جانبي رأسي دون شريط تنقل أفقي علوي', async () => {
     await seedEmployee();
     renderApp();
+    const user = userEvent.setup();
     const nav = await screen.findByRole('navigation', { name: 'التنقل الرئيسي' });
     const links = within(nav).getAllByRole('link');
-    expect(links.map((link) => link.textContent)).toEqual(['الموظفون', 'محاضر يومية', 'توقيت الزيارات', 'الإجازات والأذونات', 'تأخيرات الحضور والانصراف']);
+    expect(links.map((link) => link.textContent?.trim())).toEqual([
+      'لوحة المتابعة', 'الموظفون', 'الزيارات الميدانية', 'توقيت الزيارات', 'المحاضر اليومية',
+      'التقييم الشهري', 'التقييم السنوي', 'الملاحظات والمتابعات', 'الإجازات والأذونات',
+      'سجل الإجازات', 'تأخيرات الحضور والانصراف', 'التقارير والنسخ الاحتياطي',
+    ]);
+    expect(document.querySelector('.topnav')).not.toBeInTheDocument();
+    expect(document.querySelector('.app-sidebar')).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: 'الموظفون' })).toHaveAttribute('aria-current', 'page');
+    await user.click(screen.getByRole('button', { name: 'تصغير الشريط الجانبي' }));
+    expect(document.querySelector('.app-sidebar')).toHaveClass('is-collapsed');
+    await user.click(screen.getByRole('button', { name: 'توسيع الشريط الجانبي' }));
+    expect(document.querySelector('.app-sidebar')).not.toHaveClass('is-collapsed');
   });
 
-  it('يوفر بقية أقسام التطبيق من قائمة الأقسام ويغلقها بعد الانتقال', async () => {
+  it('يفتح درج التنقل على الأجهزة الصغيرة، وينتقل للقسم ويغلقه', async () => {
     await seedEmployee();
     const user = userEvent.setup();
     window.location.hash = '#/employees';
     renderApp();
-    await user.click(screen.getByRole('button', { name: 'المزيد من الأقسام' }));
-    await user.click(screen.getByRole('link', { name: 'لوحة المتابعة' }));
-    expect(await screen.findByRole('heading', { name: 'لوحة المتابعة' })).toBeInTheDocument();
-    expect(document.querySelector('.topnav__more')).not.toHaveAttribute('open');
+    const menuButton = screen.getByRole('button', { name: 'فتح قائمة التنقل' });
+    await user.click(menuButton);
+    expect(menuButton).toHaveAttribute('aria-expanded', 'true');
+    expect(document.body.style.overflow).toBe('hidden');
+    await user.keyboard('{Escape}');
+    expect(menuButton).toHaveAttribute('aria-expanded', 'false');
+    await user.click(menuButton);
+    await user.click(screen.getByRole('link', { name: 'الزيارات الميدانية' }));
+    expect(await screen.findByRole('heading', { name: 'الزيارات الميدانية' })).toBeInTheDocument();
+    expect(menuButton).toHaveAttribute('aria-expanded', 'false');
   });
 });
 
