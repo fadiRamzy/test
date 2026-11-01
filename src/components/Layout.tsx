@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApp } from '../state/store';
 import { useRoute } from '../state/router';
 import { Icon, type IconName } from './Icon';
@@ -19,15 +19,27 @@ const NAV: NavItem[] = [
   { path: '/attendance-delays', label: 'تأخيرات الحضور والانصراف', icon: 'clock' },
 ];
 
+const MORE_NAV: NavItem[] = [
+  { path: '/dashboard', label: 'لوحة المتابعة', icon: 'chart' },
+  { path: '/monthly', label: 'التقييم الشهري', icon: 'calendar' },
+  { path: '/annual', label: 'التقييم السنوي', icon: 'chart' },
+  { path: '/visits', label: 'الزيارات الميدانية', icon: 'visits' },
+  { path: '/observations', label: 'الملاحظات والمتابعات', icon: 'alert' },
+  { path: '/leaves', label: 'الإجازات', icon: 'calendar' },
+  { path: '/reports', label: 'التقارير والنسخ الاحتياطي', icon: 'database' },
+];
+
 export function Layout({ children }: { children: React.ReactNode }) {
   const { settings, ready } = useApp();
   const route = useRoute();
 
   const [collapse, setCollapse] = useState<CollapseSignal>({ version: 0, collapsed: false });
+  const moreMenu = useRef<HTMLDetailsElement>(null);
   const broadcast = (collapsed: boolean) => setCollapse((prev) => ({ version: prev.version + 1, collapsed }));
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
+    moreMenu.current?.removeAttribute('open');
   }, [route.path]);
 
   const isActive = (path: string) => route.path.startsWith(path);
@@ -57,6 +69,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </a>
           ))}
         </nav>
+        <details className={cn('topnav__more', MORE_NAV.some((item) => isActive(item.path)) && 'is-active')} ref={moreMenu}>
+          <summary role="button" aria-label="المزيد من الأقسام">
+            <Icon name="menu" size={15} />
+            <span>الأقسام</span>
+            <Icon name="chevron-down" size={13} />
+          </summary>
+          <div className="topnav__menu">
+            {MORE_NAV.map((item) => (
+              <a key={item.path} href={`#${item.path}`} className={cn(isActive(item.path) && 'is-active')}>
+                <Icon name={item.icon} size={15} />
+                <span>{item.label}</span>
+              </a>
+            ))}
+          </div>
+        </details>
         <div className="topnav__tools">
           <button type="button" className="btn btn--sm" onClick={() => broadcast(true)}>
             <Icon name="close" size={13} />

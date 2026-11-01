@@ -564,6 +564,17 @@ describe('التنقل الرئيسي', () => {
     const links = within(nav).getAllByRole('link');
     expect(links.map((link) => link.textContent)).toEqual(['الموظفون', 'محاضر يومية', 'توقيت الزيارات', 'الإجازات والأذونات', 'تأخيرات الحضور والانصراف']);
   });
+
+  it('يوفر بقية أقسام التطبيق من قائمة الأقسام ويغلقها بعد الانتقال', async () => {
+    await seedEmployee();
+    const user = userEvent.setup();
+    window.location.hash = '#/employees';
+    renderApp();
+    await user.click(screen.getByRole('button', { name: 'المزيد من الأقسام' }));
+    await user.click(screen.getByRole('link', { name: 'لوحة المتابعة' }));
+    expect(await screen.findByRole('heading', { name: 'لوحة المتابعة' })).toBeInTheDocument();
+    expect(document.querySelector('.topnav__more')).not.toHaveAttribute('open');
+  });
 });
 
 describe('ملف الموظف — بيانات الموظف فقط', () => {
