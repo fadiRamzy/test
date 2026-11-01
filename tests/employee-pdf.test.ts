@@ -92,10 +92,10 @@ describe('تقرير PDF الكامل للموظف — تخطيط متكيف ع�
     expect(pagesIn(pdf)).toBeLessThanOrEqual(2);
   });
 
-  it('يحتفظ بجميع 53 سجلًا ويقسم التقرير إلى صفحات تلقائيًا', async () => {
+  it('يحتفظ بجميع السجلات المدعومة ويقسم التقرير إلى صفحات تلقائيًا', async () => {
     const fixture=volumeFixture();
-    const recordCount=fixture.visits.length+fixture.fieldVisits.length+fixture.minutes.length+fixture.legacyLeaves.length+fixture.leavePermissions.length+fixture.attendance.length+fixture.observations.length+fixture.annualNotes.length;
-    expect(recordCount).toBe(53);
+    const recordCount=fixture.visits.length+fixture.minutes.length+fixture.legacyLeaves.length+fixture.leavePermissions.length+fixture.attendance.length+fixture.observations.length;
+    expect(recordCount).toBe(50);
     const pdf=await buildCompleteEmployeePdf(fixture,fonts());
     expect(pagesIn(pdf)).toBeGreaterThan(1);
     expect(pagesIn(pdf)).toBeLessThanOrEqual(5);

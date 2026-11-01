@@ -2,18 +2,13 @@ import { useApp } from './state/store';
 import { useRoute } from './state/router';
 import { Layout } from './components/Layout';
 import { Icon } from './components/Icon';
-import { DashboardPage } from './pages/Dashboard';
 import { EmployeesPage } from './pages/Employees';
 import { EmployeeProfilePage } from './pages/EmployeeProfile';
-import { MonthlyEvaluationsPage } from './pages/MonthlyEvaluations';
-import { AnnualEvaluationsPage } from './pages/AnnualEvaluations';
-import { FieldVisitsPage } from './pages/FieldVisits';
 import { MinutesPage } from './pages/Minutes';
-import { ObservationsPage } from './pages/Observations';
-import { LeavesPage } from './pages/Leaves';
 import { ReportsPage } from './pages/Reports';
 import { VisitTimingsPage } from './pages/VisitTimings';
-import { LeavePermissionsPage } from './pages/LeavePermissions';
+import { UnifiedLeavesPage } from './pages/UnifiedLeaves';
+import { NotesPage } from './pages/Notes';
 import { AttendanceDelaysPage } from './pages/AttendanceDelays';
 
 export function App() {
@@ -56,15 +51,10 @@ function Router({ route }: { route: ReturnType<typeof useRoute> }) {
   if (!first || first === 'employees')
     return second ? <EmployeeProfilePage employeeId={second} /> : <EmployeesPage />;
   if (first === 'visit-times') return <VisitTimingsPage />;
-  if (first === 'leave-permissions') return <LeavePermissionsPage />;
+  if (first === 'leave-permissions') return <UnifiedLeavesPage />;
+  if (first === 'notes') return <NotesPage />;
   if (first === 'attendance-delays') return <AttendanceDelaysPage />;
-  if (first === 'dashboard') return <DashboardPage />;
-  if (first === 'monthly') return <MonthlyEvaluationsPage />;
-  if (first === 'annual') return <AnnualEvaluationsPage />;
-  if (first === 'visits') return <FieldVisitsPage />;
   if (first === 'minutes') return <MinutesPage />;
-  if (first === 'observations') return <ObservationsPage />;
-  if (first === 'leaves') return <LeavesPage />;
   if (first === 'reports') return <ReportsPage />;
 
   return <EmployeesPage />;

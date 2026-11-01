@@ -58,7 +58,6 @@ function employeeTables(input: CompleteEmployeeData) {
   const employeeId = input.employee.id;
   const visits = [
     ...input.visits.filter(x => x.employeeId === employeeId).map(x => ({ sortDate: val(x.visitDate), date: d(x.visitDate), branch: val(x.branch), customer: val(x.clientName) })),
-    ...input.fieldVisits.filter(x => x.employeeId === employeeId).map(x => ({ sortDate: val(x.visitDate), date: d(x.visitDate), branch: val(x.branch), customer: '' })),
   ].filter(notEmpty).sort((a,b) => a.sortDate.localeCompare(b.sortDate)).map(({date,branch,customer})=>({date,branch,customer}));
 
   const minutes = input.minutes.filter(x => x.employeeId === employeeId).sort((a,b) => (a.date ?? '').localeCompare(b.date ?? '')).map(row => {
@@ -97,9 +96,8 @@ function employeeTables(input: CompleteEmployeeData) {
   const observations = input.observations.filter(x => x.employeeId === employeeId).sort((a,b) => (a.date ?? '').localeCompare(b.date ?? '')).map(x => ({
     date: d(x.date), details: [pair('المصدر',x.source), pair('الفرع',x.branch), pair('المرجع',x.reference), pair('التصنيف',x.category), pair('الخطورة',SEVERITY_LABELS[x.severity] ?? x.severity), pair('التفاصيل',x.details), pair('الإجراء',x.correctiveAction), pair('تاريخ الإخطار',d(x.notificationDate)), pair('الحالة',OBSERVATION_STATUS_LABELS[x.status] ?? x.status), pair('تاريخ الإغلاق',d(x.resolutionDate)), pair('متكررة',typeof x.recurrence === 'boolean' ? (x.recurrence ? 'نعم' : 'لا') : ''), pair('المتابعة',x.followUpNotes)].filter(Boolean).join(' | '),
   })).filter(notEmpty);
-  const annual = input.annualNotes.filter(x => x.employeeId === employeeId).sort((a,b) => a.year-b.year).map(x => ({ year: String(x.year), note: val(x.notes) })).filter(notEmpty);
 
-  return { visits, minutes, leaves, permissions, late, early, observations, annual };
+  return { visits, minutes, leaves, permissions, late, early, observations };
 }
 
 function usableColumns(columns: Column[], rows: Record<string, string>[]): Column[] {
@@ -354,10 +352,6 @@ export async function buildCompleteEmployeePdf(data: CompleteEmployeeData, fonts
   if(tables.observations.length){
     const columns:Column[]=[{label:'التاريخ',width:54,value:'date'},{label:'التفاصيل',width:CONTENT_W-54,value:'details'}];
     drawPaginatedTable('الملاحظات والمتابعات',{columns,rows:tables.observations},MARGIN,CONTENT_W,{bodySize:8.8,headerHeight:16});
-  }
-  if(tables.annual.length){
-    const columns:Column[]=[{label:'السنة',width:55,value:'year'},{label:'الملاحظة السنوية',width:CONTENT_W-55,value:'note'}];
-    drawPaginatedTable('الملاحظات السنوية',{columns,rows:tables.annual},MARGIN,CONTENT_W,{bodySize:8.8,headerHeight:16});
   }
 
   pages.forEach((current,index)=>{

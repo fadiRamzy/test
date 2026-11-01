@@ -20,6 +20,7 @@ import {
   saveVisitTiming,
 } from '../src/db/repo';
 import { STORE_NAMES } from '../src/db/schema';
+import { createBackup } from '../src/db/backup';
 
 beforeEach(async () => {
   await useDatabase(`test-ui-${Math.random().toString(36).slice(2)}`);
@@ -99,7 +100,7 @@ describe('جدول ملخص الإجازات والأذونات', () => {
     expect(secondRow.children[3].textContent).toBe('1');
     expect(secondRow.children[8].textContent).toBe('2');
     expect(table.querySelectorAll('thead th')).toHaveLength(11);
-    await userEvent.setup().selectOptions(screen.getByRole('combobox', { name: 'الموظف' }), first.id);
+    await userEvent.setup().selectOptions(screen.getByRole('combobox', { name: 'الموظف في ملخص الطلبات' }), first.id);
     expect(table.querySelectorAll('tbody tr')).toHaveLength(1);
     expect(table.querySelector('tbody tr')?.textContent).toContain(first.name);
   });
@@ -113,14 +114,14 @@ describe('الإجازات والأذونات في الواجهة وملف ال�
     const app = renderApp();
 
     await screen.findByRole('heading', { name: 'الإجازات والأذونات' });
-    await user.click(screen.getByRole('button', { name: /إضافة سجل/ }));
+    await user.click(screen.getByRole('button', { name: /إضافة طلب/ }));
     await user.selectOptions(selectById('lp-employee'), employee.id);
     await user.type(byId('lp-notes'), 'إجازة اختبار');
     await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
     expect(await screen.findByText('إجازة اختبار')).toBeInTheDocument();
     await waitFor(async () => expect(await listLeavePermissions()).toHaveLength(1));
 
-    await user.click(screen.getByRole('button', { name: /إضافة سجل/ }));
+    await user.click(screen.getByRole('button', { name: /إضافة طلب/ }));
     await user.selectOptions(selectById('lp-employee'), employee.id);
     await user.selectOptions(selectById('lp-request-type'), 'permission');
     await user.selectOptions(selectById('lp-category'), 'إذن حضور');
@@ -155,9 +156,9 @@ describe('ملاحظات الموظف المنظمة', () => {
     const first = await seedEmployee({ name: 'مها حسن', code: 'RO-NOTE-1' });
     const second = await seedEmployee({ name: 'سلمى علي', code: 'RO-NOTE-2' });
     const user = userEvent.setup();
-    window.location.hash = '#/employees';
+    window.location.hash = '#/notes';
     const app = renderApp();
-    await screen.findByRole('heading', { name: 'الموظفون' });
+    await screen.findByRole('heading', { name: 'الملاحظات والمتابعة' });
 
     expect(selectById('employee-note-employee').options).toHaveLength(3);
     await user.selectOptions(selectById('employee-note-employee'), first.id);
@@ -182,31 +183,47 @@ describe('ملاحظات الموظف المنظمة', () => {
     expect(screen.queryByText('ملاحظة خاصة بسلمى')).not.toBeInTheDocument();
   });
 
-  it('يضع الموظفين قبل الملاحظات ويخفي القائمة فقط مع إبقاء النموذج والموظفين ظاهرين', async () => {
+  it('يبقي قسم الملاحظات مستقلًا، مباشرة بعد الموظفين في التنقل، مع استمرار الملاحظات داخل الملف الشخصي', async () => {
     const employee = await seedEmployee({ name: 'سماح محمود', code: 'RO-NOTE-3' });
     const user = userEvent.setup();
     window.location.hash = '#/employees';
     renderApp();
     await screen.findByRole('heading', { name: 'قائمة الموظفين' });
-
-    const employeeHeading = screen.getByRole('heading', { name: 'قائمة الموظفين' });
-    const notesHeading = screen.getByRole('heading', { name: 'ملاحظات على الموظف' });
-    expect(Boolean(employeeHeading.compareDocumentPosition(notesHeading) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(document.getElementById('employee-note-text')).not.toBeInTheDocument();
+    const nav = screen.getByRole('navigation', { name: 'التنقل الرئيسي' });
+    const links = within(nav).getAllByRole('link');
+    expect(links.map((link) => link.textContent?.trim()).slice(0, 2)).toEqual(['الموظفون', 'الملاحظات والمتابعة']);
     expect(within(screen.getByRole('table')).getByText('سماح محمود')).toBeInTheDocument();
-
+    await user.click(within(nav).getByRole('link', { name: 'الملاحظات والمتابعة' }));
+    expect(await screen.findByLabelText('الملاحظة')).toBeInTheDocument();
     await user.selectOptions(selectById('employee-note-employee'), employee.id);
-    await user.type(byId('employee-note-text'), 'ملاحظة تظهر وتختفي');
+    await user.type(byId('employee-note-text'), 'ملاحظة من الصفحة المستقلة');
     await user.click(screen.getByRole('button', { name: 'حفظ الملاحظة' }));
-    expect(await screen.findByText('ملاحظة تظهر وتختفي')).toBeInTheDocument();
+    expect(await screen.findByText('ملاحظة من الصفحة المستقلة')).toBeInTheDocument();
+  });
 
-    await user.click(screen.getByRole('button', { name: 'إخفاء الملاحظات' }));
-    expect(screen.getByRole('button', { name: 'إظهار الملاحظات' })).toBeInTheDocument();
-    expect(screen.getByText('ملاحظة تظهر وتختفي')).not.toBeVisible();
-    expect(within(screen.getByRole('table')).getByText('سماح محمود')).toBeInTheDocument();
-    expect(byId('employee-note-text')).toBeInTheDocument();
+  it('يتيح تعديل الملاحظة وحذفها من الصفحة المستقلة مع حفظ ارتباطها بالموظف', async () => {
+    const employee = await seedEmployee({ name: 'ليلى حسن', code: 'RO-NOTE-CRUD' });
+    const user = userEvent.setup();
+    window.location.hash = '#/notes';
+    renderApp();
+    await screen.findByRole('heading', { name: 'الملاحظات والمتابعة' });
+    await user.selectOptions(selectById('employee-note-employee'), employee.id);
+    await user.type(byId('employee-note-text'), 'النص الأول');
+    await user.click(screen.getByRole('button', { name: 'حفظ الملاحظة' }));
+    expect(await screen.findByText('النص الأول')).toBeInTheDocument();
+    expect(await listEmployeeNotes()).toHaveLength(1);
 
-    await user.click(screen.getByRole('button', { name: 'إظهار الملاحظات' }));
-    expect(await screen.findByText('ملاحظة تظهر وتختفي')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'تعديل الملاحظة' }));
+    await user.clear(byId('employee-note-text'));
+    await user.type(byId('employee-note-text'), 'النص بعد التعديل');
+    await user.click(screen.getByRole('button', { name: 'حفظ التعديل' }));
+    expect(await screen.findByText('النص بعد التعديل')).toBeInTheDocument();
+    expect((await listEmployeeNotes())[0].employeeId).toBe(employee.id);
+
+    await user.click(screen.getByRole('button', { name: 'حذف الملاحظة' }));
+    await waitFor(async () => expect(await listEmployeeNotes()).toHaveLength(0));
+    expect(screen.queryByText('النص بعد التعديل')).not.toBeInTheDocument();
   });
 });
 
@@ -274,98 +291,7 @@ describe('إضافة موظف', () => {
   });
 });
 
-describe('التقييم الشهري', () => {
-  it('يحسب الإجمالي تلقائيًا (زيارات + درجات) ويحفظ القيم', async () => {
-    const employee = await seedEmployee();
-    const user = userEvent.setup();
-    window.location.hash = '#/monthly';
-    renderApp();
-
-    const visits = await screen.findByLabelText(`عدد الزيارات — ${employee.name}`);
-    await user.type(visits, '5');
-
-    const criteria = [5, 4, 3, 4, 5, 4, 3, 5];
-    const scoreSelects = Array.from(document.querySelectorAll('select.cell--score')) as HTMLSelectElement[];
-    expect(scoreSelects).toHaveLength(8);
-    for (const [index, value] of criteria.entries()) {
-      await user.selectOptions(scoreSelects[index], String(value));
-    }
-
-    // 33 درجة + 5 زيارات = 38
-    await waitFor(() => expect(screen.getByText('38')).toBeInTheDocument());
-    expect(screen.getByText('مكتمل')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: /حفظ الشهر/ }));
-    await waitFor(async () => {
-      const rows = await listMonthlyEvaluations();
-      expect(rows).toHaveLength(1);
-      expect(rows[0].visits).toBe(5);
-      expect(rows[0].scores.c1).toBe(5);
-    });
-  });
-
-  it('يعيد تحميل القيم المحفوظة عند إعادة فتح الشهر', async () => {
-    const employee = await seedEmployee();
-    await saveMonthlyEvaluation({
-      employeeId: employee.id,
-      year: new Date().getFullYear(),
-      month: new Date().getMonth() + 1,
-      visits: 2,
-      scores: { c1: 3, c2: 3, c3: 3, c4: 3, c5: 3, c6: 3, c7: 3, c8: 3 },
-      notes: 'ملاحظة محفوظة',
-    });
-
-    window.location.hash = '#/monthly';
-    renderApp();
-
-    // 24 + 2 = 26 — ننتظر تحميل البيانات المحلية أولًا
-    expect(await screen.findByText('26')).toBeInTheDocument();
-    const visits = screen.getByLabelText(`عدد الزيارات — ${employee.name}`) as HTMLInputElement;
-    expect(visits.value).toBe('2');
-    expect(screen.getByDisplayValue('ملاحظة محفوظة')).toBeInTheDocument();
-  });
-});
-
-describe('التقييم السنوي', () => {
-  it('يجمع النقاط والزيارات من الشهور المسجلة ويطبق التقدير', async () => {
-    const employee = await seedEmployee();
-    const year = new Date().getFullYear();
-    await saveMonthlyEvaluation({
-      employeeId: employee.id,
-      year,
-      month: 1,
-      visits: 5,
-      scores: { c1: 5, c2: 5, c3: 5, c4: 5, c5: 5, c6: 5, c7: 5, c8: 5 },
-    });
-
-    window.location.hash = '#/annual';
-    renderApp();
-
-    const row = (await screen.findByText(employee.name)).closest('tr') as HTMLTableRowElement;
-    const cells = within(row).getAllByRole('cell');
-    expect(cells[6].textContent).toBe('5'); // الزيارات
-    expect(cells[7].textContent).toBe('45'); // 40 + 5
-    expect(cells[9].textContent).toBe('1'); // أشهر مقيّمة
-  });
-});
-
 describe('سجلات الإدخال اليدوي', () => {
-  it('تضيف زيارة ميدانية وتظهرها في الجدول', async () => {
-    const employee = await seedEmployee();
-    const user = userEvent.setup();
-    window.location.hash = '#/visits';
-    renderApp();
-
-    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة زيارة/ })).toBeEnabled());
-    await user.click(screen.getByRole('button', { name: /إضافة زيارة/ }));
-    await user.selectOptions(byId('vis-employee'), employee.id);
-    await user.type(byId('vis-branch'), 'فرع المعادي');
-    await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
-
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(await screen.findByText('فرع المعادي')).toBeInTheDocument();
-  });
-
   it('تضيف محضرًا يوميًا بالحقول الجديدة وتحسب المدة', async () => {
     const employee = await seedEmployee();
     const user = userEvent.setup();
@@ -408,10 +334,10 @@ describe('سجلات الإدخال اليدوي', () => {
     const employee = await seedEmployee();
     const user = userEvent.setup();
 
-    window.location.hash = '#/observations';
+    window.location.hash = '#/notes';
     const { unmount } = renderApp();
-    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة ملاحظة/ })).toBeEnabled());
-    await user.click(screen.getByRole('button', { name: /إضافة ملاحظة/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /إضافة متابعة/ })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /إضافة متابعة/ }));
     await user.selectOptions(byId('obs-employee'), employee.id);
     await user.type(byId('obs-details'), 'تأخر في تسليم التقرير');
     await user.click(screen.getByRole('button', { name: /^حفظ$/ }));
@@ -419,7 +345,7 @@ describe('سجلات الإدخال اليدوي', () => {
     expect(await screen.findByText('تأخر في تسليم التقرير')).toBeInTheDocument();
     unmount();
 
-    window.location.hash = '#/leaves';
+    window.location.hash = '#/leave-permissions';
     renderApp();
     await waitFor(() => expect(screen.getByRole('button', { name: /إضافة سجل/ })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: /إضافة سجل/ }));
@@ -448,19 +374,25 @@ describe('ملف الموظف ولوحة المتابعة', () => {
     renderApp();
 
     expect((await screen.findAllByText(employee.name)).length).toBeGreaterThan(0);
-    expect(await screen.findByText('ملاحظة الشهر')).toBeInTheDocument();
-    expect(screen.getByText('التقييمات الشهرية')).toBeInTheDocument();
+    expect(screen.queryByText('ملاحظة الشهر')).not.toBeInTheDocument();
+    expect(screen.queryByText('التقييمات الشهرية')).not.toBeInTheDocument();
+    expect(await listMonthlyEvaluations()).toHaveLength(1);
     expect(screen.getByText('بيانات الموظف')).toBeInTheDocument();
   });
 
-  it('تعرض لوحة المتابعة مؤشرات حقيقية وتحيل إلى السجلات', async () => {
-    await seedEmployee();
-    window.location.hash = '#/dashboard';
+  it('يعرض ملخصات الموظفين المبنية على السجلات ويخفي أسطح التقييم', async () => {
+    const employee = await seedEmployee();
+    const { saveFieldVisit } = await import('../src/db/repo');
+    await saveFieldVisit({ employeeId: employee.id, branch: 'فرع بني سويف', visitDate: '2026-04-02', visitType: 'متابعة' });
+    await saveMinute({ employeeId: employee.id, fileReceivedTime: '09:00', responseTime: '10:00', inspectionResult: 'no_notes' });
+    window.location.hash = '#/employees';
     renderApp();
 
-    expect(await screen.findByText('موظفون بحالة تعيين')).toBeInTheDocument();
-    expect(screen.getByText('موظفون بدون تقييم هذا الشهر')).toBeInTheDocument();
-    expect(screen.getByText('موظفون بدون تقييم شهري')).toBeInTheDocument();
+    expect(await screen.findByText('إجمالي الموظفين')).toBeInTheDocument();
+    expect(screen.getByText('الزيارات الميدانية المسجلة')).toBeInTheDocument();
+    expect(screen.getAllByText('المحاضر اليومية').length).toBeGreaterThan(0);
+    const nav = screen.getByRole('navigation', { name: 'التنقل الرئيسي' });
+    expect(within(nav).queryByRole('link', { name: /لوحة المتابعة|تقييم/ })).not.toBeInTheDocument();
   });
 });
 
@@ -564,9 +496,8 @@ describe('التنقل الرئيسي', () => {
     const nav = await screen.findByRole('navigation', { name: 'التنقل الرئيسي' });
     const links = within(nav).getAllByRole('link');
     expect(links.map((link) => link.textContent?.trim())).toEqual([
-      'لوحة المتابعة', 'الموظفون', 'الزيارات الميدانية', 'توقيت الزيارات', 'المحاضر اليومية',
-      'التقييم الشهري', 'التقييم السنوي', 'الملاحظات والمتابعات', 'الإجازات والأذونات',
-      'سجل الإجازات', 'تأخيرات الحضور والانصراف', 'التقارير والنسخ الاحتياطي',
+      'الموظفون', 'الملاحظات والمتابعة', 'توقيت الزيارات', 'المحاضر اليومية',
+      'الإجازات والأذونات', 'تأخيرات الحضور والانصراف', 'التقارير والنسخ الاحتياطي',
     ]);
     expect(document.querySelector('.topnav')).not.toBeInTheDocument();
     expect(document.querySelector('.app-sidebar')).toBeInTheDocument();
@@ -589,8 +520,8 @@ describe('التنقل الرئيسي', () => {
     await user.keyboard('{Escape}');
     expect(menuButton).toHaveAttribute('aria-expanded', 'false');
     await user.click(menuButton);
-    await user.click(screen.getByRole('link', { name: 'الزيارات الميدانية' }));
-    expect(await screen.findByRole('heading', { name: 'الزيارات الميدانية' })).toBeInTheDocument();
+    await user.click(screen.getByRole('link', { name: 'توقيت الزيارات' }));
+    expect(await screen.findByRole('heading', { name: 'توقيت الزيارات' })).toBeInTheDocument();
     expect(menuButton).toHaveAttribute('aria-expanded', 'false');
   });
 });
@@ -1414,9 +1345,38 @@ describe('النسخ الاحتياطي المبسّط', () => {
     window.location.hash = '#/reports';
     renderApp();
 
-    expect(await screen.findByRole('button', { name: /تصدير نسخة كاملة/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /استيراد نسخة/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'تنزيل آخر نسخة' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'رفع نسخة بيانات' })).toBeInTheDocument();
+    expect(document.querySelectorAll('.backup-actions button')).toHaveLength(2);
     expect(screen.queryByRole('button', { name: /عرض عدد السجلات/ })).toBeNull();
     expect(screen.queryByText('لم يُعرض العدد بعد')).toBeNull();
+  });
+
+  it('ينزل النسخة ويرفعها عبر حوار التحقق ثم يدمجها بعد التأكيد', async () => {
+    const employee = await seedEmployee({ name: 'موظف النسخة', code: 'RO-BACKUP-UI' });
+    const payload = await createBackup();
+    const json = JSON.stringify(payload);
+    const user = userEvent.setup();
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:backup-test') });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    try {
+      window.location.hash = '#/reports';
+      renderApp();
+      await screen.findByRole('button', { name: 'تنزيل آخر نسخة' });
+      await user.click(screen.getByRole('button', { name: 'تنزيل آخر نسخة' }));
+      expect(await screen.findByText('تم تنزيل النسخة الاحتياطية.')).toBeInTheDocument();
+
+      const input = document.querySelector('.backup-actions input[type="file"]') as HTMLInputElement;
+      await user.upload(input, new File([json], 'نسخة-اختبار.json', { type: 'application/json' }));
+      expect(await screen.findByRole('dialog', { name: 'تأكيد رفع نسخة بيانات' })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'دمج مع البيانات الحالية' }));
+      expect(await screen.findByText(/تم دمج البيانات، ونُزّلت نسخة أمان/)).toBeInTheDocument();
+      await waitFor(async () => expect((await listEmployees()).some((row) => row.id === employee.id)).toBe(true));
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreate });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevoke });
+    }
   });
 });

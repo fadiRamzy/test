@@ -13,6 +13,7 @@ import {
   Modal,
   PageHeader,
   SearchInput,
+  Stat,
   Select,
   Table,
   TableWrap,
@@ -21,11 +22,9 @@ import {
 import { ValidationError, deleteEmployee, nextEmployeeNo, saveEmployee, setEmployeeArchived } from '../db/repo';
 import { EMPLOYEE_STATUS_LABELS, EMPLOYEE_STATUS_OPTIONS, type Employee, type EmployeeStatus } from '../db/schema';
 import { fmtDate, monthName, toDateInputValue, todayInputValue } from '../lib/format';
-import { downloadCsv, csvFileName } from '../lib/csv';
 import { buildCashReportPdf, reportFileName } from '../lib/pdf/report';
 import { buildEmployeeReport } from '../lib/pdf/employeeReport';
 import { downloadPdf, loadReportFonts } from '../lib/pdf/loadFonts';
-import { EmployeeNotesManager } from '../components/EmployeeNotes';
 
 interface Draft {
   id?: string;
@@ -158,24 +157,6 @@ export function EmployeesPage() {
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
 
-  const exportCsv = () => {
-    downloadCsv(
-      csvFileName('employees'),
-      ['الرقم', 'الاسم', 'الكود', 'القطاع', 'المحافظة', 'المسمى الوظيفي', 'تاريخ التعيين', 'الفروع', 'الحالة', 'ملاحظات'],
-      rows.map((row) => [
-        row.employeeNo,
-        row.name,
-        row.code,
-        row.sector,
-        row.governorate,
-        row.jobTitle,
-        row.employmentDate,
-        row.branches,
-        EMPLOYEE_STATUS_LABELS[row.status],
-        data.employeeNotes.filter((note) => note.employeeId === row.id).map((note) => note.note).join('\n') || row.notes,
-      ]),
-    );
-  };
 
   /** استخراج تقرير PDF من السجلات المحفوظة فعليًا */
   const runExport = async () => {
@@ -222,12 +203,9 @@ export function EmployeesPage() {
       <PageHeader
         eyebrow="السجلات الأساسية"
         title="الموظفون"
-        description="قائمة ضباط المخاطر — كل موظف يُدخل مرة واحدة ثم يظهر تلقائيًا في التقييمات والزيارات والدقائق."
+        description="إدارة بيانات الموظفين وسجلاتهم المرتبطة."
         actions={
           <>
-            <Button icon="download" onClick={exportCsv} disabled={!rows.length}>
-              تصدير CSV
-            </Button>
             <Button icon="database" onClick={() => setExportOpen(true)} disabled={!data.employees.length}>
               استخراج بيانات
             </Button>
@@ -237,6 +215,12 @@ export function EmployeesPage() {
           </>
         }
       />
+
+      <div className="stats employees-summary" aria-label="ملخص الموظفين">
+        <Stat label="إجمالي الموظفين" value={data.employees.length} hint="كل السجلات المسجلة" icon="employees" tone="info" />
+        <Stat label="الزيارات الميدانية المسجلة" value={data.visits.length} hint="السجلات المحفوظة" icon="visits" tone="success" />
+        <Stat label="المحاضر اليومية" value={data.minutes.length} hint="محاضر مسجلة" icon="minutes" tone="warning" />
+      </div>
 
       <ListCard
         id="employees-list"
@@ -359,7 +343,6 @@ export function EmployeesPage() {
         )}
       </ListCard>
 
-      <EmployeeNotesManager employees={data.employees} notes={data.employeeNotes} collapsibleNotes />
 
       <Modal
         open={Boolean(draft)}
@@ -507,7 +490,7 @@ export function EmployeesPage() {
         }
       >
         <p className="small">
-          سيُحذف «{confirmDelete?.name}» نهائيًا. لا يمكن الحذف إذا كان لديه تقييمات أو زيارات أو دقائق أو ملاحظات أو إجازات —
+          سيُحذف «{confirmDelete?.name}» نهائيًا. لا يمكن الحذف إذا كانت له سجلات أخرى مرتبطة —
           استخدم «أرشفة» في هذه الحالة.
         </p>
       </Modal>

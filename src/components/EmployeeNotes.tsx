@@ -68,7 +68,7 @@ export function EmployeeNotesManager({
   };
 
   return (
-    <Card title="ملاحظات على الموظف" subtitle="كل ملاحظة تُحفظ كسجل مستقل وتبقى مرتبطة بالموظف المحدد.">
+    <Card title={profileMode ? "ملاحظات الموظف" : "ملاحظات الموظفين"} subtitle="كل ملاحظة تُحفظ كسجل مستقل وتبقى مرتبطة بالموظف المحدد.">
       <div className="formgrid employee-note-form">
         <Field label="الموظف" htmlFor={employeeId ? 'profile-note-employee' : 'employee-note-employee'}>
           <Select

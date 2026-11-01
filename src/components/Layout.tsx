@@ -20,31 +20,21 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'الرئيسية',
     items: [
-      { path: '/dashboard', label: 'لوحة المتابعة', icon: 'dashboard' },
       { path: '/employees', label: 'الموظفون', icon: 'employees' },
+      { path: '/notes', label: 'الملاحظات والمتابعة', icon: 'observations' },
     ],
   },
   {
     label: 'العمليات الميدانية',
     items: [
-      { path: '/visits', label: 'الزيارات الميدانية', icon: 'visits' },
       { path: '/visit-times', label: 'توقيت الزيارات', icon: 'clock' },
       { path: '/minutes', label: 'المحاضر اليومية', icon: 'minutes' },
-    ],
-  },
-  {
-    label: 'الأداء والمتابعة',
-    items: [
-      { path: '/monthly', label: 'التقييم الشهري', icon: 'calendar' },
-      { path: '/annual', label: 'التقييم السنوي', icon: 'evaluations' },
-      { path: '/observations', label: 'الملاحظات والمتابعات', icon: 'observations' },
     ],
   },
   {
     label: 'الحضور والإجازات',
     items: [
       { path: '/leave-permissions', label: 'الإجازات والأذونات', icon: 'calendar' },
-      { path: '/leaves', label: 'سجل الإجازات', icon: 'calendar' },
       { path: '/attendance-delays', label: 'تأخيرات الحضور والانصراف', icon: 'clock' },
     ],
   },
@@ -97,7 +87,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         aria-label="القائمة الجانبية"
       >
         <div className="sidebar__brand">
-          <a className="sidebar__identity" href="#/dashboard" aria-label="الانتقال إلى لوحة المتابعة" onClick={() => setSidebarOpen(false)}>
+          <a className="sidebar__identity" href="#/employees" aria-label="الانتقال إلى الموظفين" onClick={() => setSidebarOpen(false)}>
             <span className="sidebar__mark" aria-hidden="true"><Icon name="shield" size={21} strokeWidth={1.6} /></span>
             <span className="sidebar__brand-copy">
               <strong>إدارة المخاطر</strong>
@@ -144,11 +134,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="sidebar__footer">
-            <a className="sidebar__backup" href="#/reports" title={sidebarCollapsed ? 'التقارير والنسخ الاحتياطي' : undefined} onClick={() => setSidebarOpen(false)}>
-              <span className="sidebar__link-icon"><Icon name="database" size={17} /></span>
-              <span className="sidebar__link-label">التقارير والنسخ الاحتياطي</span>
-              <Icon name="chevron-left" size={14} className="sidebar__backup-arrow" />
-            </a>
             <div className="sidebar__status">
               <span className="sidebar__status-indicator" />
               <span className="sidebar__status-copy"><strong>{ready ? 'البيانات جاهزة' : 'جارٍ فتح البيانات'}</strong><small>محفوظة على هذا الجهاز</small></span>
@@ -177,18 +162,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <small>مساحة العمل · {settings.organizationName}</small>
             </div>
           </div>
-          <div className="app-topbar__tools" aria-label="أدوات العرض">
-            <button type="button" className="btn btn--sm app-tool" onClick={() => broadcast(true)} title="إخفاء جميع القوائم">
-              <Icon name="close" size={14} /><span>إخفاء الكل</span>
-            </button>
-            <button type="button" className="btn btn--sm app-tool" onClick={() => broadcast(false)} title="إظهار جميع القوائم">
-              <Icon name="list" size={14} /><span>إظهار الكل</span>
-            </button>
-            <span className="app-topbar__divider" aria-hidden="true" />
-            <a className="btn btn--sm app-tool app-tool--backup" href="#/reports" title="النسخ الاحتياطي">
-              <Icon name="database" size={14} /><span>النسخ الاحتياطي</span>
-            </a>
-          </div>
+          {route.path !== '/reports' ? (
+            <div className="app-topbar__tools" aria-label="أدوات العرض">
+              <button type="button" className="btn btn--sm app-tool" onClick={() => broadcast(true)} title="إخفاء جميع القوائم">
+                <Icon name="close" size={14} /><span>إخفاء الكل</span>
+              </button>
+              <button type="button" className="btn btn--sm app-tool" onClick={() => broadcast(false)} title="إظهار جميع القوائم">
+                <Icon name="list" size={14} /><span>إظهار الكل</span>
+              </button>
+              <span className="app-topbar__divider" aria-hidden="true" />
+            </div>
+          ) : null}
         </header>
 
         <CollapseProvider signal={collapse}>
@@ -199,7 +183,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
         <footer className="appfoot print-hide">
           <span>البيانات محفوظة محليًا على هذا الجهاز فقط</span>
-          <a href="#/reports">صدّر نسخة احتياطية</a>
         </footer>
       </div>
     </div>

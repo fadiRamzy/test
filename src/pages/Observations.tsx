@@ -28,7 +28,6 @@ import {
   type Severity,
 } from '../db/schema';
 import { fmtDate, toDateInputValue, todayInputValue } from '../lib/format';
-import { downloadCsv, csvFileName } from '../lib/csv';
 
 interface Draft {
   id?: string;
@@ -65,7 +64,7 @@ const emptyDraft = (employeeId = ''): Draft => ({
   followUpNotes: '',
 });
 
-export function ObservationsPage() {
+export function ObservationsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { data, settings, runAction } = useApp();
   const [employee, setEmployee] = useState('all');
   const [category, setCategory] = useState('all');
@@ -126,53 +125,26 @@ export function ObservationsPage() {
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
 
-  const exportCsv = () => {
-    downloadCsv(
-      csvFileName('observations'),
-      ['التاريخ', 'الموظف', 'المصدر', 'الفرع', 'المرجع', 'التصنيف', 'الخطورة', 'التفاصيل', 'الإجراء التصحيحي', 'تاريخ الإبلاغ', 'الحالة', 'تاريخ الحل', 'متكررة', 'متابعة'],
-      rows.map((row) => [
-        row.date,
-        nameOf(row.employeeId),
-        row.source,
-        row.branch,
-        row.reference,
-        row.category,
-        SEVERITY_LABELS[row.severity],
-        row.details,
-        row.correctiveAction,
-        row.notificationDate ?? '',
-        OBSERVATION_STATUS_LABELS[row.status],
-        row.resolutionDate ?? '',
-        row.recurrence ? 'نعم' : 'لا',
-        row.followUpNotes,
-      ]),
-    );
-  };
 
   return (
     <>
-      <PageHeader
-        title="سجل الملاحظات"
-        description="كل ملاحظة سجل مستقل بتاريخها ومصدرها وإجراءها التصحيحي."
-        actions={
-          <>
-            <Button icon="download" onClick={exportCsv}>
-              تصدير CSV
-            </Button>
-            <Button
-              variant="primary"
-              icon="plus"
-              disabled={!data.employees.length}
-              onClick={() => {
-                setErrors({});
-                setDraft(emptyDraft(data.employees.find((row) => !row.archived)?.id ?? ''));
-              }}
-            >
-              إضافة ملاحظة
-            </Button>
-          </>
-        }
-      />
+      {embedded ? (
+        <div className="unified-section-heading">
+          <div><span className="eyebrow">المتابعة المنظمة</span><h2>سجل المتابعة</h2></div>
+          <Button
+            variant="primary"
+            icon="plus"
+            disabled={!data.employees.length}
+            onClick={() => { setErrors({}); setDraft(emptyDraft(data.employees.find((row) => !row.archived)?.id ?? '')); }}
+          >إضافة متابعة</Button>
+        </div>
+      ) : (
+        <PageHeader
+          title="سجل الملاحظات"
+          description="كل ملاحظة سجل مستقل بتاريخها ومصدرها وإجراءها التصحيحي."
+          actions={<Button variant="primary" icon="plus" disabled={!data.employees.length} onClick={() => { setErrors({}); setDraft(emptyDraft(data.employees.find((row) => !row.archived)?.id ?? '')); }}>إضافة ملاحظة</Button>}
+        />
+      )}
 
       <ListCard id="observations-records" title="الملاحظات المسجلة" note="قائمة الملاحظات مخفية — اضغط «إظهار البيانات» لعرضها."
         controls={

@@ -27,7 +27,6 @@ import {
 import { EmployeePicker } from '../components/EmployeePicker';
 import { minuteTiming } from '../lib/calc';
 import { fmtDurationWords, fmtTime, monthName } from '../lib/format';
-import { downloadCsv, csvFileName } from '../lib/csv';
 
 interface Draft {
   id?: string;
@@ -114,24 +113,6 @@ export function MinutesPage() {
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
 
-  const exportCsv = () => {
-    downloadCsv(
-      csvFileName('minutes'),
-      ['الموظف', 'توقيت طلب الملف', 'توقيت استلام الملف', 'توقيت الرد على الملف', 'نتيجة الفحص', 'المدة', 'حالة التأخير'],
-      rows.map((row) => {
-        const timing = minuteTiming(row);
-        return [
-          nameOf(row.employeeId),
-          row.fileRequestTime || '',
-          row.fileReceivedTime || '',
-          row.responseTime || '',
-          row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : '',
-          timing.minutes === null ? '' : fmtDurationWords(timing.minutes),
-          timing.invalid ? (timing.reason ?? 'بيانات غير مكتملة') : timing.delayed ? 'متأخر' : 'في الوقت',
-        ];
-      }),
-    );
-  };
 
   const preview = draft
     ? minuteTiming({ fileReceivedTime: draft.fileReceivedTime, responseTime: draft.responseTime })
@@ -145,9 +126,6 @@ export function MinutesPage() {
         description="محضر لكل موظف: توقيت طلب الملف واستلامه والرد عليه ونتيجة الفحص. المدة تُحسب من استلام الملف إلى الرد عليه."
         actions={
           <>
-            <Button icon="download" onClick={exportCsv} disabled={!rows.length}>
-              تصدير CSV
-            </Button>
             <Button
               variant="primary"
               icon="plus"

@@ -24,7 +24,6 @@ import { MONTHS_AR, type VisitTiming } from '../db/schema';
 import { EmployeePicker } from '../components/EmployeePicker';
 import { visitTiming } from '../lib/calc';
 import { fmtDate, fmtDurationWords, fmtTime } from '../lib/format';
-import { downloadCsv, csvFileName } from '../lib/csv';
 
 interface Draft {
   id?: string;
@@ -155,26 +154,6 @@ export function VisitTimingsPage() {
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
 
-  const exportCsv = () => {
-    downloadCsv(
-      csvFileName('visits'),
-      ['الموظف', 'التاريخ', 'الفرع', 'اسم العميل', 'مكان الزيارة', 'توقيت التحرك', 'توقيت الرجوع', 'مدة الزيارة', 'ملاحظات'],
-      rows.map((visit) => {
-        const timing = visitTiming(visit);
-        return [
-          nameOf(visit.employeeId),
-          visit.visitDate,
-          visit.branch,
-          visit.clientName,
-          visit.location,
-          visit.departureTime,
-          visit.returnTime,
-          timing.minutes === null ? (timing.reason ?? 'مدة غير صالحة') : fmtDurationWords(timing.minutes),
-          visit.notes ?? '',
-        ];
-      }),
-    );
-  };
 
   const preview = draft ? visitTiming({ departureTime: draft.departureTime, returnTime: draft.returnTime }) : null;
 
@@ -215,12 +194,7 @@ export function VisitTimingsPage() {
           hideLabel="إخفاء البيانات"
           showLabel="إظهار البيانات"
           note={`قائمة الزيارات مخفية (${rows.length} زيارة) — اضغط «إظهار البيانات» لعرضها. الإخفاء لا يحذف أي سجل.`}
-          actions={
-            <Button icon="download" onClick={exportCsv} disabled={!rows.length}>
-              تصدير CSV
-            </Button>
-          }
-        
+
             controls={
               <Toolbar>
             <SearchInput value={query} onChange={setQuery} placeholder="بحث بالموظف أو الفرع أو العميل…" />

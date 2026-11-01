@@ -18,16 +18,12 @@ import {
 } from '../components/ui';
 import {
   EMPLOYEE_STATUS_LABELS,
-  EVALUATION_CRITERIA,
   INSPECTION_RESULT_LABELS,
-  MONTHS_AR,
   OBSERVATION_STATUS_LABELS,
   SEVERITY_LABELS,
-  VISIT_STATUS_LABELS,
 } from '../db/schema';
-import { leaveTotals, minuteTiming, monthlyTotals, visitTiming } from '../lib/calc';
+import { leaveTotals, minuteTiming, visitTiming } from '../lib/calc';
 import { fmtDate, fmtDurationWords, fmtNumber, fmtTime, monthName } from '../lib/format';
-import { downloadCsv, csvFileName } from '../lib/csv';
 import { EmployeeNotesManager } from '../components/EmployeeNotes';
 import { buildCompleteEmployeePdf, employeePdfFileName } from '../lib/pdf/completeEmployee';
 import { downloadPdf, loadReportFonts } from '../lib/pdf/loadFonts';
@@ -38,7 +34,7 @@ import { downloadPdf, loadReportFonts } from '../lib/pdf/loadFonts';
  * - محاضر يومية (كل التوقيتات + النتيجة + المدة + التأخير)
  * - توقيت الزيارات (كل الحقول + المدة)
  * - إجماليات: عدد المحاضر، عدد الزيارات، إجمالي مدة الزيارات
- * - سجلات أخرى مرتبطة به (تقييمات/ملاحظات/إجازات/زيارات ميدانية) عند وجودها فقط
+ * - السجلات المرتبطة بالموظف: ملاحظات، إجازات، ومحاضر وزيارات بتوقيتها
  * لا تظهر أي سجلات أو مؤشرات تخص موظفين آخرين أو لوحة متابعة عامة.
  */
 export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
@@ -121,13 +117,6 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
     setBranchFilter('all');
   };
 
-  const evaluations = useMemo(
-    () =>
-      data.evaluations
-        .filter((row) => row.employeeId === employeeId)
-        .sort((a, b) => b.year - a.year || b.month - a.month),
-    [data.evaluations, employeeId],
-  );
 
   const observations = useMemo(
     () => data.observations.filter((row) => row.employeeId === employeeId).sort((a, b) => (a.date < b.date ? 1 : -1)),
@@ -150,10 +139,6 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
     permissions: leavePermissionRecords.filter((row) => row.requestType === 'permission').length,
   }), [leavePermissionRecords]);
 
-  const legacyVisits = useMemo(
-    () => data.visits.filter((row) => row.employeeId === employeeId).sort((a, b) => (a.visitDate < b.visitDate ? 1 : -1)),
-    [data.visits, employeeId],
-  );
 
   const totals = useMemo(() => {
     const validTimings = visitTimings.map((row) => visitTiming(row));
@@ -194,47 +179,6 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
     );
   }
 
-  const exportProfile = () => {
-    downloadCsv(
-      csvFileName(`employee-${employee.code}`),
-      ['القسم', 'التاريخ', 'التفاصيل', 'القيمة'],
-      [
-        ...minutes.map((row) => {
-          const timing = minuteTiming(row);
-          return [
-            'محضر يومي',
-            row.date ?? row.createdAt.slice(0, 10),
-            `طلب ${fmtTime(row.fileRequestTime)} · استلام ${fmtTime(row.fileReceivedTime)} · رد ${fmtTime(row.responseTime)}`,
-            `${row.inspectionResult ? INSPECTION_RESULT_LABELS[row.inspectionResult] : '—'} · ${
-              timing.minutes === null ? '—' : fmtDurationWords(timing.minutes)
-            } · ${timing.invalid ? 'بيانات غير مكتملة' : timing.delayed ? 'متأخر' : 'في الوقت'}`,
-          ];
-        }),
-        ...visitTimings.map((row) => {
-          const timing = visitTiming(row);
-          return [
-            'زيارة موقوتة',
-            row.visitDate,
-            `${row.branch} — ${row.clientName}${row.location ? ` — ${row.location}` : ''}${row.notes ? ` — ${row.notes}` : ''}`,
-            `تحرك ${fmtTime(row.departureTime)} · رجوع ${fmtTime(row.returnTime)} · ${
-              timing.minutes === null ? 'مدة غير صالحة' : fmtDurationWords(timing.minutes)
-            }`,
-          ];
-        }),
-        ...evaluations.map((row) => {
-          const monthly = monthlyTotals(row.scores, row.visits);
-          return ['تقييم شهري', `${MONTHS_AR[row.month - 1]} ${row.year}`, `زيارات: ${monthly.visits} · درجات: ${monthly.scoresSum}`, monthly.total];
-        }),
-        ...observations.map((row) => ['ملاحظة', row.date, row.details, OBSERVATION_STATUS_LABELS[row.status]]),
-        ...leaves.map((row) => [
-          'إجازة/إذن',
-          row.startDate,
-          `${row.type} حتى ${row.endDate}`,
-          row.unit === 'days' ? `${fmtNumber(row.days)} يوم` : `${fmtNumber(row.hours)} ساعة`,
-        ]),
-      ],
-    );
-  };
 
   const exportCompletePdf = async () => {
     try {
@@ -293,9 +237,6 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
           <div className="profile-hero__actions">
             <Button icon="arrow-left" onClick={() => navigate('/employees')}>
               قائمة الموظفين
-            </Button>
-            <Button icon="download" onClick={exportProfile}>
-              تصدير CSV
             </Button>
             <Button icon="download" onClick={exportCompletePdf}>
               استخراج ملف الموظف PDF
@@ -575,49 +516,6 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
         )}
       </ListCard>
 
-      {evaluations.length ? (
-        <ListCard id="profile-evaluations" title="التقييمات الشهرية" subtitle={`${evaluations.length} تقييم مسجل`} note="قائمة التقييمات مخفية — اضغط «إظهار البيانات» لعرضها.">
-          <TableWrap>
-            <Table>
-              <thead>
-                <tr>
-                  <th>الشهر</th>
-                  <th className="num">الزيارات</th>
-                  {EVALUATION_CRITERIA.map((criterion, index) => (
-                    <th key={criterion.id} className="num" title={criterion.name}>
-                      {index + 1}
-                    </th>
-                  ))}
-                  <th className="num">الإجمالي</th>
-                  <th>ملاحظات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {evaluations.map((row) => {
-                  const monthly = monthlyTotals(row.scores, row.visits);
-                  return (
-                    <tr key={row.id}>
-                      <td className="nowrap">
-                        {MONTHS_AR[row.month - 1]} {row.year}
-                      </td>
-                      <td className="num">{monthly.visits}</td>
-                      {EVALUATION_CRITERIA.map((criterion) => (
-                        <td key={criterion.id} className="num">
-                          {row.scores[criterion.id] ?? '—'}
-                        </td>
-                      ))}
-                      <td className="num">
-                        <strong>{monthly.total}</strong>
-                      </td>
-                      <td className="wrap small">{row.notes || '—'}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </Table>
-          </TableWrap>
-        </ListCard>
-      ) : null}
 
       {observations.length ? (
         <ListCard id="profile-observations" title="الملاحظات" subtitle={`${observations.length} ملاحظة`} note="قائمة الملاحظات مخفية — اضغط «إظهار البيانات» لعرضها.">
@@ -726,40 +624,6 @@ export function EmployeeProfilePage({ employeeId }: { employeeId: string }) {
         ) : <EmptyState title="لا توجد إجازات أو أذونات مسجلة لهذا الموظف" />}
       </ListCard>
 
-      {legacyVisits.length ? (
-        <ListCard id="profile-legacy-visits" title="زيارات ميدانية (سجلات سابقة)" subtitle={`${legacyVisits.length} سجل`} note="القائمة مخفية — اضغط «إظهار البيانات» لعرضها.">
-          <TableWrap>
-            <Table>
-              <thead>
-                <tr>
-                  <th>التاريخ</th>
-                  <th>الفرع</th>
-                  <th>النوع</th>
-                  <th>المرجع</th>
-                  <th>الحالة</th>
-                  <th>التقدير</th>
-                </tr>
-              </thead>
-              <tbody>
-                {legacyVisits.map((row) => (
-                  <tr key={row.id}>
-                    <td className="nowrap">{fmtDate(row.visitDate)}</td>
-                    <td>{row.branch}</td>
-                    <td>{row.visitType}</td>
-                    <td>{row.reference || '—'}</td>
-                    <td>
-                      <Badge tone={row.status === 'completed' ? 'success' : row.status === 'cancelled' ? 'neutral' : 'warning'}>
-                        {VISIT_STATUS_LABELS[row.status]}
-                      </Badge>
-                    </td>
-                    <td>{row.finalAssessment || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </TableWrap>
-        </ListCard>
-      ) : null}
     </>
   );
 }

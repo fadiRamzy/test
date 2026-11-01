@@ -17,10 +17,9 @@ import {
   Toolbar,
 } from '../components/ui';
 import { ValidationError, deleteLeave, saveLeave } from '../db/repo';
-import { LEAVE_UNIT_LABELS, type Leave, type LeaveUnit } from '../db/schema';
+import { type Leave, type LeaveUnit } from '../db/schema';
 import { leaveTotals } from '../lib/calc';
 import { fmtDate, fmtNumber, todayInputValue, toDateInputValue } from '../lib/format';
-import { downloadCsv, csvFileName } from '../lib/csv';
 
 interface Draft {
   id?: string;
@@ -45,7 +44,7 @@ const emptyDraft = (employeeId = ''): Draft => ({
   notes: '',
 });
 
-export function LeavesPage() {
+export function LeavesPage({ embedded = false }: { embedded?: boolean }) {
   const { data, settings, runAction } = useApp();
   const [employee, setEmployee] = useState('all');
   const [type, setType] = useState('all');
@@ -107,33 +106,13 @@ export function LeavesPage() {
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
 
-  const exportCsv = () => {
-    downloadCsv(
-      csvFileName('leaves'),
-      ['الموظف', 'النوع', 'من', 'إلى', 'النوع الزمني', 'القيمة', 'ملاحظات'],
-      rows.map((row) => [
-        nameOf(row.employeeId),
-        row.type,
-        row.startDate,
-        row.endDate,
-        LEAVE_UNIT_LABELS[row.unit],
-        row.unit === 'days' ? row.days : row.hours,
-        row.notes,
-      ]),
-    );
-  };
 
   return (
     <>
-      <PageHeader
-        title="الإجازات والأذونات"
-        description="سجل يدوي بسيط: النوع والتواريخ وعدد الأيام أو الساعات. الأذونات تُسجَّل بالساعات ولا تُحسب إجازة يوم كامل."
-        actions={
-          <>
-            <Button icon="download" onClick={exportCsv}>
-              تصدير CSV
-            </Button>
-            <Button
+      {embedded ? (
+        <div className="unified-section-heading">
+          <div><span className="eyebrow">السجلات المسجلة</span><h2>سجل الإجازات والأذونات</h2></div>
+          <Button
               variant="primary"
               icon="plus"
               disabled={!data.employees.length}
@@ -144,9 +123,24 @@ export function LeavesPage() {
             >
               إضافة سجل
             </Button>
-          </>
-        }
-      />
+        </div>
+      ) : (
+        <PageHeader
+          title="الإجازات والأذونات"
+          description="سجل يدوي بسيط: النوع والتواريخ وعدد الأيام أو الساعات. الأذونات تُسجَّل بالساعات ولا تُحسب إجازة يوم كامل."
+          actions={<Button
+              variant="primary"
+              icon="plus"
+              disabled={!data.employees.length}
+              onClick={() => {
+                setErrors({});
+                setDraft(emptyDraft(data.employees.find((row) => !row.archived)?.id ?? ''));
+              }}
+            >
+              إضافة سجل
+            </Button>}
+        />
+      )}
 
       <ListCard id="leaves-totals" title="إجماليات السجلات المعروضة" subtitle={`${totals.records} سجل · ${fmtNumber(totals.days)} يوم · ${fmtNumber(totals.hours)} ساعة`} note="إجماليات الإجازات مخفية — اضغط «إظهار البيانات» لعرضها.">
         {perEmployee.length ? (
@@ -197,7 +191,7 @@ export function LeavesPage() {
               </option>
             ))}
           </Select>
-          <Select value={employee} onChange={(e) => setEmployee(e.target.value)} aria-label="الموظف">
+          <Select value={employee} onChange={(e) => setEmployee(e.target.value)} aria-label="الموظف في سجل الإجازات">
             <option value="all">كل الموظفين</option>
             {data.employees.map((row) => (
               <option key={row.id} value={row.id}>

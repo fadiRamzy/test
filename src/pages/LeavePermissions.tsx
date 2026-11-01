@@ -47,7 +47,7 @@ const emptyDraft = (): Draft => ({
   notes: '',
 });
 
-export function LeavePermissionsPage() {
+export function LeavePermissionsPage({ embedded = false }: { embedded?: boolean }) {
   const { data, runAction } = useApp();
   const [employeeFilter, setEmployeeFilter] = useState('all');
   const [monthFilter, setMonthFilter] = useState(currentMonth());
@@ -120,18 +120,25 @@ export function LeavePermissionsPage() {
 
   return (
     <>
-      <PageHeader
-        eyebrow="السجلات اليدوية"
-        title="الإجازات والأذونات"
-        description="تسجيل ومتابعة الطلبات، مع احتساب رصيد الأذونات الشهري لكل موظف."
-        actions={<Button variant="primary" icon="plus" onClick={() => { setErrors({}); setDraft(emptyDraft()); }}>إضافة سجل</Button>}
-      />
+      {embedded ? (
+        <div className="unified-section-heading">
+          <div><span className="eyebrow">الطلبات والرصيد الشهري</span><h2>إدارة الإجازات والأذونات</h2></div>
+          <Button variant="primary" icon="plus" onClick={() => { setErrors({}); setDraft(emptyDraft()); }}>إضافة طلب</Button>
+        </div>
+      ) : (
+        <PageHeader
+          eyebrow="السجلات اليدوية"
+          title="الإجازات والأذونات"
+          description="تسجيل ومتابعة الطلبات، مع احتساب رصيد الأذونات الشهري لكل موظف."
+          actions={<Button variant="primary" icon="plus" onClick={() => { setErrors({}); setDraft(emptyDraft()); }}>إضافة سجل</Button>}
+        />
+      )}
 
       <Card title="ملخص الشهر والفلاتر" subtitle="الحد الشهري للأذونات: 4 طلبات وبحد أقصى 4 ساعات لكل موظف">
         <div className="leave-filter-panel">
           <div className="leave-filter-panel__label">تصفية الملخص والسجلات</div>
           <Toolbar>
-            <Select aria-label="الموظف" value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)}>
+            <Select aria-label="الموظف في ملخص الطلبات" value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)}>
               <option value="all">كل الموظفين</option>
               {data.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
             </Select>
