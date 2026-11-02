@@ -55,10 +55,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const broadcast = (collapsed: boolean) => setCollapse((prev) => ({ version: prev.version + 1, collapsed }));
   const isActive = (path: string) => path === '/employees' ? route.path === '/' || route.path === path || route.path.startsWith(`${path}/`) : route.path === path;
 
-  const currentPage = useMemo(() => {
-    if (route.path.startsWith('/employees/')) return 'ملف الموظف';
-    return ALL_NAV_ITEMS.find((item) => isActive(item.path))?.label ?? 'مساحة العمل';
-  }, [route.path]);
+  const currentItem = useMemo(
+    () => ALL_NAV_ITEMS.find((item) => isActive(item.path)),
+    [route.path],
+  );
+  const currentPage = route.path.startsWith('/employees/') ? 'ملف الموظف' : currentItem?.label ?? 'مساحة العمل';
+  const currentIcon: IconName = route.path.startsWith('/employees/') ? 'employees' : currentItem?.icon ?? 'dashboard';
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -88,10 +90,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
       >
         <div className="sidebar__brand">
           <a className="sidebar__identity" href="#/employees" aria-label="الانتقال إلى الموظفين" onClick={() => setSidebarOpen(false)}>
-            <span className="sidebar__mark" aria-hidden="true"><Icon name="shield" size={21} strokeWidth={1.6} /></span>
+            <span className="sidebar__mark" aria-hidden="true"><Icon name="shield" size={22} strokeWidth={1.7} /></span>
             <span className="sidebar__brand-copy">
               <strong>إدارة المخاطر</strong>
-              <small>{settings.organizationName}</small>
+              <small>نظام المتابعة الميدانية</small>
             </span>
           </a>
           <button
@@ -106,6 +108,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <button type="button" className="sidebar__mobile-close" aria-label="إغلاق القائمة" onClick={() => setSidebarOpen(false)}>
             <Icon name="close" size={18} />
           </button>
+        </div>
+
+        <div className="sidebar__workspace" title={settings.organizationName}>
+          <span className="sidebar__workspace-label">مساحة العمل</span>
+          <strong><Icon name="building" size={15} />{settings.organizationName}</strong>
         </div>
 
         <div className="sidebar__body">
@@ -158,9 +165,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <Icon name="menu" size={19} />
             </button>
             <div className="app-topbar__heading">
-              <span>نظام إدارة المخاطر <Icon name="chevron-left" size={12} /> <strong>{currentPage}</strong></span>
-              <small>مساحة العمل · {settings.organizationName}</small>
+              <span className="app-topbar__context">نظام إدارة المخاطر <Icon name="chevron-left" size={13} /> <span>مساحة العمل</span></span>
+              <strong className="app-topbar__title">{currentPage}</strong>
             </div>
+            <span className="app-topbar__page-icon"><Icon name={currentIcon} size={19} strokeWidth={1.8} /></span>
           </div>
           {route.path !== '/reports' ? (
             <div className="app-topbar__tools" aria-label="أدوات العرض">
