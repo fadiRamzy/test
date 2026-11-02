@@ -1,5 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import '@fontsource/carlito/latin-400.css';
+import '@fontsource/carlito/latin-700.css';
 import '@fontsource/cairo/400.css';
 import '@fontsource/cairo/500.css';
 import '@fontsource/cairo/600.css';
