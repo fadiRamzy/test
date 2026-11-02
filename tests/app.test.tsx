@@ -524,6 +524,21 @@ describe('التنقل الرئيسي', () => {
     expect(await screen.findByRole('heading', { name: 'توقيت الزيارات' })).toBeInTheDocument();
     expect(menuButton).toHaveAttribute('aria-expanded', 'false');
   });
+
+  it('يبقي رابطَي الموظفين وتوقيت الزيارات قابلين للتنقل من الشريط الجانبي', async () => {
+    await seedEmployee();
+    const user = userEvent.setup();
+    window.location.hash = '#/visit-times';
+    renderApp();
+    const nav = await screen.findByRole('navigation', { name: 'التنقل الرئيسي' });
+    expect(await screen.findByRole('heading', { name: 'توقيت الزيارات' })).toBeInTheDocument();
+    await user.click(within(nav).getByRole('link', { name: 'الموظفون' }));
+    expect(await screen.findByRole('heading', { name: 'الموظفون' })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: 'الموظفون' })).toHaveAttribute('aria-current', 'page');
+    await user.click(within(nav).getByRole('link', { name: 'توقيت الزيارات' }));
+    expect(await screen.findByRole('heading', { name: 'توقيت الزيارات' })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: 'توقيت الزيارات' })).toHaveAttribute('aria-current', 'page');
+  });
 });
 
 describe('ملف الموظف — بيانات الموظف فقط', () => {

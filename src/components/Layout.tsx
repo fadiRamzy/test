@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useApp } from '../state/store';
 import { useRoute } from '../state/router';
 import { Icon, type IconName } from './Icon';
@@ -44,8 +44,6 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
-const ALL_NAV_ITEMS = NAV_GROUPS.flatMap((group) => group.items);
-
 export function Layout({ children }: { children: React.ReactNode }) {
   const { settings, ready } = useApp();
   const route = useRoute();
@@ -55,12 +53,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const broadcast = (collapsed: boolean) => setCollapse((prev) => ({ version: prev.version + 1, collapsed }));
   const isActive = (path: string) => path === '/employees' ? route.path === '/' || route.path === path || route.path.startsWith(`${path}/`) : route.path === path;
 
-  const currentItem = useMemo(
-    () => ALL_NAV_ITEMS.find((item) => isActive(item.path)),
-    [route.path],
-  );
-  const currentPage = route.path.startsWith('/employees/') ? 'ملف الموظف' : currentItem?.label ?? 'مساحة العمل';
-  const currentIcon: IconName = route.path.startsWith('/employees/') ? 'employees' : currentItem?.icon ?? 'dashboard';
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -82,7 +74,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   }, [sidebarOpen]);
 
   return (
-    <div className="app-shell">
+    <div className={cn('app-shell', sidebarCollapsed && 'is-sidebar-collapsed')}>
       <aside
         className={cn('app-sidebar print-hide', sidebarOpen && 'is-open', sidebarCollapsed && 'is-collapsed')}
         id="app-sidebar"
@@ -90,11 +82,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
       >
         <div className="sidebar__brand">
           <a className="sidebar__identity" href="#/employees" aria-label="الانتقال إلى الموظفين" onClick={() => setSidebarOpen(false)}>
-            <span className="sidebar__mark" aria-hidden="true"><Icon name="shield" size={22} strokeWidth={1.7} /></span>
-            <span className="sidebar__brand-copy">
-              <strong>إدارة المخاطر</strong>
-              <small>نظام المتابعة الميدانية</small>
-            </span>
+            <span className="sidebar__mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 17l5-6 4 3 7-9" /></svg></span>
+            <span className="sidebar__brand-copy"><strong>إدارة المخاطر</strong><small>{settings.organizationName}</small></span>
           </a>
           <button
             type="button"
@@ -104,6 +93,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
             onClick={() => setSidebarCollapsed((value) => !value)}
           >
             <Icon name={sidebarCollapsed ? 'chevron-left' : 'chevron-right'} size={16} />
+          </button>
+          <button
+            type="button"
+            className="app-topbar__menu"
+            aria-label="فتح قائمة التنقل"
+            aria-controls="app-sidebar"
+            aria-expanded={sidebarOpen}
+            onClick={() => setSidebarOpen(true)}
+          >
+            <Icon name="menu" size={19} />
           </button>
           <button type="button" className="sidebar__mobile-close" aria-label="إغلاق القائمة" onClick={() => setSidebarOpen(false)}>
             <Icon name="close" size={18} />
@@ -127,7 +126,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                       href={`#${item.path}`}
                       className={cn('sidebar__link', isActive(item.path) && 'is-active')}
                       aria-current={isActive(item.path) ? 'page' : undefined}
-                      title={sidebarCollapsed ? item.label : undefined}
+                      title={item.label}
                       onClick={() => setSidebarOpen(false)}
                     >
                       <span className="sidebar__link-icon"><Icon name={item.icon} size={18} strokeWidth={1.65} /></span>
@@ -145,6 +144,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <span className="sidebar__status-indicator" />
               <span className="sidebar__status-copy"><strong>{ready ? 'البيانات جاهزة' : 'جارٍ فتح البيانات'}</strong><small>محفوظة على هذا الجهاز</small></span>
             </div>
+            {route.path !== '/reports' ? (
+              <div className="sidebar__quick-tools" aria-label="أدوات القوائم">
+                <button type="button" className="iconbtn" onClick={() => broadcast(true)} title="إخفاء جميع القوائم" aria-label="إخفاء الكل">
+                  <Icon name="close" size={15} />
+                </button>
+                <button type="button" className="iconbtn" onClick={() => broadcast(false)} title="إظهار جميع القوائم" aria-label="إظهار الكل">
+                  <Icon name="list" size={15} />
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
       </aside>
@@ -152,37 +161,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
       {sidebarOpen && <button className="sidebar-scrim" type="button" aria-label="إغلاق القائمة" onClick={() => setSidebarOpen(false)} />}
 
       <div className="app-frame">
-        <header className="app-topbar print-hide">
-          <div className="app-topbar__start">
-            <button
-              type="button"
-              className="app-topbar__menu"
-              aria-label="فتح قائمة التنقل"
-              aria-controls="app-sidebar"
-              aria-expanded={sidebarOpen}
-              onClick={() => setSidebarOpen(true)}
-            >
-              <Icon name="menu" size={19} />
-            </button>
-            <div className="app-topbar__heading">
-              <span className="app-topbar__context">نظام إدارة المخاطر <Icon name="chevron-left" size={13} /> <span>مساحة العمل</span></span>
-              <strong className="app-topbar__title">{currentPage}</strong>
-            </div>
-            <span className="app-topbar__page-icon"><Icon name={currentIcon} size={19} strokeWidth={1.8} /></span>
-          </div>
-          {route.path !== '/reports' ? (
-            <div className="app-topbar__tools" aria-label="أدوات العرض">
-              <button type="button" className="btn btn--sm app-tool" onClick={() => broadcast(true)} title="إخفاء جميع القوائم">
-                <Icon name="close" size={14} /><span>إخفاء الكل</span>
-              </button>
-              <button type="button" className="btn btn--sm app-tool" onClick={() => broadcast(false)} title="إظهار جميع القوائم">
-                <Icon name="list" size={14} /><span>إظهار الكل</span>
-              </button>
-              <span className="app-topbar__divider" aria-hidden="true" />
-            </div>
-          ) : null}
-        </header>
-
         <CollapseProvider signal={collapse}>
           <main className="page" id="main-content">
             {ready ? children : <div className="loading">جارٍ فتح البيانات المحلية…</div>}
