@@ -1,4 +1,5 @@
-import { BUCKET_IDS, emptyBuckets, snapshotId, type MonthlySnapshot } from '../src/delinquency/lib/delinquency';
+import { BUCKET_IDS, bucketForDays, emptyBuckets, snapshotId, type MonthlySnapshot } from '../src/delinquency/lib/delinquency';
+import type { ClientRecord } from '../src/delinquency/db/delinquencyDb';
 
 /** [عدد العملاء، المبلغ] لكل شريحة بالترتيب: 1–30، 31–60، 61–90، 91–120، NPL */
 export type BucketPairs = [number, number][];
@@ -35,9 +36,19 @@ export const ZERO: BucketPairs = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]];
 export const sep = () => makeSnapshot('فرع المنيا', 2026, 9, SEP);
 export const oct = () => makeSnapshot('فرع المنيا', 2026, 10, OCT);
 
-/** قائمتا عملاء صغيرتان تغطيان كل أنواع الحركة */
+/** قائمتا عملاء صغيرتان (سجلات محفوظة من إصدار سابق: رقم العميل، أيام التأخير، المبلغ) */
 export const LIST_A = 'C1\t10\t1000\nC2\t40\t2000\nC3\t70\t3000\nC4\t100\t4000\nC5\t200\t5000\nC6\t15\t600';
 export const LIST_B = 'C1\t40\t1100\nC2\t20\t1500\nC3\t70\t3000\nC4\t130\t4200\nC7\t5\t300\nC8\t150\t900';
+
+/** يحوّل نص القائمة إلى سجلات عملاء كما كانت تُخزَّن */
+export function clientsOf(list: string): ClientRecord[] {
+  return list.split('\n').map((line) => {
+    const [id, days, amount] = line.split('\t');
+    const bucket = bucketForDays(Number(days));
+    if (!bucket) throw new Error(`أيام تأخير غير صالحة: ${line}`);
+    return { id, bucket, days: Number(days), amount: Number(amount) };
+  });
+}
 
 /* ------------------------- قارئ ZIP بسيط (ملفات غير مضغوطة) ---------------- */
 

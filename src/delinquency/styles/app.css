@@ -14,7 +14,7 @@ body {
   font-size: 15px;
   line-height: 1.65;
   color: #17233a;
-  background: #f1f4f8;
+  background: #ffffff;
   direction: rtl;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -45,7 +45,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   --dq-warn-soft: #fff8e8;
   --dq-info-soft: #eef5fb;
   --dq-radius: 14px;
-  --dq-shadow: 0 1px 2px rgba(15, 42, 74, 0.05), 0 8px 24px -18px rgba(15, 42, 74, 0.28);
+  --dq-shadow: none;
   /* تدرّج الشرائح الخمس: من الأحدث تأخرًا (أخضر) إلى المتعثر (أحمر) */
   --dq-b1: #2f9e6f;
   --dq-b2: #8fb85a;
@@ -80,90 +80,35 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* ------------------------------- الشريط العلوي ---------------------------- */
 
-.dq-topbar { background: linear-gradient(115deg, #071a2d 0%, #0f3357 62%, #14506b 100%); color: #fff; }
-.dq-topbar::after {
-  content: '';
-  display: block;
-  height: 4px;
-  background: linear-gradient(
-    to left,
-    var(--dq-b1) 0 20%,
-    var(--dq-b2) 20% 40%,
-    var(--dq-b3) 40% 60%,
-    var(--dq-b4) 60% 80%,
-    var(--dq-b5) 80% 100%
-  );
-}
+.dq-topbar { background: #ffffff; border-bottom: 1px solid var(--dq-line); }
 .dq-topbar__inner {
   width: 100%;
   max-width: 1320px;
   margin: 0 auto;
-  padding: 13px 24px;
+  padding: 12px 24px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
 }
-.dq-app a.dq-brand { display: flex; align-items: center; gap: 12px; min-width: 0; color: #fff; }
-.dq-app a.dq-brand:hover { color: #fff; }
+.dq-app a.dq-brand { display: flex; align-items: center; gap: 12px; min-width: 0; color: var(--dq-navy); }
+.dq-app a.dq-brand:hover { color: var(--dq-navy); }
 .dq-brand__mark { flex: none; }
 .dq-brand__text { display: grid; min-width: 0; line-height: 1.4; }
-.dq-brand__text strong { font-size: 17px; font-weight: 700; letter-spacing: -0.1px; }
-.dq-brand__text small { font-size: 12.5px; color: rgba(255, 255, 255, 0.72); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dq-topbar__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  flex: none;
-  padding: 6px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.07);
-  color: rgba(255, 255, 255, 0.88);
-  font-size: 12.5px;
-  font-weight: 500;
-}
+.dq-brand__text h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.1px; color: var(--dq-navy); }
+.dq-brand__text small { font-size: 12.5px; color: var(--dq-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* --------------------------------- المحتوى -------------------------------- */
 
 .dq-main { flex: 1; width: 100%; max-width: 1320px; margin: 0 auto; padding: 22px 24px 44px; display: grid; gap: 18px; align-content: start; min-width: 0; }
 
-.dq-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px 28px; flex-wrap: wrap; }
-.dq-hero__text { display: grid; gap: 6px; flex: 1 1 420px; min-width: 0; }
-.dq-hero h1 { font-size: 27px; font-weight: 700; letter-spacing: -0.2px; }
-.dq-hero p { color: var(--dq-muted); font-size: 14.5px; line-height: 1.8; max-width: 74ch; }
-.dq-hero__buckets { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.dq-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 11px;
-  border: 1px solid var(--dq-line-strong);
-  border-radius: 999px;
-  background: #fff;
-  color: var(--dq-navy);
-  font-size: 12.5px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.dq-chip::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--dq-faint); flex: none; }
-.dq-chip--1::before { background: var(--dq-b1); }
-.dq-chip--2::before { background: var(--dq-b2); }
-.dq-chip--3::before { background: var(--dq-b3); }
-.dq-chip--4::before { background: var(--dq-b4); }
-.dq-chip--5::before { background: var(--dq-b5); }
-
 .dq-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px 18px;
-  flex-wrap: wrap;
+  justify-content: flex-end;
   width: 100%;
   max-width: 1320px;
   margin: 0 auto;
-  padding: 14px 24px 22px;
-  border-top: 1px solid var(--dq-line);
+  padding: 12px 24px 20px;
   color: var(--dq-faint);
   font-size: 12.5px;
 }
@@ -356,64 +301,16 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .dq-toast button { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border: 0; border-radius: 6px; background: rgba(255, 255, 255, 0.14); color: #fff; cursor: pointer; }
 .dq-toast button:hover { background: rgba(255, 255, 255, 0.26); }
 
-/* ------------------------------- شاشة البداية ----------------------------- */
-
-.dq-welcome { display: grid; gap: 6px; }
-.dq-welcome__steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 4px 18px 0; list-style: none; }
-.dq-welcome__steps li { display: flex; gap: 11px; align-items: flex-start; padding: 14px; border: 1px solid var(--dq-line); border-radius: 12px; background: var(--dq-soft); }
-.dq-welcome__icon { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; background: #fff; border: 1px solid var(--dq-line); color: var(--dq-blue); }
-.dq-welcome__steps strong { display: block; font-size: 14px; color: var(--dq-navy); }
-.dq-welcome__steps p { margin-top: 2px; color: var(--dq-muted); font-size: 12.5px; line-height: 1.75; }
-
-.dq-sample {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px 16px;
-  flex-wrap: wrap;
-  padding: 10px 14px;
-  border: 1px dashed #d9b866;
-  border-radius: 12px;
-  background: var(--dq-warn-soft);
-  color: #6a4607;
-  font-size: 13.5px;
-  line-height: 1.7;
-}
-.dq-sample > span { flex: 1 1 320px; min-width: 0; }
-
-/* ------------------------- البيانات والنسخ الاحتياطي ---------------------- */
-
-.dq-data { display: grid; gap: 16px; min-width: 0; }
-.dq-data .dq-panel__body { display: grid; gap: 12px; padding: 16px 18px; }
-.dq-data__stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; }
-.dq-data__stats > div { padding: 12px 14px; border: 1px solid var(--dq-line); border-radius: 12px; background: var(--dq-soft); }
-.dq-data__stats dt { color: var(--dq-muted); font-size: 12.5px; font-weight: 600; }
-.dq-data__stats dd { margin: 2px 0 0; color: var(--dq-navy); font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.3; }
-.dq-data__row { display: flex; align-items: flex-end; gap: 10px 12px; flex-wrap: wrap; }
-.dq-data__row .dq-field { flex: 1 1 240px; max-width: 380px; }
-.dq-data .dq-input { max-width: none; text-align: start; font-weight: 500; }
-.dq-data__hint { color: var(--dq-muted); font-size: 12.5px; line-height: 1.7; align-self: center; }
 .dq-data__text { font-size: 14px; line-height: 1.9; color: var(--dq-ink); }
 
 /* --------------------------------- التجاوب -------------------------------- */
 
-@media (max-width: 1000px) {
-  .dq-welcome__steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
 @media (max-width: 720px) {
   .dq-topbar__inner { padding: 11px 14px; }
-  .dq-brand__text strong { font-size: 15px; }
+  .dq-brand__text h1 { font-size: 15.5px; }
   .dq-brand__text small { font-size: 11.5px; }
-  .dq-topbar__badge { padding: 7px; }
-  .dq-topbar__badge span { display: none; }
   .dq-main { padding: 16px 12px 36px; gap: 14px; }
-  .dq-hero h1 { font-size: 22px; }
-  .dq-hero p { font-size: 13.5px; }
   .dq-footer { padding: 12px 14px 20px; }
-  .dq-welcome__steps { grid-template-columns: 1fr; padding-inline: 12px; }
-  .dq-data__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dq-data__row .dq-field { max-width: none; flex-basis: 100%; }
   .dq-modal__foot .dq-btn { flex: 1 1 auto; }
   .dq-toasts { bottom: 12px; inset-inline-start: 12px; width: calc(100vw - 24px); }
 }
@@ -424,7 +321,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
   body { background: #fff; }
   .dq-print-hide { display: none !important; }
   .dq-main { max-width: none; padding: 0; }
-  .dq-hero__buckets { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

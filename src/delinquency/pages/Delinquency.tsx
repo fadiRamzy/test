@@ -1,19 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { navigate, type Section } from '../router';
-import {
-  Badge,
-  Button,
-  Callout,
-  EmptyState,
-  Field,
-  Icon,
-  IconButton,
-  Input,
-  Modal,
-  Select,
-  Textarea,
-  type IconName,
-} from '../ui/kit';
+import { Badge, Button, Callout, EmptyState, Field, Icon, IconButton, Input, Modal, Select, Textarea, type IconName } from '../ui/kit';
 import { useNotify, type Notify } from '../ui/toast';
 import { ComparisonDashboard, Delta, Panel } from '../components/Dashboard';
 import {
@@ -22,7 +9,7 @@ import {
   listClientLists,
   listSavedComparisons,
   listSnapshots,
-  saveClientList,
+  requestPersistentStorage,
   saveComparison,
   saveSnapshot,
   type ClientListRecord,
@@ -51,20 +38,9 @@ import {
   type BucketId,
   type MonthlySnapshot,
 } from '../lib/delinquency';
-import {
-  aggregateClientList,
-  computeMigration,
-  parseClientList,
-  reconcileWithList,
-  serializeClientList,
-  type ClientRecord,
-} from '../lib/delinquencyMigration';
-import { buildExecutiveSummary } from '../lib/delinquencySummary';
-import { buildDelinquencyXlsx, delinquencyFileName } from '../lib/delinquencyExcel';
-import { XLSX_MIME } from '../lib/xlsx';
-import { downloadBlob, fmtDateTime, monthsNoun, readTextFile } from '../lib/utils';
+import { exportReport, resolveSelection, type Selection } from '../lib/selection';
+import { fmtDateTime } from '../lib/utils';
 import { errorMessage } from '../lib/errors';
-import { isSampleSnapshot, loadSampleData, removeSampleData } from '../lib/sampleData';
 import { DataTab } from './DataTab';
 import '../styles/delinquency.css';
 
@@ -111,7 +87,6 @@ interface EntryDraft {
   month: string;
   values: Record<BucketId, { clients: string; amount: string }>;
   notes: string;
-  clientsText: string;
 }
 
 function emptyValues(): EntryDraft['values'] {
@@ -129,11 +104,10 @@ function newDraft(branch = '', year?: number, month?: number): EntryDraft {
     month: String(month ?? now.getMonth() + 1),
     values: emptyValues(),
     notes: '',
-    clientsText: '',
   };
 }
 
-function draftFromSnapshot(snapshot: MonthlySnapshot, clients: ClientRecord[] | undefined): EntryDraft {
+function draftFromSnapshot(snapshot: MonthlySnapshot): EntryDraft {
   const values = emptyValues();
   for (const id of BUCKET_IDS) {
     values[id] = { clients: String(snapshot.buckets[id].clients), amount: String(snapshot.buckets[id].amount) };
@@ -145,14 +119,12 @@ function draftFromSnapshot(snapshot: MonthlySnapshot, clients: ClientRecord[] | 
     month: String(snapshot.month),
     values,
     notes: snapshot.notes,
-    clientsText: clients?.length ? serializeClientList(clients) : '',
   };
 }
 
 const isDraftPristine = (draft: EntryDraft): boolean =>
   !draft.editingId &&
   !draft.notes.trim() &&
-  !draft.clientsText.trim() &&
   BUCKET_IDS.every((id) => !draft.values[id].clients.trim() && !draft.values[id].amount.trim());
 
 /* ---------------------------------- الصفحة -------------------------------- */
@@ -161,13 +133,10 @@ const TABS: Array<{ id: Section; path: string; label: string; icon: IconName }> 
   { id: 'dashboard', path: '/', label: 'لوحة المقارنة', icon: 'chart' },
   { id: 'entry', path: '/entry', label: 'إدخال البيانات الشهرية', icon: 'edit' },
   { id: 'saved', path: '/saved', label: 'المقارنات المحفوظة', icon: 'history' },
-  { id: 'data', path: '/data', label: 'البيانات والنسخ الاحتياطي', icon: 'database' },
+  { id: 'data', path: '/data', label: 'النسخ الاحتياطي', icon: 'database' },
 ];
 
-/**
- * مساحة العمل الكاملة للنظام: التبويبات الأربعة ومحتواها.
- * تُعرض داخل إطار التطبيق (App) وهي الصفحة الافتراضية للموقع.
- */
+/** مساحة العمل الكاملة للنظام: التبويبات الأربعة ومحتواها. */
 export function DelinquencyPage({
   section,
   itemId,
@@ -183,31 +152,21 @@ export function DelinquencyPage({
   const { data, loading, error, reload } = useDelinquencyData();
   const active = section;
 
-  const [selection, setSelection] = useState<{ branch: string | null; aId: string | null; bId: string | null }>({
-    branch: null,
-    aId: null,
-    bId: null,
-  });
+  const [selection, setSelection] = useState<Selection>({ branch: null, aId: null, bId: null });
   const [draft, setDraft] = useState<EntryDraft>(() => newDraft());
-  const [clientsOpen, setClientsOpen] = useState(false);
 
-  const editSnapshot = useCallback(
-    (snapshot: MonthlySnapshot, openClients = false) => {
-      setDraft(draftFromSnapshot(snapshot, data.lists.get(snapshot.id)?.clients));
-      setClientsOpen(openClients || Boolean(data.lists.get(snapshot.id)?.clients.length));
-      navigate('/entry');
-    },
-    [data.lists],
-  );
+  const editSnapshot = useCallback((snapshot: MonthlySnapshot) => {
+    setDraft(draftFromSnapshot(snapshot));
+    navigate('/entry');
+  }, []);
 
   return (
     <div className="dq">
-      <nav className="dq-tabs dq-print-hide" aria-label="أقسام تحليل المتأخرات">
+      <nav className="dq-tabs dq-print-hide" aria-label="أقسام النظام">
         {TABS.map((tab) => (
           <a key={tab.id} href={`#${tab.path}`} className={`dq-tab${active === tab.id ? ' is-active' : ''}`} aria-current={active === tab.id ? 'page' : undefined}>
             <Icon name={tab.icon} size={15} />
             <span>{tab.label}</span>
-            {tab.id === 'saved' && data.saved.length ? <span className="dq-tab__count">{data.saved.length}</span> : null}
           </a>
         ))}
       </nav>
@@ -215,18 +174,9 @@ export function DelinquencyPage({
       {error ? <Callout tone="danger">{error}</Callout> : null}
 
       {loading ? (
-        <div className="dq-loading">جارٍ فتح بيانات المتأخرات…</div>
+        <div className="dq-loading">جارٍ التحميل…</div>
       ) : active === 'entry' ? (
-        <EntryTab
-          data={data}
-          draft={draft}
-          setDraft={setDraft}
-          clientsOpen={clientsOpen}
-          setClientsOpen={setClientsOpen}
-          reload={reload}
-          notify={notify}
-          onEdit={editSnapshot}
-        />
+        <EntryTab data={data} draft={draft} setDraft={setDraft} reload={reload} notify={notify} onEdit={editSnapshot} />
       ) : active === 'saved' ? (
         itemId ? (
           <SavedView
@@ -244,107 +194,17 @@ export function DelinquencyPage({
           <SavedList data={data} reload={reload} notify={notify} />
         )
       ) : active === 'data' ? (
-        <DataTab data={data} reload={reload} notify={notify} organization={organization} onOrganizationChange={onOrganizationChange} />
-      ) : (
-        <LiveTab
+        <DataTab
           data={data}
           selection={selection}
-          setSelection={setSelection}
-          organization={organization}
           reload={reload}
           notify={notify}
-          onEdit={editSnapshot}
+          organization={organization}
+          onOrganizationChange={onOrganizationChange}
         />
+      ) : (
+        <LiveTab data={data} selection={selection} setSelection={setSelection} organization={organization} reload={reload} notify={notify} />
       )}
-    </div>
-  );
-}
-
-
-/* ------------------------------- شاشة البداية ----------------------------- */
-
-const STEPS: Array<{ icon: IconName; title: string; text: string }> = [
-  { icon: 'edit', title: '1. أدخل بيانات كل شهر', text: 'عدد العملاء المتأخرين ومبلغ المتأخرات لكل شريحة من الشرائح الخمس، لكل فرع.' },
-  { icon: 'swap', title: '2. قارن أي شهرين', text: 'صافي التغير في العملاء والمبالغ لكل شريحة، وحركة الترحيل الفعلية إذا أضفت قوائم العملاء.' },
-  { icon: 'building', title: '3. تابع أداء الفروع', text: 'لوحة أداء لكل فرع: أفضل وأسوأ شريحة، نسبة المتعثر (NPL)، واتجاه آخر الأشهر.' },
-  { icon: 'download', title: '4. صدّر إلى Excel', text: 'ملف واحد بكل الجداول والمعادلات الحيّة لمراجعتها أو مشاركتها.' },
-];
-
-function Welcome({ reload, notify }: { reload: () => Promise<void>; notify: Notify }) {
-  const [loadingSample, setLoadingSample] = useState(false);
-
-  const trySample = async () => {
-    setLoadingSample(true);
-    try {
-      await loadSampleData();
-      await reload();
-      notify('تم تحميل بيانات تجريبية لفرعين — يمكنك حذفها في أي وقت.', 'success');
-    } catch (cause) {
-      notify(errorMessage(cause), 'error');
-    } finally {
-      setLoadingSample(false);
-    }
-  };
-
-  return (
-    <Panel title="ابدأ بإدخال بيانات شهرين" icon="chart" subtitle="لا توجد بيانات بعد — النظام جاهز لاستقبال أول شهر.">
-      <div className="dq-welcome" data-testid="dq-welcome">
-        <ol className="dq-welcome__steps">
-          {STEPS.map((step) => (
-            <li key={step.title}>
-              <span className="dq-welcome__icon" aria-hidden="true">
-                <Icon name={step.icon} size={17} />
-              </span>
-              <div>
-                <strong>{step.title}</strong>
-                <p>{step.text}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
-        <EmptyState
-          icon="chart"
-          title="لا توجد بيانات شهرية بعد"
-          description="أدخل عدد العملاء المتأخرين ومبلغ المتأخرات لكل شريحة لشهرين على الأقل (مثل سبتمبر وأكتوبر) لتظهر المقارنة تلقائيًا."
-          action={
-            <>
-              <Button variant="primary" icon="plus" onClick={() => navigate('/entry')}>
-                إدخال بيانات شهر
-              </Button>
-              <Button icon="sparkles" onClick={trySample} disabled={loadingSample}>
-                جرّب ببيانات تجريبية
-              </Button>
-            </>
-          }
-        />
-      </div>
-    </Panel>
-  );
-}
-
-function SampleBanner({ count, reload, notify }: { count: number; reload: () => Promise<void>; notify: Notify }) {
-  const [busy, setBusy] = useState(false);
-  if (!count) return null;
-  const remove = async () => {
-    setBusy(true);
-    try {
-      const removed = await removeSampleData();
-      await reload();
-      notify(`تم حذف البيانات التجريبية (${monthsNoun(removed)}). بياناتك الأخرى لم تتغير.`, 'success');
-    } catch (cause) {
-      notify(errorMessage(cause), 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="dq-sample dq-print-hide" data-testid="dq-sample-banner">
-      <span>
-        <strong>بيانات تجريبية ({monthsNoun(count)}):</strong> للاستكشاف فقط — ليست بيانات فرع حقيقي. احذفها قبل الاعتماد على أي نتيجة.
-      </span>
-      <Button size="sm" icon="trash" onClick={remove} disabled={busy}>
-        حذف البيانات التجريبية
-      </Button>
     </div>
   );
 }
@@ -358,70 +218,44 @@ function LiveTab({
   organization,
   reload,
   notify,
-  onEdit,
 }: {
   data: DelinquencyData;
-  selection: { branch: string | null; aId: string | null; bId: string | null };
-  setSelection: (next: { branch: string | null; aId: string | null; bId: string | null }) => void;
+  selection: Selection;
+  setSelection: (next: Selection) => void;
   organization: string;
   reload: () => Promise<void>;
   notify: Notify;
-  onEdit: (snapshot: MonthlySnapshot, openClients?: boolean) => void;
 }) {
-  const { snapshots, lists } = data;
+  const { snapshots } = data;
   const [saveOpen, setSaveOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const branches = useMemo(
-    () => Array.from(new Set(snapshots.map((snapshot) => snapshot.branch))).sort((x, y) => x.localeCompare(y, 'ar')),
-    [snapshots],
-  );
-
-  // الفرع الافتراضي: فرع أحدث شهر مُدخل
-  const branch =
-    selection.branch !== null && branches.includes(selection.branch)
-      ? selection.branch
-      : snapshots.length
-        ? snapshots[snapshots.length - 1].branch
-        : '';
-  const months = useMemo(() => snapshots.filter((snapshot) => snapshot.branch === branch), [snapshots, branch]);
-
-  // الافتراضي: آخر شهرين مُدخلين للفرع (الأقدم = الأساس)
-  const b = months.find((month) => month.id === selection.bId) ?? months[months.length - 1] ?? null;
-  const a =
-    months.find((month) => month.id === selection.aId) ??
-    (b ? [...months].reverse().find((month) => month.id !== b.id) ?? null : null);
-
-  const ready = Boolean(a && b && a.id !== b.id);
+  const { branches, branch, months, a, b, ready } = useMemo(() => resolveSelection(snapshots, selection), [snapshots, selection]);
   const comparison = useMemo(() => (a && b && a.id !== b.id ? compareSnapshots(a, b) : null), [a, b]);
-
-  const listA = a ? lists.get(a.id) : undefined;
-  const listB = b ? lists.get(b.id) : undefined;
-  const migration = useMemo(
-    () => (ready && listA?.clients.length && listB?.clients.length ? computeMigration(listA.clients, listB.clients) : null),
-    [ready, listA, listB],
-  );
-  const reconciliation = useMemo(
-    () => ({
-      a: a && listA?.clients.length ? reconcileWithList(a.buckets, listA.clients) : null,
-      b: b && listB?.clients.length ? reconcileWithList(b.buckets, listB.clients) : null,
-    }),
-    [a, b, listA, listB],
-  );
-  const summary = useMemo(() => (comparison ? buildExecutiveSummary(comparison, migration) : null), [comparison, migration]);
   const branchRows = useMemo(
     () => (a && b && branches.length > 1 ? compareBranches(snapshots, snapshotPeriod(a), snapshotPeriod(b)) : []),
     [a, b, branches.length, snapshots],
   );
 
   if (!snapshots.length) {
-    return <Welcome reload={reload} notify={notify} />;
+    return (
+      <Panel title="لوحة المقارنة">
+        <EmptyState
+          icon="chart"
+          title="لا توجد بيانات شهرية بعد"
+          action={
+            <Button variant="primary" icon="plus" onClick={() => navigate('/entry')}>
+              إدخال بيانات شهر
+            </Button>
+          }
+        />
+      </Panel>
+    );
   }
 
-  const pick = (patch: Partial<{ branch: string | null; aId: string | null; bId: string | null }>) =>
-    setSelection({ branch, aId: a?.id ?? null, bId: b?.id ?? null, ...patch });
+  const pick = (patch: Partial<Selection>) => setSelection({ branch, aId: a?.id ?? null, bId: b?.id ?? null, ...patch });
 
   const openSave = () => {
     if (!a || !b) return;
@@ -434,10 +268,10 @@ function LiveTab({
     if (!a || !b) return;
     setSaving(true);
     try {
-      await saveComparison({ title, note, a, b, migration });
+      await saveComparison({ title, note, a, b });
       await reload();
       setSaveOpen(false);
-      notify('تم حفظ المقارنة. يمكنك الرجوع إليها من «المقارنات المحفوظة».', 'success');
+      notify('تم حفظ المقارنة.', 'success');
     } catch (cause) {
       notify(errorMessage(cause), 'error');
     } finally {
@@ -445,22 +279,8 @@ function LiveTab({
     }
   };
 
-  const doExport = () => {
-    if (!comparison || !summary) return;
-    try {
-      const bytes = buildDelinquencyXlsx({ comparison, summary, migration, history: months, branches: branchRows, organization });
-      downloadBlob(delinquencyFileName(comparison), bytes, XLSX_MIME);
-      notify('تم تنزيل ملف Excel بكل الحسابات.', 'success');
-    } catch (cause) {
-      notify(errorMessage(cause), 'error');
-    }
-  };
-
-  const missingList = a && !listA?.clients.length ? a : b && !listB?.clients.length ? b : a;
-
   return (
     <>
-      <SampleBanner count={snapshots.filter(isSampleSnapshot).length} reload={reload} notify={notify} />
       <section className="dq-selector dq-print-hide" aria-label="اختيار الشهرين">
         {branches.length > 1 ? (
           <Field label="الفرع" htmlFor="dq-select-branch">
@@ -473,7 +293,7 @@ function LiveTab({
             </Select>
           </Field>
         ) : null}
-        <Field label="شهر الأساس" htmlFor="dq-select-a">
+        <Field label="الشهر السابق" htmlFor="dq-select-a">
           <Select id="dq-select-a" value={a?.id ?? ''} onChange={(event) => pick({ aId: event.target.value })}>
             {months.map((month) => (
               <option key={month.id} value={month.id}>
@@ -492,7 +312,7 @@ function LiveTab({
         >
           ⇄
         </button>
-        <Field label="شهر المقارنة" htmlFor="dq-select-b">
+        <Field label="الشهر الحالي" htmlFor="dq-select-b">
           <Select id="dq-select-b" value={b?.id ?? ''} onChange={(event) => pick({ bId: event.target.value })}>
             {months.map((month) => (
               <option key={month.id} value={month.id}>
@@ -505,18 +325,17 @@ function LiveTab({
           <Button icon="save" disabled={!ready} onClick={openSave}>
             حفظ المقارنة
           </Button>
-          <Button variant="primary" icon="download" disabled={!ready} onClick={doExport}>
+          <Button variant="primary" icon="download" disabled={!ready} onClick={() => a && b && exportReport(snapshots, b, a, organization, notify)}>
             تصدير Excel
           </Button>
         </div>
       </section>
 
       {months.length < 2 ? (
-        <Panel title="أدخل شهرًا آخر للمقارنة" icon="calendar">
+        <Panel title="لوحة المقارنة">
           <EmptyState
             icon="calendar"
-            title={`يوجد شهر واحد فقط لـ ${branchLabel(branch)}`}
-            description="المقارنة تحتاج بيانات شهرين. أضف بيانات شهر آخر لنفس الفرع."
+            title="أدخل شهرًا آخر لنفس الفرع لتظهر المقارنة"
             action={
               <Button variant="primary" icon="plus" onClick={() => navigate('/entry')}>
                 إدخال بيانات شهر
@@ -524,31 +343,18 @@ function LiveTab({
             }
           />
         </Panel>
-      ) : !comparison || !summary || !a || !b ? (
-        <Callout tone="warning">اختر شهرين مختلفين للمقارنة.</Callout>
+      ) : !comparison ? (
+        <Panel title="لوحة المقارنة">
+          <EmptyState icon="calendar" title="اختر شهرين مختلفين" />
+        </Panel>
       ) : (
         <>
-          <div className="dq-context">
-            <span>
-              <strong>{branchLabel(branch)}</strong> · {periodLabel(a)} <span aria-hidden="true">←</span> {periodLabel(b)}
-            </span>
-            {!comparison.chronological ? <Badge tone="warning">شهر الأساس أحدث من شهر المقارنة</Badge> : null}
-          </div>
-          <ComparisonDashboard
-            comparison={comparison}
-            summary={summary}
-            migration={migration}
-            history={months}
-            branches={branchRows}
-            reconciliation={reconciliation}
-            migrationActions={
-              missingList ? (
-                <Button size="sm" icon="upload" onClick={() => onEdit(missingList, true)}>
-                  {migration ? 'تعديل قوائم العملاء' : 'إضافة قوائم العملاء'}
-                </Button>
-              ) : null
-            }
-          />
+          {!comparison.chronological ? (
+            <div className="dq-context">
+              <Badge tone="warning">الشهر السابق المختار أحدث من الشهر الحالي</Badge>
+            </div>
+          ) : null}
+          <ComparisonDashboard comparison={comparison} branches={branchRows} />
         </>
       )}
 
@@ -556,7 +362,6 @@ function LiveTab({
         open={saveOpen}
         onClose={() => setSaveOpen(false)}
         title="حفظ المقارنة"
-        subtitle="تُحفظ نسخة مجمّدة من بيانات الشهرين؛ تعديل البيانات لاحقًا لا يغيّر المقارنة المحفوظة."
         size="sm"
         footer={
           <>
@@ -584,8 +389,6 @@ function EntryTab({
   data,
   draft,
   setDraft,
-  clientsOpen,
-  setClientsOpen,
   reload,
   notify,
   onEdit,
@@ -593,17 +396,14 @@ function EntryTab({
   data: DelinquencyData;
   draft: EntryDraft;
   setDraft: (next: EntryDraft | ((prev: EntryDraft) => EntryDraft)) => void;
-  clientsOpen: boolean;
-  setClientsOpen: (open: boolean) => void;
   reload: () => Promise<void>;
   notify: Notify;
-  onEdit: (snapshot: MonthlySnapshot, openClients?: boolean) => void;
+  onEdit: (snapshot: MonthlySnapshot) => void;
 }) {
-  const { snapshots, lists } = data;
+  const { snapshots } = data;
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<MonthlySnapshot | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const branchOptions = useMemo(
     () =>
@@ -629,8 +429,6 @@ function EntryTab({
     return { clients, amount: moneySum(amounts) };
   }, [draft.values]);
 
-  const parsedClients = useMemo(() => (draft.clientsText.trim() ? parseClientList(draft.clientsText) : null), [draft.clientsText]);
-
   const targetId =
     validation.errors.year || validation.errors.month ? null : snapshotId(draft.branch, validation.value.year, validation.value.month);
   const conflict = targetId && targetId !== draft.editingId ? snapshots.find((snapshot) => snapshot.id === targetId) ?? null : null;
@@ -648,27 +446,6 @@ function EntryTab({
   const reset = () => {
     setDraft(newDraft(draft.branch, Number(draft.year) || undefined, Number(draft.month) || undefined));
     setErrors({});
-    setClientsOpen(false);
-  };
-
-  const fillFromList = () => {
-    if (!parsedClients || parsedClients.errors.length || !parsedClients.clients.length) return;
-    const totals = aggregateClientList(parsedClients.clients);
-    setDraft((prev) => {
-      const values = { ...prev.values };
-      for (const id of BUCKET_IDS) {
-        values[id] = {
-          clients: String(totals[id].clients),
-          amount: parsedClients.hasAmounts ? String(totals[id].amount) : prev.values[id].amount,
-        };
-      }
-      return { ...prev, values };
-    });
-    setErrors({});
-    notify(
-      parsedClients.hasAmounts ? 'تمت تعبئة الأعداد والمبالغ من قائمة العملاء.' : 'تمت تعبئة الأعداد من قائمة العملاء (القائمة بلا مبالغ).',
-      'success',
-    );
   };
 
   const submit = async () => {
@@ -677,45 +454,25 @@ function EntryTab({
       notify(Object.values(validation.errors)[0], 'error');
       return;
     }
-    let clients: ClientRecord[] = [];
-    if (parsedClients) {
-      if (parsedClients.errors.length) {
-        setErrors({ clients: 'صحّح أخطاء قائمة العملاء أو احذف القائمة قبل الحفظ.' });
-        setClientsOpen(true);
-        notify('قائمة العملاء بها أخطاء — صحّحها أو احذفها قبل الحفظ.', 'error');
-        return;
-      }
-      clients = parsedClients.clients;
-    }
     setSaving(true);
     try {
+      // قائمة العملاء المحفوظة سابقًا لهذا الشهر (إن وُجدت) لا تُمس: تبقى مع السجل أو تنتقل معه.
       const record = await saveSnapshot(
         { branch: draft.branch, year: draft.year, month: draft.month, buckets: draft.values, notes: draft.notes },
         { editingId: draft.editingId ?? undefined, overwrite: Boolean(draft.editingId) },
       );
-      await saveClientList(record.id, clients);
+      void requestPersistentStorage();
       await reload();
       notify(`تم حفظ بيانات ${periodLabel(record)} — ${branchLabel(record.branch)}.`, 'success');
       const nextMonth = record.month === 12 ? 1 : record.month + 1;
       const nextYear = record.month === 12 ? record.year + 1 : record.year;
       setDraft(newDraft(record.branch, nextYear, nextMonth));
       setErrors({});
-      setClientsOpen(false);
     } catch (cause) {
       if (cause && typeof cause === 'object' && 'errors' in cause) setErrors((cause as { errors: Record<string, string> }).errors);
       notify(errorMessage(cause), 'error');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const pickFile = async (file: File) => {
-    try {
-      const text = await readTextFile(file);
-      setDraft((prev) => ({ ...prev, clientsText: text }));
-      setClientsOpen(true);
-    } catch (cause) {
-      notify(errorMessage(cause), 'error');
     }
   };
 
@@ -740,8 +497,6 @@ function EntryTab({
     <>
       <Panel
         title={editing ? `تعديل بيانات ${periodLabel(editing)} — ${branchLabel(editing.branch)}` : 'إدخال بيانات شهر'}
-        subtitle="لكل شريحة: عدد العملاء المتأخرين وإجمالي مبلغ المتأخرات فقط."
-        icon="edit"
         id="dq-entry"
         actions={
           editing || !isDraftPristine(draft) ? (
@@ -764,7 +519,7 @@ function EntryTab({
           <Field label="السنة" htmlFor="dq-year" required error={errors.year}>
             <Input id="dq-year" inputMode="numeric" value={draft.year} onChange={(event) => setDraft((prev) => ({ ...prev, year: event.target.value }))} />
           </Field>
-          <Field label="الفرع (اختياري)" htmlFor="dq-branch" hint="اتركه فارغًا إذا كنت تتابع فرعًا واحدًا.">
+          <Field label="الفرع" htmlFor="dq-branch">
             <Input
               id="dq-branch"
               list="dq-branch-options"
@@ -782,21 +537,21 @@ function EntryTab({
         </div>
 
         {conflict ? (
-          <Callout tone="warning">
-            توجد بيانات محفوظة بالفعل لشهر {periodLabel(conflict)} — {branchLabel(conflict.branch)}.{' '}
+          <p className="dq-conflict" role="alert">
+            توجد بيانات محفوظة لشهر {periodLabel(conflict)} — {branchLabel(conflict.branch)}.{' '}
             <button type="button" className="dq-link" onClick={() => onEdit(conflict)}>
-              تحميل البيانات المحفوظة للتعديل
+              تعديل البيانات المحفوظة
             </button>
-          </Callout>
+          </p>
         ) : null}
 
         <div className="dq-tablewrap">
           <table className="dq-table dq-entry-table">
             <thead>
               <tr>
-                <th className="dq-table__bucket">شريحة التأخير</th>
-                <th>عدد العملاء المتأخرين</th>
-                <th>إجمالي مبلغ المتأخرات</th>
+                <th className="dq-table__bucket">الشريحة</th>
+                <th>عدد العملاء</th>
+                <th>مبلغ المتأخرات</th>
               </tr>
             </thead>
             <tbody>
@@ -808,7 +563,7 @@ function EntryTab({
                   <td>
                     <input
                       id={`dq-clients-${bucket.id}`}
-                      className={`input dq-input${errors[`${bucket.id}.clients`] ? ' dq-input--error' : ''}`}
+                      className={`dq-input${errors[`${bucket.id}.clients`] ? ' dq-input--error' : ''}`}
                       dir="ltr"
                       inputMode="numeric"
                       autoComplete="off"
@@ -823,7 +578,7 @@ function EntryTab({
                   <td>
                     <input
                       id={`dq-amount-${bucket.id}`}
-                      className={`input dq-input${errors[`${bucket.id}.amount`] ? ' dq-input--error' : ''}`}
+                      className={`dq-input${errors[`${bucket.id}.amount`] ? ' dq-input--error' : ''}`}
                       dir="ltr"
                       inputMode="decimal"
                       autoComplete="off"
@@ -852,108 +607,19 @@ function EntryTab({
           </table>
         </div>
 
-        {validation.ok && validation.warnings.length ? (
-          <Callout tone="warning">
-            <ul className="dq-plainlist">
-              {validation.warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          </Callout>
-        ) : null}
-
-        <details className="dq-details" open={clientsOpen} onToggle={(event) => setClientsOpen((event.target as HTMLDetailsElement).open)}>
-          <summary>
-            <Icon name="employees" size={15} />
-            <span>قائمة العملاء (اختياري) — مطلوبة فقط لحساب الترحيل الفعلي بين الشرائح</span>
-            {parsedClients && !parsedClients.errors.length && parsedClients.clients.length ? (
-              <Badge tone="success">{fmtInt(parsedClients.clients.length)} عميل</Badge>
-            ) : null}
-          </summary>
-          <div className="dq-details__body">
-            <p className="dq-hint">
-              كل سطر: <strong>رقم العميل</strong>، <strong>أيام التأخير</strong>، <strong>المبلغ</strong> (اختياري). يمكن اللصق مباشرة من Excel أو رفع ملف CSV. أرقام العملاء تُستخدم لمطابقة العميل بين الشهرين، ولا تغادر هذا الجهاز.
-            </p>
-            <Textarea
-              id="dq-clients-text"
-              aria-label="قائمة العملاء"
-              dir="ltr"
-              rows={7}
-              className="dq-clients-text"
-              placeholder={'10254\t45\t3200.50\n10311\t12\t950\n10388\t135\t18000'}
-              value={draft.clientsText}
-              onChange={(event) => setDraft((prev) => ({ ...prev, clientsText: event.target.value }))}
-            />
-            <div className="dq-details__actions">
-              <Button size="sm" icon="upload" onClick={() => fileRef.current?.click()}>
-                رفع ملف CSV
-              </Button>
-              <Button
-                size="sm"
-                icon="check"
-                disabled={!parsedClients || Boolean(parsedClients.errors.length) || !parsedClients.clients.length}
-                onClick={fillFromList}
-              >
-                تعبئة الشرائح من القائمة
-              </Button>
-              {draft.clientsText ? (
-                <Button size="sm" variant="ghost" icon="trash" onClick={() => setDraft((prev) => ({ ...prev, clientsText: '' }))}>
-                  مسح القائمة
-                </Button>
-              ) : null}
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".csv,.txt,.tsv,text/csv,text/plain"
-                className="dq-visually-hidden"
-                aria-label="اختيار ملف قائمة العملاء"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void pickFile(file);
-                  event.target.value = '';
-                }}
-              />
-            </div>
-            {parsedClients ? (
-              parsedClients.errors.length ? (
-                <Callout tone="danger">
-                  <strong>
-                    {fmtInt(parsedClients.errors.length)} خطأ في القائمة — لن تُحفظ حتى تُصحَّح:
-                  </strong>
-                  <ul className="dq-plainlist">
-                    {parsedClients.errors.slice(0, 6).map((issue) => (
-                      <li key={`${issue.line}-${issue.message}`}>
-                        سطر {issue.line}: {issue.message}
-                      </li>
-                    ))}
-                    {parsedClients.errors.length > 6 ? <li>… و{fmtInt(parsedClients.errors.length - 6)} أخطاء أخرى</li> : null}
-                  </ul>
-                </Callout>
-              ) : (
-                <Callout tone="success">
-                  تمت قراءة {fmtInt(parsedClients.clients.length)} عميل متأخر
-                  {parsedClients.notOverdue ? `، وتجاهل ${fmtInt(parsedClients.notOverdue)} غير متأخر (0 يوم)` : ''}
-                  {parsedClients.hasAmounts ? ' — مع المبالغ.' : ' — بدون مبالغ (ستُحسب مصفوفة الأعداد فقط).'}
-                </Callout>
-              )
-            ) : null}
-            {errors.clients ? <span className="dq-err">{errors.clients}</span> : null}
-          </div>
-        </details>
-
         <Field label="ملاحظات (اختياري)" htmlFor="dq-notes">
-          <Input id="dq-notes" value={draft.notes} onChange={(event) => setDraft((prev) => ({ ...prev, notes: event.target.value }))} maxLength={300} />
+          <Input id="dq-notes" value={draft.notes} maxLength={300} onChange={(event) => setDraft((prev) => ({ ...prev, notes: event.target.value }))} />
         </Field>
 
         <div className="dq-entry__actions">
-          <Button variant="primary" icon="save" disabled={saving} onClick={submit}>
+          <Button variant="primary" icon="save" onClick={submit} disabled={saving}>
             {editing ? 'حفظ التعديلات' : 'حفظ بيانات الشهر'}
           </Button>
           {editing ? <Button onClick={reset}>إلغاء التعديل</Button> : null}
         </div>
       </Panel>
 
-      <Panel title="الشهور المحفوظة" subtitle={monthsNoun(snapshots.length)} icon="database" id="dq-months">
+      <Panel title="الشهور المحفوظة" id="dq-months">
         {rows.length ? (
           <div className="dq-tablewrap">
             <table className="dq-table" data-testid="dq-months-table">
@@ -961,18 +627,15 @@ function EntryTab({
                 <tr>
                   <th className="dq-table__bucket">الشهر</th>
                   <th>الفرع</th>
-                  <th>العملاء المتأخرون</th>
+                  <th>عدد العملاء</th>
                   <th>مبلغ المتأخرات</th>
                   <th>حصة NPL</th>
-                  <th>قائمة العملاء</th>
-                  <th>آخر تعديل</th>
                   <th className="dq-print-hide">إجراءات</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((snapshot) => {
                   const totals = snapshotTotals(snapshot.buckets);
-                  const list = lists.get(snapshot.id);
                   return (
                     <tr key={snapshot.id} className={snapshot.id === draft.editingId ? 'dq-row--current' : undefined}>
                       <th scope="row" className="dq-table__bucket">{periodLabel(snapshot)}</th>
@@ -980,8 +643,6 @@ function EntryTab({
                       <td><span className="dq-num" dir="ltr">{fmtInt(totals.clients)}</span></td>
                       <td><span className="dq-num" dir="ltr">{fmtMoney(totals.amount)}</span></td>
                       <td><span className="dq-num" dir="ltr">{fmtPct(sharePct(snapshot.buckets.npl.amount, totals.amount))}</span></td>
-                      <td>{list?.clients.length ? <Badge tone="success">{fmtInt(list.clients.length)} عميل</Badge> : <span className="dq-muted">—</span>}</td>
-                      <td>{fmtDateTime(snapshot.updatedAt)}</td>
                       <td className="dq-print-hide">
                         <span className="dq-rowactions">
                           <IconButton icon="edit" label={`تعديل ${periodLabel(snapshot)} — ${branchLabel(snapshot.branch)}`} onClick={() => onEdit(snapshot)} />
@@ -995,7 +656,7 @@ function EntryTab({
             </table>
           </div>
         ) : (
-          <EmptyState icon="database" title="لا توجد شهور محفوظة" description="احفظ بيانات أول شهر من النموذج أعلاه." />
+          <EmptyState icon="database" title="لا توجد شهور محفوظة" />
         )}
       </Panel>
 
@@ -1015,7 +676,7 @@ function EntryTab({
       >
         {deleting ? (
           <p>
-            سيُحذف سجل {periodLabel(deleting)} — {branchLabel(deleting.branch)} وقائمة عملائه إن وُجدت. المقارنات المحفوظة سابقًا لا تتأثر.
+            حذف بيانات {periodLabel(deleting)} — {branchLabel(deleting.branch)}؟
           </p>
         ) : null}
       </Modal>
@@ -1043,7 +704,7 @@ function SavedList({ data, reload, notify }: { data: DelinquencyData; reload: ()
 
   return (
     <>
-      <Panel title="المقارنات المحفوظة" subtitle="نسخ مجمّدة من مقارنات سابقة يمكن فتحها وتصديرها في أي وقت" icon="history" id="dq-saved">
+      <Panel title="المقارنات المحفوظة" id="dq-saved">
         {data.saved.length ? (
           <div className="dq-tablewrap">
             <table className="dq-table" data-testid="dq-saved-table">
@@ -1052,8 +713,7 @@ function SavedList({ data, reload, notify }: { data: DelinquencyData; reload: ()
                   <th className="dq-table__bucket">العنوان</th>
                   <th>الفرع</th>
                   <th>الشهران</th>
-                  <th>صافي تغير المبلغ</th>
-                  <th>الترحيل</th>
+                  <th>فرق المبلغ</th>
                   <th>تاريخ الحفظ</th>
                   <th className="dq-print-hide">إجراءات</th>
                 </tr>
@@ -1074,7 +734,6 @@ function SavedList({ data, reload, notify }: { data: DelinquencyData; reload: ()
                         {periodLabel(saved.a)} ← {periodLabel(saved.b)}
                       </td>
                       <td><Delta value={comparison.totals.amountDelta} format={fmtSignedMoney} strong /></td>
-                      <td>{saved.migration ? <Badge tone="success">فعلي</Badge> : <Badge tone="neutral">صافي تغير</Badge>}</td>
                       <td>{fmtDateTime(saved.createdAt)}</td>
                       <td className="dq-print-hide">
                         <span className="dq-rowactions">
@@ -1091,16 +750,7 @@ function SavedList({ data, reload, notify }: { data: DelinquencyData; reload: ()
             </table>
           </div>
         ) : (
-          <EmptyState
-            icon="history"
-            title="لا توجد مقارنات محفوظة"
-            description="من «لوحة المقارنة» اختر شهرين ثم اضغط «حفظ المقارنة» للرجوع إليها لاحقًا."
-            action={
-              <Button icon="chart" onClick={() => navigate('/')}>
-                الانتقال إلى لوحة المقارنة
-              </Button>
-            }
-          />
+          <EmptyState icon="history" title="لا توجد مقارنات محفوظة" />
         )}
       </Panel>
 
@@ -1118,7 +768,7 @@ function SavedList({ data, reload, notify }: { data: DelinquencyData; reload: ()
           </>
         }
       >
-        {deleting ? <p>سيُحذف «{deleting.title}» من المقارنات المحفوظة. بيانات الشهور نفسها لا تتأثر.</p> : null}
+        {deleting ? <p>حذف «{deleting.title}»؟</p> : null}
       </Modal>
     </>
   );
@@ -1143,15 +793,13 @@ function SavedView({
   const [confirming, setConfirming] = useState(false);
 
   const comparison = useMemo(() => (saved ? compareSnapshots(saved.a, saved.b) : null), [saved]);
-  const summary = useMemo(() => (comparison ? buildExecutiveSummary(comparison, saved?.migration ?? null) : null), [comparison, saved]);
 
-  if (!saved || !comparison || !summary) {
+  if (!saved || !comparison) {
     return (
-      <Panel title="المقارنة غير موجودة" icon="history">
+      <Panel title="المقارنات المحفوظة">
         <EmptyState
           icon="history"
           title="لم يتم العثور على هذه المقارنة"
-          description="ربما حُذفت. ارجع إلى قائمة المقارنات المحفوظة."
           action={
             <Button icon="arrow-left" onClick={() => navigate('/saved')}>
               المقارنات المحفوظة
@@ -1162,29 +810,7 @@ function SavedView({
     );
   }
 
-  const liveA = data.snapshots.find((snapshot) => snapshot.id === saved.a.id);
-  const liveB = data.snapshots.find((snapshot) => snapshot.id === saved.b.id);
-  const sameBuckets = (x: MonthlySnapshot | undefined, y: MonthlySnapshot) => Boolean(x) && JSON.stringify(x!.buckets) === JSON.stringify(y.buckets);
-  const liveAvailable = Boolean(liveA && liveB);
-  const changedSince = liveAvailable && (!sameBuckets(liveA, saved.a) || !sameBuckets(liveB, saved.b));
-
-  const doExport = () => {
-    try {
-      const bytes = buildDelinquencyXlsx({
-        comparison,
-        summary,
-        migration: saved.migration,
-        history: [saved.a, saved.b],
-        organization,
-        savedTitle: saved.title,
-        savedNote: saved.note,
-      });
-      downloadBlob(delinquencyFileName(comparison), bytes, XLSX_MIME);
-      notify('تم تنزيل ملف Excel للمقارنة المحفوظة.', 'success');
-    } catch (cause) {
-      notify(errorMessage(cause), 'error');
-    }
-  };
+  const liveAvailable = data.snapshots.some((snapshot) => snapshot.id === saved.a.id) && data.snapshots.some((snapshot) => snapshot.id === saved.b.id);
 
   const doDelete = async () => {
     try {
@@ -1203,7 +829,6 @@ function SavedView({
     <>
       <section className="dq-savedbar" aria-label="المقارنة المحفوظة">
         <div>
-          <span className="dq-savedbar__eyebrow">مقارنة محفوظة · {fmtDateTime(saved.createdAt)}</span>
           <h2>{saved.title}</h2>
           <p>
             {branchLabel(saved.branch)} · {periodLabel(saved.a)} ← {periodLabel(saved.b)}
@@ -1219,20 +844,14 @@ function SavedView({
               عرض البيانات الحالية
             </Button>
           ) : null}
-          <Button variant="primary" icon="download" onClick={doExport}>
+          <Button variant="primary" icon="download" onClick={() => exportReport([saved.a, saved.b], saved.b, saved.a, organization, notify)}>
             تصدير Excel
           </Button>
           <IconButton icon="trash" tone="danger" label="حذف المقارنة" onClick={() => setConfirming(true)} />
         </div>
       </section>
 
-      {changedSince ? (
-        <Callout tone="warning">
-          بيانات أحد الشهرين عُدّلت بعد حفظ هذه المقارنة. المعروض هنا هو النسخة المجمّدة وقت الحفظ؛ اضغط «عرض البيانات الحالية» لرؤية المقارنة بالأرقام المحدَّثة.
-        </Callout>
-      ) : null}
-
-      <ComparisonDashboard comparison={comparison} summary={summary} migration={saved.migration} history={[saved.a, saved.b]} frozen />
+      <ComparisonDashboard comparison={comparison} />
 
       <Modal
         open={confirming}
@@ -1248,7 +867,7 @@ function SavedView({
           </>
         }
       >
-        <p>سيُحذف «{saved.title}» من المقارنات المحفوظة. بيانات الشهور نفسها لا تتأثر.</p>
+        <p>حذف «{saved.title}»؟</p>
       </Modal>
     </>
   );

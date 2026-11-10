@@ -25,8 +25,7 @@ import {
   sortSnapshots,
   validateSnapshotInput,
 } from '../src/delinquency/lib/delinquency';
-import { buildExecutiveSummary, CAVEAT_COLLECTIONS, CAVEAT_MIGRATION, CAVEAT_NET_CHANGE } from '../src/delinquency/lib/delinquencySummary';
-import { OCT, SEP, ZERO, makeSnapshot, oct, sep, toInput } from './delinquency-helpers';
+import { SEP, ZERO, makeSnapshot, oct, sep, toInput } from './delinquency-helpers';
 
 describe('شرائح التأخير', () => {
   it('خمس شرائح بالحدود المطلوبة', () => {
@@ -472,75 +471,5 @@ describe('مقارنة الفروع', () => {
 
   it('لا فروع عند غياب أحد الشهرين', () => {
     expect(compareBranches([sep()], '2026-09', '2026-10')).toEqual([]);
-  });
-});
-
-describe('الملخص التنفيذي', () => {
-  const texts = (summary: ReturnType<typeof buildExecutiveSummary>) =>
-    [summary.headline, ...summary.observations.flatMap((item) => [item.title, item.text])].join('\n');
-
-  it('عند الزيادة الصافية: حالة تدهور وأبرز ملاحظات المخاطر', () => {
-    const summary = buildExecutiveSummary(compareSnapshots(sep(), oct()), null);
-    expect(summary.status).toBe('deteriorated');
-    expect(summary.tone).toBe('danger');
-    expect(summary.headline).toContain('168,250.60');
-    expect(summary.headline).toContain('8.2%');
-    const ids = summary.observations.map((item) => item.id);
-    expect(ids[0]).toBe('total-amount');
-    expect(ids).toEqual(expect.arrayContaining(['total-clients', 'npl', 'early', 'late-shift', 'worst', 'best', 'concentration', 'migration']));
-    const npl = summary.observations.find((item) => item.id === 'npl')!;
-    expect(npl.tone).toBe('danger');
-    expect(npl.text).toContain('125,250.10');
-    // الأخطر أولًا بعد الملاحظة الرئيسية
-    const tones = summary.observations.slice(1).map((item) => item.tone);
-    const rank = { danger: 0, warning: 1, success: 2, info: 3 };
-    expect([...tones].sort((x, y) => rank[x] - rank[y])).toEqual(tones);
-  });
-
-  it('لا يصنّف صافي الانخفاض كتحصيل مؤكد', () => {
-    const summary = buildExecutiveSummary(compareSnapshots(oct(), makeSnapshot('فرع المنيا', 2026, 11, SEP)), null);
-    expect(summary.status).toBe('improved');
-    expect(summary.headline).toContain('انخفاض صافٍ');
-    expect(summary.caveats).toContain(CAVEAT_COLLECTIONS);
-    const body = texts(summary);
-    // كل ذكر للتحصيل يجب أن يكون نفيًا صريحًا
-    for (const sentence of body.split(/[.\n]/).filter((part) => part.includes('تحصيل'))) {
-      expect(sentence).toMatch(/لا يُعد تحصيلًا مؤكدًا/);
-    }
-    expect(body).not.toMatch(/تم تحصيل|حُصّل|المحصَّل|تحصيلات الفرع/);
-  });
-
-  it('بدون قوائم عملاء: لا أرقام ترحيل، مع تنبيه منهجي صريح', () => {
-    const summary = buildExecutiveSummary(compareSnapshots(sep(), oct()));
-    const migration = summary.observations.find((item) => item.id === 'migration')!;
-    expect(migration.tone).toBe('info');
-    expect(migration.title).toBe('حركة العملاء الفعلية غير متاحة');
-    expect(migration.text).not.toMatch(/\d/);
-    expect(summary.caveats).toEqual(expect.arrayContaining([CAVEAT_NET_CHANGE, CAVEAT_MIGRATION]));
-    expect(texts(summary)).not.toMatch(/انتقل(وا)? \d|رُحّل \d/);
-  });
-
-  it('حالة الاستقرار والترتيب غير الزمني وجودة البيانات', () => {
-    const stable = buildExecutiveSummary(compareSnapshots(makeSnapshot('', 2026, 1, SEP), makeSnapshot('', 2026, 2, SEP)));
-    expect(stable.status).toBe('stable');
-    expect(stable.headline).toContain('استقرار');
-
-    const reversed = buildExecutiveSummary(compareSnapshots(oct(), sep()));
-    expect(reversed.observations.some((item) => item.id === 'order')).toBe(true);
-
-    const quality = buildExecutiveSummary(compareSnapshots(makeSnapshot('', 2026, 1, [[5, 0], [0, 0], [0, 0], [0, 0], [0, 0]]), makeSnapshot('', 2026, 2, OCT)));
-    expect(quality.observations.some((item) => item.id === 'data-quality')).toBe(true);
-  });
-
-  it('لا تظهر NaN أو undefined في أي نص حتى مع الأصفار', () => {
-    const cases = [
-      compareSnapshots(makeSnapshot('', 2026, 1, ZERO), makeSnapshot('', 2026, 2, OCT)),
-      compareSnapshots(makeSnapshot('', 2026, 1, SEP), makeSnapshot('', 2026, 2, ZERO)),
-      compareSnapshots(makeSnapshot('', 2026, 1, ZERO), makeSnapshot('', 2026, 2, ZERO)),
-    ];
-    for (const comparison of cases) {
-      const body = texts(buildExecutiveSummary(comparison));
-      expect(body).not.toMatch(/NaN|undefined|Infinity|null/);
-    }
   });
 });
