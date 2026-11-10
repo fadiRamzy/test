@@ -1,17 +1,17 @@
 {
-  "name": "نظام إدارة ضباط المخاطر",
-  "short_name": "ضباط المخاطر",
-  "description": "إدارة الموظفين والمحاضر اليومية وتوقيت الزيارات والملاحظات والإجازات — يعمل محليًا داخل المتصفح",
+  "name": "نظام تحليل ترحيل المتأخرات الشهري",
+  "short_name": "ترحيل المتأخرات",
+  "description": "إدخال بيانات المتأخرات الشهرية حسب خمس شرائح، مقارنة شهرين، تحليل الترحيل، أداء الفروع، وتصدير Excel — يعمل محليًا داخل المتصفح",
   "lang": "ar",
   "dir": "rtl",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#eef1f7",
-  "theme_color": "#0f2a4a",
+  "background_color": "#f1f4f8",
+  "theme_color": "#0f3357",
   "icons": [
     {
-      "src": "./favicon.svg",
+      "src": "./favicon-delinquency.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

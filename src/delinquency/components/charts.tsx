@@ -4,7 +4,7 @@
  */
 
 import { useLayoutEffect, useRef, useState } from 'react';
-import { BUCKETS, fmtCompact, fmtPct, type BucketId } from '../../lib/delinquency';
+import { BUCKETS, fmtCompact, fmtPct, type BucketId } from '../lib/delinquency';
 
 /**
  * عرض الحاوية الفعلي بالبكسل: يُرسم المخطط بمقاسه الحقيقي فتبقى الخطوط مقروءة

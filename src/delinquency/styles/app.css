@@ -1,0 +1,432 @@
+/*
+ * نظام تحليل ترحيل المتأخرات الشهري — الإطار العام وعناصر الواجهة الأساسية.
+ * كل الأصناف تبدأ بـ ‎dq-‎ والنظام لا يعتمد على أي ملف أنماط آخر في المستودع.
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  font-family: 'IBM Plex Sans Arabic', 'Noto Sans Arabic', 'Segoe UI', Tahoma, system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+  color: #17233a;
+  background: #f1f4f8;
+  direction: rtl;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4 { margin: 0; line-height: 1.3; font-weight: 700; }
+h2 { font-size: 16px; }
+h3 { font-size: 14px; }
+p { margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+
+.dq-app {
+  --dq-navy: #0a2540;
+  --dq-navy-2: #0f3357;
+  --dq-blue: #1b5a8a;
+  --dq-ink: #17233a;
+  --dq-muted: #5d6b82;
+  --dq-faint: #8a9cae;
+  --dq-line: #e3e9f1;
+  --dq-line-strong: #cfd9e5;
+  --dq-surface: #ffffff;
+  --dq-soft: #f6f8fb;
+  --dq-up: #b3261e;
+  --dq-up-soft: #fdf1f0;
+  --dq-down: #12714a;
+  --dq-down-soft: #eef9f3;
+  --dq-warn: #8a5a09;
+  --dq-warn-soft: #fff8e8;
+  --dq-info-soft: #eef5fb;
+  --dq-radius: 14px;
+  --dq-shadow: 0 1px 2px rgba(15, 42, 74, 0.05), 0 8px 24px -18px rgba(15, 42, 74, 0.28);
+  /* تدرّج الشرائح الخمس: من الأحدث تأخرًا (أخضر) إلى المتعثر (أحمر) */
+  --dq-b1: #2f9e6f;
+  --dq-b2: #8fb85a;
+  --dq-b3: #e0b040;
+  --dq-b4: #e2864a;
+  --dq-b5: #cf4a3d;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  color: var(--dq-ink);
+}
+
+:where(.dq-app) :is(h1, h2, h3) { color: var(--dq-navy); }
+:where(.dq-app) a { color: var(--dq-blue); text-decoration: none; }
+:where(.dq-app) a:where(:hover) { color: var(--dq-navy); }
+.dq-app :focus-visible { outline: 2px solid var(--dq-blue); outline-offset: 2px; border-radius: 6px; }
+
+.dq-ic { flex: none; stroke: currentColor; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+.dq-visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ------------------------------- الشريط العلوي ---------------------------- */
+
+.dq-topbar { background: linear-gradient(115deg, #071a2d 0%, #0f3357 62%, #14506b 100%); color: #fff; }
+.dq-topbar::after {
+  content: '';
+  display: block;
+  height: 4px;
+  background: linear-gradient(
+    to left,
+    var(--dq-b1) 0 20%,
+    var(--dq-b2) 20% 40%,
+    var(--dq-b3) 40% 60%,
+    var(--dq-b4) 60% 80%,
+    var(--dq-b5) 80% 100%
+  );
+}
+.dq-topbar__inner {
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 13px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.dq-app a.dq-brand { display: flex; align-items: center; gap: 12px; min-width: 0; color: #fff; }
+.dq-app a.dq-brand:hover { color: #fff; }
+.dq-brand__mark { flex: none; }
+.dq-brand__text { display: grid; min-width: 0; line-height: 1.4; }
+.dq-brand__text strong { font-size: 17px; font-weight: 700; letter-spacing: -0.1px; }
+.dq-brand__text small { font-size: 12.5px; color: rgba(255, 255, 255, 0.72); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dq-topbar__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+/* --------------------------------- المحتوى -------------------------------- */
+
+.dq-main { flex: 1; width: 100%; max-width: 1320px; margin: 0 auto; padding: 22px 24px 44px; display: grid; gap: 18px; align-content: start; min-width: 0; }
+
+.dq-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px 28px; flex-wrap: wrap; }
+.dq-hero__text { display: grid; gap: 6px; flex: 1 1 420px; min-width: 0; }
+.dq-hero h1 { font-size: 27px; font-weight: 700; letter-spacing: -0.2px; }
+.dq-hero p { color: var(--dq-muted); font-size: 14.5px; line-height: 1.8; max-width: 74ch; }
+.dq-hero__buckets { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.dq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--dq-line-strong);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--dq-navy);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dq-chip::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--dq-faint); flex: none; }
+.dq-chip--1::before { background: var(--dq-b1); }
+.dq-chip--2::before { background: var(--dq-b2); }
+.dq-chip--3::before { background: var(--dq-b3); }
+.dq-chip--4::before { background: var(--dq-b4); }
+.dq-chip--5::before { background: var(--dq-b5); }
+
+.dq-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 18px;
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 14px 24px 22px;
+  border-top: 1px solid var(--dq-line);
+  color: var(--dq-faint);
+  font-size: 12.5px;
+}
+.dq-app a.dq-footer__link { display: inline-flex; align-items: center; gap: 6px; color: var(--dq-muted); font-weight: 500; }
+.dq-app a.dq-footer__link:hover { color: var(--dq-navy); text-decoration: underline; text-underline-offset: 3px; }
+
+/* --------------------------------- الأزرار -------------------------------- */
+
+.dq-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 8px 16px;
+  border: 1px solid var(--dq-line-strong);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--dq-navy);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+}
+.dq-btn:hover:not(:disabled) { background: var(--dq-soft); border-color: #b4c3d4; box-shadow: 0 6px 16px -12px rgba(15, 42, 74, 0.55); }
+.dq-btn:disabled { opacity: 0.5; cursor: default; }
+.dq-btn--sm { min-height: 32px; padding: 5px 11px; font-size: 12.5px; border-radius: 8px; gap: 6px; }
+.dq-btn--primary { background: var(--dq-navy-2); border-color: var(--dq-navy-2); color: #fff; }
+.dq-btn--primary:hover:not(:disabled) { background: var(--dq-navy); border-color: var(--dq-navy); color: #fff; }
+.dq-btn--ghost { background: transparent; border-color: transparent; }
+.dq-btn--ghost:hover:not(:disabled) { background: var(--dq-info-soft); border-color: transparent; box-shadow: none; }
+.dq-btn--danger { background: #fff; border-color: #e7b9b5; color: var(--dq-up); }
+.dq-btn--danger:hover:not(:disabled) { background: var(--dq-up); border-color: var(--dq-up); color: #fff; }
+
+.dq-iconbtn {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border: 1px solid var(--dq-line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--dq-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.dq-iconbtn:hover:not(:disabled) { background: var(--dq-info-soft); color: var(--dq-navy); border-color: var(--dq-line-strong); }
+.dq-iconbtn--danger:hover:not(:disabled) { background: var(--dq-up-soft); color: var(--dq-up); border-color: #e7b9b5; }
+.dq-iconbtn:disabled { opacity: 0.45; cursor: default; }
+
+/* ---------------------------- الشارات والتنبيهات -------------------------- */
+
+.dq-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.dq-badge--neutral { background: #eef2f7; color: var(--dq-muted); border-color: var(--dq-line); }
+.dq-badge--info { background: var(--dq-info-soft); color: var(--dq-blue); border-color: #d3e3f1; }
+.dq-badge--success { background: var(--dq-down-soft); color: var(--dq-down); border-color: #c9ead9; }
+.dq-badge--warning { background: var(--dq-warn-soft); color: var(--dq-warn); border-color: #f1dfb1; }
+.dq-badge--danger { background: var(--dq-up-soft); color: var(--dq-up); border-color: #f3cfcb; }
+
+.dq-callout {
+  display: block;
+  margin: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--dq-line);
+  border-inline-start-width: 4px;
+  border-radius: 10px;
+  background: var(--dq-soft);
+  color: var(--dq-ink);
+  font-size: 13.5px;
+  line-height: 1.8;
+}
+.dq-callout > strong:first-child { margin-inline-end: 4px; }
+.dq-callout ul { margin: 4px 0 0; padding-inline-start: 18px; }
+.dq-callout--info { background: var(--dq-info-soft); border-color: #cfe0ef; border-inline-start-color: var(--dq-blue); }
+.dq-callout--success { background: var(--dq-down-soft); border-color: #c9ead9; border-inline-start-color: var(--dq-down); }
+.dq-callout--warning { background: var(--dq-warn-soft); border-color: #f1dfb1; border-inline-start-color: #c08a1c; }
+.dq-callout--danger { background: var(--dq-up-soft); border-color: #f3cfcb; border-inline-start-color: var(--dq-up); }
+.dq-callout--neutral { border-inline-start-color: var(--dq-faint); }
+
+.dq-empty { display: grid; justify-items: center; gap: 7px; padding: 30px 18px; text-align: center; }
+.dq-empty__icon { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; background: var(--dq-info-soft); color: var(--dq-blue); margin-bottom: 4px; }
+.dq-empty strong { font-size: 16px; color: var(--dq-navy); }
+.dq-empty p { max-width: 58ch; color: var(--dq-muted); font-size: 13.5px; line-height: 1.8; }
+.dq-empty__action { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 10px; }
+
+.dq-loading { display: grid; gap: 12px; place-items: center; padding: 64px 20px; color: var(--dq-muted); font-size: 13.5px; }
+.dq-loading::before {
+  content: '';
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2.5px solid #d9e7f3;
+  border-top-color: var(--dq-blue);
+  animation: dq-spin 0.8s linear infinite;
+}
+@keyframes dq-spin { to { transform: rotate(360deg); } }
+
+/* --------------------------------- الحقول --------------------------------- */
+
+.dq-field { display: grid; gap: 5px; min-width: 0; align-content: start; }
+.dq-field > label { font-size: 12.5px; font-weight: 600; color: var(--dq-muted); }
+.dq-field__req { color: var(--dq-up); }
+.dq-field__hint { font-size: 12px; color: var(--dq-faint); line-height: 1.6; }
+.dq-field__err { font-size: 12px; font-weight: 600; color: var(--dq-up); line-height: 1.6; }
+
+.dq-input, .dq-select, .dq-textarea {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 11px;
+  border: 1px solid var(--dq-line-strong);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--dq-ink);
+  font-size: 14px;
+  line-height: 1.5;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.dq-input::placeholder, .dq-textarea::placeholder { color: #a9b6c4; }
+.dq-input:hover, .dq-select:hover, .dq-textarea:hover { border-color: #b4c3d4; }
+.dq-input:focus, .dq-select:focus, .dq-textarea:focus { outline: none; border-color: var(--dq-blue); box-shadow: 0 0 0 3px rgba(27, 90, 138, 0.16); }
+.dq-select { cursor: pointer; padding-inline-end: 8px; }
+.dq-textarea { min-height: 96px; resize: vertical; line-height: 1.8; }
+.dq-field--error .dq-input, .dq-field--error .dq-select, .dq-field--error .dq-textarea { border-color: var(--dq-up); }
+
+/* --------------------------------- النوافذ -------------------------------- */
+
+.dq-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(7, 26, 45, 0.52);
+  overflow-y: auto;
+}
+.dq-modal {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 640px;
+  max-height: calc(100vh - 36px);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 30px 70px -20px rgba(7, 26, 45, 0.5);
+  text-align: start;
+}
+.dq-modal--sm { max-width: 470px; }
+.dq-modal--lg { max-width: 940px; }
+.dq-modal__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--dq-line); }
+.dq-modal__head h2 { font-size: 17px; }
+.dq-modal__head p { margin-top: 2px; color: var(--dq-muted); font-size: 12.5px; word-break: break-word; }
+.dq-modal__body { display: grid; gap: 12px; padding: 18px; overflow-y: auto; min-height: 0; }
+.dq-modal__body .dq-input { max-width: none; text-align: start; font-weight: 500; }
+.dq-modal__foot { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; padding: 12px 18px; border-top: 1px solid var(--dq-line); background: var(--dq-soft); border-radius: 0 0 16px 16px; }
+
+/* -------------------------------- الإشعارات ------------------------------- */
+
+.dq-toasts { position: fixed; bottom: 18px; inset-inline-start: 18px; z-index: 70; display: grid; gap: 8px; width: min(430px, calc(100vw - 36px)); pointer-events: none; }
+.dq-toast {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: #0f2a44;
+  color: #fff;
+  font-size: 13.5px;
+  line-height: 1.6;
+  box-shadow: 0 16px 34px -14px rgba(7, 26, 45, 0.6);
+  pointer-events: auto;
+}
+.dq-toast > span { flex: 1; min-width: 0; }
+.dq-toast--success { background: #0f5b3d; }
+.dq-toast--error { background: #9b2219; }
+.dq-toast button { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border: 0; border-radius: 6px; background: rgba(255, 255, 255, 0.14); color: #fff; cursor: pointer; }
+.dq-toast button:hover { background: rgba(255, 255, 255, 0.26); }
+
+/* ------------------------------- شاشة البداية ----------------------------- */
+
+.dq-welcome { display: grid; gap: 6px; }
+.dq-welcome__steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 4px 18px 0; list-style: none; }
+.dq-welcome__steps li { display: flex; gap: 11px; align-items: flex-start; padding: 14px; border: 1px solid var(--dq-line); border-radius: 12px; background: var(--dq-soft); }
+.dq-welcome__icon { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; background: #fff; border: 1px solid var(--dq-line); color: var(--dq-blue); }
+.dq-welcome__steps strong { display: block; font-size: 14px; color: var(--dq-navy); }
+.dq-welcome__steps p { margin-top: 2px; color: var(--dq-muted); font-size: 12.5px; line-height: 1.75; }
+
+.dq-sample {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px dashed #d9b866;
+  border-radius: 12px;
+  background: var(--dq-warn-soft);
+  color: #6a4607;
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.dq-sample > span { flex: 1 1 320px; min-width: 0; }
+
+/* ------------------------- البيانات والنسخ الاحتياطي ---------------------- */
+
+.dq-data { display: grid; gap: 16px; min-width: 0; }
+.dq-data .dq-panel__body { display: grid; gap: 12px; padding: 16px 18px; }
+.dq-data__stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; }
+.dq-data__stats > div { padding: 12px 14px; border: 1px solid var(--dq-line); border-radius: 12px; background: var(--dq-soft); }
+.dq-data__stats dt { color: var(--dq-muted); font-size: 12.5px; font-weight: 600; }
+.dq-data__stats dd { margin: 2px 0 0; color: var(--dq-navy); font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.3; }
+.dq-data__row { display: flex; align-items: flex-end; gap: 10px 12px; flex-wrap: wrap; }
+.dq-data__row .dq-field { flex: 1 1 240px; max-width: 380px; }
+.dq-data .dq-input { max-width: none; text-align: start; font-weight: 500; }
+.dq-data__hint { color: var(--dq-muted); font-size: 12.5px; line-height: 1.7; align-self: center; }
+.dq-data__text { font-size: 14px; line-height: 1.9; color: var(--dq-ink); }
+
+/* --------------------------------- التجاوب -------------------------------- */
+
+@media (max-width: 1000px) {
+  .dq-welcome__steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .dq-topbar__inner { padding: 11px 14px; }
+  .dq-brand__text strong { font-size: 15px; }
+  .dq-brand__text small { font-size: 11.5px; }
+  .dq-topbar__badge { padding: 7px; }
+  .dq-topbar__badge span { display: none; }
+  .dq-main { padding: 16px 12px 36px; gap: 14px; }
+  .dq-hero h1 { font-size: 22px; }
+  .dq-hero p { font-size: 13.5px; }
+  .dq-footer { padding: 12px 14px 20px; }
+  .dq-welcome__steps { grid-template-columns: 1fr; padding-inline: 12px; }
+  .dq-data__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dq-data__row .dq-field { max-width: none; flex-basis: 100%; }
+  .dq-modal__foot .dq-btn { flex: 1 1 auto; }
+  .dq-toasts { bottom: 12px; inset-inline-start: 12px; width: calc(100vw - 24px); }
+}
+
+/* --------------------------------- الطباعة -------------------------------- */
+
+@media print {
+  body { background: #fff; }
+  .dq-print-hide { display: none !important; }
+  .dq-main { max-width: none; padding: 0; }
+  .dq-hero__buckets { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dq-app *, .dq-app *::before, .dq-app *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

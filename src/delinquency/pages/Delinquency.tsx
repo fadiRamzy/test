@@ -1,21 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useApp } from '../state/store';
-import { navigate } from '../state/router';
+import { navigate, type Section } from '../router';
 import {
   Badge,
   Button,
   Callout,
   EmptyState,
   Field,
+  Icon,
   IconButton,
   Input,
   Modal,
-  PageHeader,
   Select,
   Textarea,
-} from '../components/ui';
-import { Icon } from '../components/Icon';
-import { ComparisonDashboard, Delta, Panel } from '../components/delinquency/Dashboard';
+  type IconName,
+} from '../ui/kit';
+import { useNotify, type Notify } from '../ui/toast';
+import { ComparisonDashboard, Delta, Panel } from '../components/Dashboard';
 import {
   deleteSavedComparison,
   deleteSnapshot,
@@ -62,13 +62,15 @@ import {
 import { buildExecutiveSummary } from '../lib/delinquencySummary';
 import { buildDelinquencyXlsx, delinquencyFileName } from '../lib/delinquencyExcel';
 import { XLSX_MIME } from '../lib/xlsx';
-import { downloadBlob, readTextFile } from '../lib/utils';
-import { fmtDateTime } from '../lib/format';
+import { downloadBlob, fmtDateTime, monthsNoun, readTextFile } from '../lib/utils';
+import { errorMessage } from '../lib/errors';
+import { isSampleSnapshot, loadSampleData, removeSampleData } from '../lib/sampleData';
+import { DataTab } from './DataTab';
 import '../styles/delinquency.css';
 
 /* --------------------------------- البيانات ------------------------------- */
 
-interface DelinquencyData {
+export interface DelinquencyData {
   snapshots: MonthlySnapshot[];
   lists: Map<string, ClientListRecord>;
   saved: SavedComparison[];
@@ -99,14 +101,6 @@ function useDelinquencyData() {
 
   return { data, loading, error, reload };
 }
-
-const errorMessage = (cause: unknown): string => {
-  if (cause && typeof cause === 'object' && 'errors' in cause) {
-    const first = Object.values((cause as { errors: Record<string, string> }).errors)[0];
-    if (first) return first;
-  }
-  return cause instanceof Error ? cause.message : 'حدث خطأ غير متوقع.';
-};
 
 /* ------------------------------ مسودة الإدخال ----------------------------- */
 
@@ -163,18 +157,31 @@ const isDraftPristine = (draft: EntryDraft): boolean =>
 
 /* ---------------------------------- الصفحة -------------------------------- */
 
-type Section = 'dashboard' | 'entry' | 'saved';
-
-const TABS: Array<{ id: Section; path: string; label: string; icon: 'chart' | 'edit' | 'history' }> = [
-  { id: 'dashboard', path: '/delinquency', label: 'لوحة المقارنة', icon: 'chart' },
-  { id: 'entry', path: '/delinquency/entry', label: 'إدخال البيانات الشهرية', icon: 'edit' },
-  { id: 'saved', path: '/delinquency/saved', label: 'المقارنات المحفوظة', icon: 'history' },
+const TABS: Array<{ id: Section; path: string; label: string; icon: IconName }> = [
+  { id: 'dashboard', path: '/', label: 'لوحة المقارنة', icon: 'chart' },
+  { id: 'entry', path: '/entry', label: 'إدخال البيانات الشهرية', icon: 'edit' },
+  { id: 'saved', path: '/saved', label: 'المقارنات المحفوظة', icon: 'history' },
+  { id: 'data', path: '/data', label: 'البيانات والنسخ الاحتياطي', icon: 'database' },
 ];
 
-export function DelinquencyPage({ section, itemId }: { section?: string; itemId?: string }) {
-  const { settings, notify } = useApp();
+/**
+ * مساحة العمل الكاملة للنظام: التبويبات الأربعة ومحتواها.
+ * تُعرض داخل إطار التطبيق (App) وهي الصفحة الافتراضية للموقع.
+ */
+export function DelinquencyPage({
+  section,
+  itemId,
+  organization,
+  onOrganizationChange,
+}: {
+  section: Section;
+  itemId?: string;
+  organization: string;
+  onOrganizationChange: (name: string) => void;
+}) {
+  const notify = useNotify();
   const { data, loading, error, reload } = useDelinquencyData();
-  const active: Section = section === 'entry' ? 'entry' : section === 'saved' ? 'saved' : 'dashboard';
+  const active = section;
 
   const [selection, setSelection] = useState<{ branch: string | null; aId: string | null; bId: string | null }>({
     branch: null,
@@ -188,20 +195,14 @@ export function DelinquencyPage({ section, itemId }: { section?: string; itemId?
     (snapshot: MonthlySnapshot, openClients = false) => {
       setDraft(draftFromSnapshot(snapshot, data.lists.get(snapshot.id)?.clients));
       setClientsOpen(openClients || Boolean(data.lists.get(snapshot.id)?.clients.length));
-      navigate('/delinquency/entry');
+      navigate('/entry');
     },
     [data.lists],
   );
 
   return (
     <div className="dq">
-      <PageHeader
-        eyebrow="تحليل المحفظة"
-        title="تحليل ترحيل المتأخرات الشهري"
-        description="أدخل عدد العملاء المتأخرين ومبلغ المتأخرات لكل شريحة شهريًا، ثم قارن أي شهرين لمعرفة صافي التغير وأداء الفرع."
-      />
-
-      <nav className="dq-tabs print-hide" aria-label="أقسام تحليل المتأخرات">
+      <nav className="dq-tabs dq-print-hide" aria-label="أقسام تحليل المتأخرات">
         {TABS.map((tab) => (
           <a key={tab.id} href={`#${tab.path}`} className={`dq-tab${active === tab.id ? ' is-active' : ''}`} aria-current={active === tab.id ? 'page' : undefined}>
             <Icon name={tab.icon} size={15} />
@@ -214,7 +215,7 @@ export function DelinquencyPage({ section, itemId }: { section?: string; itemId?
       {error ? <Callout tone="danger">{error}</Callout> : null}
 
       {loading ? (
-        <div className="loading">جارٍ فتح بيانات المتأخرات…</div>
+        <div className="dq-loading">جارٍ فتح بيانات المتأخرات…</div>
       ) : active === 'entry' ? (
         <EntryTab
           data={data}
@@ -224,7 +225,6 @@ export function DelinquencyPage({ section, itemId }: { section?: string; itemId?
           setClientsOpen={setClientsOpen}
           reload={reload}
           notify={notify}
-          knownBranches={settings.branches}
           onEdit={editSnapshot}
         />
       ) : active === 'saved' ? (
@@ -232,23 +232,25 @@ export function DelinquencyPage({ section, itemId }: { section?: string; itemId?
           <SavedView
             data={data}
             id={itemId}
-            organization={settings.organizationName}
+            organization={organization}
             reload={reload}
             notify={notify}
             onOpenLive={(saved) => {
               setSelection({ branch: saved.branch, aId: saved.a.id, bId: saved.b.id });
-              navigate('/delinquency');
+              navigate('/');
             }}
           />
         ) : (
           <SavedList data={data} reload={reload} notify={notify} />
         )
+      ) : active === 'data' ? (
+        <DataTab data={data} reload={reload} notify={notify} organization={organization} onOrganizationChange={onOrganizationChange} />
       ) : (
         <LiveTab
           data={data}
           selection={selection}
           setSelection={setSelection}
-          organization={settings.organizationName}
+          organization={organization}
           reload={reload}
           notify={notify}
           onEdit={editSnapshot}
@@ -258,7 +260,94 @@ export function DelinquencyPage({ section, itemId }: { section?: string; itemId?
   );
 }
 
-type Notify = ReturnType<typeof useApp>['notify'];
+
+/* ------------------------------- شاشة البداية ----------------------------- */
+
+const STEPS: Array<{ icon: IconName; title: string; text: string }> = [
+  { icon: 'edit', title: '1. أدخل بيانات كل شهر', text: 'عدد العملاء المتأخرين ومبلغ المتأخرات لكل شريحة من الشرائح الخمس، لكل فرع.' },
+  { icon: 'swap', title: '2. قارن أي شهرين', text: 'صافي التغير في العملاء والمبالغ لكل شريحة، وحركة الترحيل الفعلية إذا أضفت قوائم العملاء.' },
+  { icon: 'building', title: '3. تابع أداء الفروع', text: 'لوحة أداء لكل فرع: أفضل وأسوأ شريحة، نسبة المتعثر (NPL)، واتجاه آخر الأشهر.' },
+  { icon: 'download', title: '4. صدّر إلى Excel', text: 'ملف واحد بكل الجداول والمعادلات الحيّة لمراجعتها أو مشاركتها.' },
+];
+
+function Welcome({ reload, notify }: { reload: () => Promise<void>; notify: Notify }) {
+  const [loadingSample, setLoadingSample] = useState(false);
+
+  const trySample = async () => {
+    setLoadingSample(true);
+    try {
+      await loadSampleData();
+      await reload();
+      notify('تم تحميل بيانات تجريبية لفرعين — يمكنك حذفها في أي وقت.', 'success');
+    } catch (cause) {
+      notify(errorMessage(cause), 'error');
+    } finally {
+      setLoadingSample(false);
+    }
+  };
+
+  return (
+    <Panel title="ابدأ بإدخال بيانات شهرين" icon="chart" subtitle="لا توجد بيانات بعد — النظام جاهز لاستقبال أول شهر.">
+      <div className="dq-welcome" data-testid="dq-welcome">
+        <ol className="dq-welcome__steps">
+          {STEPS.map((step) => (
+            <li key={step.title}>
+              <span className="dq-welcome__icon" aria-hidden="true">
+                <Icon name={step.icon} size={17} />
+              </span>
+              <div>
+                <strong>{step.title}</strong>
+                <p>{step.text}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <EmptyState
+          icon="chart"
+          title="لا توجد بيانات شهرية بعد"
+          description="أدخل عدد العملاء المتأخرين ومبلغ المتأخرات لكل شريحة لشهرين على الأقل (مثل سبتمبر وأكتوبر) لتظهر المقارنة تلقائيًا."
+          action={
+            <>
+              <Button variant="primary" icon="plus" onClick={() => navigate('/entry')}>
+                إدخال بيانات شهر
+              </Button>
+              <Button icon="sparkles" onClick={trySample} disabled={loadingSample}>
+                جرّب ببيانات تجريبية
+              </Button>
+            </>
+          }
+        />
+      </div>
+    </Panel>
+  );
+}
+
+function SampleBanner({ count, reload, notify }: { count: number; reload: () => Promise<void>; notify: Notify }) {
+  const [busy, setBusy] = useState(false);
+  if (!count) return null;
+  const remove = async () => {
+    setBusy(true);
+    try {
+      const removed = await removeSampleData();
+      await reload();
+      notify(`تم حذف البيانات التجريبية (${monthsNoun(removed)}). بياناتك الأخرى لم تتغير.`, 'success');
+    } catch (cause) {
+      notify(errorMessage(cause), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="dq-sample dq-print-hide" data-testid="dq-sample-banner">
+      <span>
+        <strong>بيانات تجريبية ({monthsNoun(count)}):</strong> للاستكشاف فقط — ليست بيانات فرع حقيقي. احذفها قبل الاعتماد على أي نتيجة.
+      </span>
+      <Button size="sm" icon="trash" onClick={remove} disabled={busy}>
+        حذف البيانات التجريبية
+      </Button>
+    </div>
+  );
+}
 
 /* ------------------------------ تبويب المقارنة ---------------------------- */
 
@@ -328,20 +417,7 @@ function LiveTab({
   );
 
   if (!snapshots.length) {
-    return (
-      <Panel title="ابدأ بإدخال بيانات شهرين" icon="chart">
-        <EmptyState
-          icon="chart"
-          title="لا توجد بيانات شهرية بعد"
-          description="أدخل عدد العملاء المتأخرين ومبلغ المتأخرات لكل شريحة لشهرين على الأقل (مثل سبتمبر وأكتوبر) لتظهر المقارنة تلقائيًا."
-          action={
-            <Button variant="primary" icon="plus" onClick={() => navigate('/delinquency/entry')}>
-              إدخال بيانات شهر
-            </Button>
-          }
-        />
-      </Panel>
-    );
+    return <Welcome reload={reload} notify={notify} />;
   }
 
   const pick = (patch: Partial<{ branch: string | null; aId: string | null; bId: string | null }>) =>
@@ -384,7 +460,8 @@ function LiveTab({
 
   return (
     <>
-      <section className="dq-selector print-hide" aria-label="اختيار الشهرين">
+      <SampleBanner count={snapshots.filter(isSampleSnapshot).length} reload={reload} notify={notify} />
+      <section className="dq-selector dq-print-hide" aria-label="اختيار الشهرين">
         {branches.length > 1 ? (
           <Field label="الفرع" htmlFor="dq-select-branch">
             <Select id="dq-select-branch" value={branch} onChange={(event) => setSelection({ branch: event.target.value, aId: null, bId: null })}>
@@ -441,7 +518,7 @@ function LiveTab({
             title={`يوجد شهر واحد فقط لـ ${branchLabel(branch)}`}
             description="المقارنة تحتاج بيانات شهرين. أضف بيانات شهر آخر لنفس الفرع."
             action={
-              <Button variant="primary" icon="plus" onClick={() => navigate('/delinquency/entry')}>
+              <Button variant="primary" icon="plus" onClick={() => navigate('/entry')}>
                 إدخال بيانات شهر
               </Button>
             }
@@ -511,7 +588,6 @@ function EntryTab({
   setClientsOpen,
   reload,
   notify,
-  knownBranches,
   onEdit,
 }: {
   data: DelinquencyData;
@@ -521,7 +597,6 @@ function EntryTab({
   setClientsOpen: (open: boolean) => void;
   reload: () => Promise<void>;
   notify: Notify;
-  knownBranches: string[];
   onEdit: (snapshot: MonthlySnapshot, openClients?: boolean) => void;
 }) {
   const { snapshots, lists } = data;
@@ -532,10 +607,10 @@ function EntryTab({
 
   const branchOptions = useMemo(
     () =>
-      Array.from(new Set([...knownBranches, ...snapshots.map((snapshot) => snapshot.branch)].map(normalizeBranch).filter(Boolean))).sort((x, y) =>
+      Array.from(new Set(snapshots.map((snapshot) => normalizeBranch(snapshot.branch)).filter(Boolean))).sort((x, y) =>
         x.localeCompare(y, 'ar'),
       ),
-    [knownBranches, snapshots],
+    [snapshots],
   );
 
   const validation = useMemo(
@@ -830,7 +905,7 @@ function EntryTab({
                 ref={fileRef}
                 type="file"
                 accept=".csv,.txt,.tsv,text/csv,text/plain"
-                className="visually-hidden"
+                className="dq-visually-hidden"
                 aria-label="اختيار ملف قائمة العملاء"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
@@ -878,7 +953,7 @@ function EntryTab({
         </div>
       </Panel>
 
-      <Panel title="الشهور المحفوظة" subtitle={`${fmtInt(snapshots.length)} سجل شهري`} icon="database" id="dq-months">
+      <Panel title="الشهور المحفوظة" subtitle={monthsNoun(snapshots.length)} icon="database" id="dq-months">
         {rows.length ? (
           <div className="dq-tablewrap">
             <table className="dq-table" data-testid="dq-months-table">
@@ -891,7 +966,7 @@ function EntryTab({
                   <th>حصة NPL</th>
                   <th>قائمة العملاء</th>
                   <th>آخر تعديل</th>
-                  <th className="print-hide">إجراءات</th>
+                  <th className="dq-print-hide">إجراءات</th>
                 </tr>
               </thead>
               <tbody>
@@ -907,7 +982,7 @@ function EntryTab({
                       <td><span className="dq-num" dir="ltr">{fmtPct(sharePct(snapshot.buckets.npl.amount, totals.amount))}</span></td>
                       <td>{list?.clients.length ? <Badge tone="success">{fmtInt(list.clients.length)} عميل</Badge> : <span className="dq-muted">—</span>}</td>
                       <td>{fmtDateTime(snapshot.updatedAt)}</td>
-                      <td className="print-hide">
+                      <td className="dq-print-hide">
                         <span className="dq-rowactions">
                           <IconButton icon="edit" label={`تعديل ${periodLabel(snapshot)} — ${branchLabel(snapshot.branch)}`} onClick={() => onEdit(snapshot)} />
                           <IconButton icon="trash" tone="danger" label={`حذف ${periodLabel(snapshot)} — ${branchLabel(snapshot.branch)}`} onClick={() => setDeleting(snapshot)} />
@@ -980,7 +1055,7 @@ function SavedList({ data, reload, notify }: { data: DelinquencyData; reload: ()
                   <th>صافي تغير المبلغ</th>
                   <th>الترحيل</th>
                   <th>تاريخ الحفظ</th>
-                  <th className="print-hide">إجراءات</th>
+                  <th className="dq-print-hide">إجراءات</th>
                 </tr>
               </thead>
               <tbody>
@@ -989,7 +1064,7 @@ function SavedList({ data, reload, notify }: { data: DelinquencyData; reload: ()
                   return (
                     <tr key={saved.id}>
                       <th scope="row" className="dq-table__bucket">
-                        <a href={`#/delinquency/saved/${saved.id}`} className="dq-link">
+                        <a href={`#/saved/${saved.id}`} className="dq-link">
                           {saved.title}
                         </a>
                         {saved.note ? <small className="dq-subtext">{saved.note}</small> : null}
@@ -1001,9 +1076,9 @@ function SavedList({ data, reload, notify }: { data: DelinquencyData; reload: ()
                       <td><Delta value={comparison.totals.amountDelta} format={fmtSignedMoney} strong /></td>
                       <td>{saved.migration ? <Badge tone="success">فعلي</Badge> : <Badge tone="neutral">صافي تغير</Badge>}</td>
                       <td>{fmtDateTime(saved.createdAt)}</td>
-                      <td className="print-hide">
+                      <td className="dq-print-hide">
                         <span className="dq-rowactions">
-                          <Button size="sm" icon="chart" onClick={() => navigate(`/delinquency/saved/${saved.id}`)}>
+                          <Button size="sm" icon="chart" onClick={() => navigate(`/saved/${saved.id}`)}>
                             فتح
                           </Button>
                           <IconButton icon="trash" tone="danger" label={`حذف ${saved.title}`} onClick={() => setDeleting(saved)} />
@@ -1021,7 +1096,7 @@ function SavedList({ data, reload, notify }: { data: DelinquencyData; reload: ()
             title="لا توجد مقارنات محفوظة"
             description="من «لوحة المقارنة» اختر شهرين ثم اضغط «حفظ المقارنة» للرجوع إليها لاحقًا."
             action={
-              <Button icon="chart" onClick={() => navigate('/delinquency')}>
+              <Button icon="chart" onClick={() => navigate('/')}>
                 الانتقال إلى لوحة المقارنة
               </Button>
             }
@@ -1078,7 +1153,7 @@ function SavedView({
           title="لم يتم العثور على هذه المقارنة"
           description="ربما حُذفت. ارجع إلى قائمة المقارنات المحفوظة."
           action={
-            <Button icon="arrow-left" onClick={() => navigate('/delinquency/saved')}>
+            <Button icon="arrow-left" onClick={() => navigate('/saved')}>
               المقارنات المحفوظة
             </Button>
           }
@@ -1116,7 +1191,7 @@ function SavedView({
       await deleteSavedComparison(saved.id);
       await reload();
       notify('تم حذف المقارنة المحفوظة.', 'success');
-      navigate('/delinquency/saved');
+      navigate('/saved');
     } catch (cause) {
       notify(errorMessage(cause), 'error');
     } finally {
@@ -1135,8 +1210,8 @@ function SavedView({
             {saved.note ? ` — ${saved.note}` : ''}
           </p>
         </div>
-        <div className="dq-savedbar__actions print-hide">
-          <Button icon="arrow-left" onClick={() => navigate('/delinquency/saved')}>
+        <div className="dq-savedbar__actions dq-print-hide">
+          <Button icon="arrow-left" onClick={() => navigate('/saved')}>
             رجوع
           </Button>
           {liveAvailable ? (

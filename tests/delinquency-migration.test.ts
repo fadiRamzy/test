@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUCKET_IDS, compareSnapshots, emptyBuckets } from '../src/lib/delinquency';
+import { BUCKET_IDS, compareSnapshots, emptyBuckets } from '../src/delinquency/lib/delinquency';
 import {
   FROM_STATES,
   TO_STATES,
@@ -10,8 +10,8 @@ import {
   reconcileWithList,
   serializeClientList,
   type ClientRecord,
-} from '../src/lib/delinquencyMigration';
-import { buildExecutiveSummary } from '../src/lib/delinquencySummary';
+} from '../src/delinquency/lib/delinquencyMigration';
+import { buildExecutiveSummary } from '../src/delinquency/lib/delinquencySummary';
 import { LIST_A, LIST_B, oct, sep } from './delinquency-helpers';
 
 const listA = () => parseClientList(LIST_A).clients;

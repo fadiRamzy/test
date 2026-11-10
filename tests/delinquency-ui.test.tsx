@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { App } from '../src/App';
-import { AppProvider } from '../src/state/store';
-import { clearStore, useDatabase } from '../src/db/database';
+import { APP_TITLE, App } from '../src/delinquency/App';
 import {
   clearDelinquencyData,
   getClientList,
@@ -12,27 +10,23 @@ import {
   saveClientList,
   saveSnapshot,
   useDelinquencyDatabase,
-} from '../src/db/delinquencyDb';
-import { STORE_NAMES } from '../src/db/schema';
-import { parseClientList } from '../src/lib/delinquencyMigration';
-import { SHEET_COMPARISON, SHEET_MIGRATION, SHEET_SUMMARY } from '../src/lib/delinquencyExcel';
+} from '../src/delinquency/db/delinquencyDb';
+import { BACKUP_APP_ID } from '../src/delinquency/lib/backupFile';
+import { SAMPLE_BRANCH_A, SAMPLE_BRANCH_B } from '../src/delinquency/lib/sampleData';
+import { parseClientList } from '../src/delinquency/lib/delinquencyMigration';
+import { SHEET_COMPARISON, SHEET_MIGRATION, SHEET_SUMMARY } from '../src/delinquency/lib/delinquencyExcel';
 import { LIST_A, LIST_B, OCT, SEP, openWorkbook, toInput, type BucketPairs } from './delinquency-helpers';
 
 beforeEach(async () => {
   const suffix = Math.random().toString(36).slice(2);
-  await useDatabase(`test-dq-ui-main-${suffix}`);
-  for (const store of STORE_NAMES) await clearStore(store);
   await useDelinquencyDatabase(`test-dq-ui-${suffix}`);
   await clearDelinquencyData();
+  window.localStorage.clear();
   window.location.hash = '#/';
 });
 
 function renderApp() {
-  return render(
-    <AppProvider>
-      <App />
-    </AppProvider>,
-  );
+  return render(<App />);
 }
 
 async function openPage(hash: string) {
@@ -104,38 +98,179 @@ function captureDownloads() {
   };
 }
 
-describe('التنقل والحالة الفارغة', () => {
-  it('الرابط في القائمة الجانبية يفتح الصفحة ويبقى نشطًا في التبويبات الفرعية', async () => {
+describe('التطبيق الافتراضي: نظام تحليل ترحيل المتأخرات', () => {
+  it('يفتح مباشرة على النظام الجديد بهويته وشرائحه الخمس — لا على نظام الموظفين', async () => {
     const user = userEvent.setup();
     renderApp();
-    const link = await screen.findByRole('link', { name: /ترحيل المتأخرات الشهري/ });
-    await user.click(link);
     expect(await screen.findByRole('heading', { level: 1, name: 'تحليل ترحيل المتأخرات الشهري' })).toBeInTheDocument();
-    expect(window.location.hash).toBe('#/delinquency');
-    expect(link).toHaveAttribute('aria-current', 'page');
+    expect(APP_TITLE).toBe('نظام تحليل ترحيل المتأخرات الشهري');
+    expect(document.title).toBe(APP_TITLE);
+    expect(document.querySelector('[data-app="delinquency-migration-analysis"]')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /نظام تحليل ترحيل المتأخرات الشهري — الصفحة الرئيسية/ })).toHaveAttribute('href', '#/');
+
+    const buckets = within(screen.getByRole('list', { name: 'شرائح التأخير الخمس' })).getAllByRole('listitem');
+    expect(buckets.map((item) => text(item))).toEqual(['1–30 يوم', '31–60 يوم', '61–90 يوم', '91–120 يوم', 'أكثر من 120 يوم (NPL)']);
+
+    // لا أثر لواجهة نظام الموظفين القديم داخل التطبيق الافتراضي
+    expect(screen.queryByRole('navigation', { name: 'التنقل الرئيسي' })).not.toBeInTheDocument();
+    expect(document.querySelector('.app-sidebar')).not.toBeInTheDocument();
+    for (const oldLabel of ['الموظفون', 'المحاضر اليومية', 'توقيت الزيارات', 'الإجازات والأذونات']) {
+      expect(screen.queryByRole('link', { name: oldLabel })).not.toBeInTheDocument();
+    }
+    // النظام السابق محفوظ في صفحة مستقلة يُشار إليها من التذييل فقط
+    expect(screen.getByRole('link', { name: /النظام السابق/ })).toHaveAttribute('href', './employees.html');
 
     expect(await screen.findByText('لا توجد بيانات شهرية بعد')).toBeInTheDocument();
+    expect(within(screen.getByTestId('dq-welcome')).getAllByRole('listitem')).toHaveLength(4);
     await user.click(screen.getByRole('button', { name: 'إدخال بيانات شهر' }));
-    await waitFor(() => expect(window.location.hash).toBe('#/delinquency/entry'));
+    await waitFor(() => expect(window.location.hash).toBe('#/entry'));
     expect(byId('dq-clients-d1_30')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /ترحيل المتأخرات الشهري/ })).toHaveAttribute('aria-current', 'page');
-
-    // بقية النظام ما زال يعمل
-    await user.click(screen.getByRole('link', { name: /الموظفون/ }));
-    await waitFor(() => expect(window.location.hash).toBe('#/employees'));
-    expect(screen.queryByRole('heading', { level: 1, name: 'تحليل ترحيل المتأخرات الشهري' })).not.toBeInTheDocument();
   });
 
-  it('ثلاثة تبويبات فقط: المقارنة، الإدخال، المحفوظات', async () => {
-    await openPage('#/delinquency');
-    const tabs = within(screen.getByRole('navigation', { name: 'أقسام تحليل المتأخرات' })).getAllByRole('link');
-    expect(tabs.map((tab) => text(tab))).toEqual(['لوحة المقارنة', 'إدخال البيانات الشهرية', 'المقارنات المحفوظة']);
+  it('أربعة تبويبات: المقارنة، الإدخال، المحفوظات، البيانات', async () => {
+    const user = userEvent.setup();
+    await openPage('#/');
+    const nav = screen.getByRole('navigation', { name: 'أقسام تحليل المتأخرات' });
+    const tabs = within(nav).getAllByRole('link');
+    expect(tabs.map((tab) => text(tab))).toEqual(['لوحة المقارنة', 'إدخال البيانات الشهرية', 'المقارنات المحفوظة', 'البيانات والنسخ الاحتياطي']);
+    expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual(['#/', '#/entry', '#/saved', '#/data']);
     expect(tabs[0]).toHaveAttribute('aria-current', 'page');
+
+    await user.click(tabs[3]);
+    await waitFor(() => expect(within(nav).getByRole('link', { name: 'البيانات والنسخ الاحتياطي' })).toHaveAttribute('aria-current', 'page'));
+    expect(await screen.findByTestId('dq-data-stats')).toBeInTheDocument();
+    await user.click(within(nav).getByRole('link', { name: 'المقارنات المحفوظة' }));
+    expect(await screen.findByText('لا توجد مقارنات محفوظة')).toBeInTheDocument();
   });
 
+  it('الروابط القديمة (#/delinquency/…) ومسارات نظام الموظفين تفتح النظام الجديد', async () => {
+    await openPage('#/delinquency/entry'); // رابط قديم
+    expect(byId('dq-clients-d1_30')).toBeInTheDocument();
+    cleanup();
+
+    await openPage('#/employees'); // مسار من النظام السابق
+    expect(await screen.findByText('لا توجد بيانات شهرية بعد')).toBeInTheDocument();
+    expect(within(screen.getByRole('navigation', { name: 'أقسام تحليل المتأخرات' })).getByRole('link', { name: 'لوحة المقارنة' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+  });
+
+  it('البيانات التجريبية: تُحمَّل بطلب صريح، تُعلَّم بوضوح، وتُحذف وحدها', async () => {
+    const user = userEvent.setup();
+    await openPage('#/');
+    await user.click(await screen.findByRole('button', { name: 'جرّب ببيانات تجريبية' }));
+
+    const dashboard = await screen.findByTestId('dq-dashboard');
+    expect(text(dashboard)).not.toMatch(/NaN|Infinity|undefined/);
+    expect(text(screen.getByTestId('dq-sample-banner'))).toContain('بيانات تجريبية (5 أشهر):');
+    const branchSelect = byId<HTMLSelectElement>('dq-select-branch');
+    expect(Array.from(branchSelect.options).map((option) => option.value)).toEqual([SAMPLE_BRANCH_A, SAMPLE_BRANCH_B]);
+    // الفرع (ب) له قوائم عملاء ⇒ مصفوفة ترحيل فعلية
+    expect(branchSelect.value).toBe(SAMPLE_BRANCH_B);
+    expect(screen.getByTestId('dq-matrix-actual')).toBeInTheDocument();
+    await user.selectOptions(branchSelect, SAMPLE_BRANCH_A);
+    expect(await screen.findByTestId('dq-matrix-aggregate')).toBeInTheDocument();
+
+    await user.click(within(screen.getByTestId('dq-sample-banner')).getByRole('button', { name: 'حذف البيانات التجريبية' }));
+    expect(await screen.findByText('لا توجد بيانات شهرية بعد')).toBeInTheDocument();
+    expect(await listSnapshots()).toEqual([]);
+  });
+});
+
+describe('البيانات والنسخ الاحتياطي', () => {
+  const statsText = () => text(screen.getByTestId('dq-data-stats'));
+
+  it('ينزّل نسخة احتياطية ثم يستعيدها بعد حذف كل البيانات', async () => {
+    await seedMinya();
+    await seedAsyutWithLists();
+    const downloads = captureDownloads();
+    try {
+      const user = userEvent.setup();
+      await openPage('#/data');
+      await screen.findByTestId('dq-data-stats');
+      expect(statsText()).toBe('أشهر مُدخلة5فروع2قوائم عملاء2مقارنات محفوظة0');
+
+      await user.click(screen.getByRole('button', { name: 'تنزيل نسخة احتياطية' }));
+      expect(await screen.findByText('تم تنزيل النسخة الاحتياطية.')).toBeInTheDocument();
+      expect(downloads.names[0]).toMatch(/^نسخة-احتياطية-تحليل-المتأخرات_\d{4}-\d{2}-\d{2}_\d{4}\.json$/);
+      const backupText = new TextDecoder().decode(await readBlob(downloads.blobs[0]));
+      const backup = JSON.parse(backupText);
+      expect(backup.app).toBe(BACKUP_APP_ID);
+      expect(backup.counts).toEqual({ months: 5, clientLists: 2, comparisons: 0 });
+
+      // حذف كل البيانات يتطلب تأكيدًا
+      await user.click(screen.getByRole('button', { name: 'حذف كل البيانات…' }));
+      const confirm = await screen.findByRole('dialog', { name: 'حذف كل بيانات النظام' });
+      await user.click(within(confirm).getByRole('button', { name: 'إلغاء' }));
+      expect(await listSnapshots()).toHaveLength(5);
+      await user.click(screen.getByRole('button', { name: 'حذف كل البيانات…' }));
+      await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'نعم، احذف كل البيانات' }));
+      await waitFor(async () => expect(await listSnapshots()).toEqual([]));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'تنزيل نسخة احتياطية' })).toBeDisabled());
+
+      // ملف غريب يُرفض برسالة ولا يغيّر شيئًا
+      const fileInput = byId<HTMLInputElement>('dq-restore-file');
+      await user.upload(fileInput, new File([JSON.stringify({ employees: [] })], 'other.json', { type: 'application/json' }));
+      expect(await screen.findByText('هذا الملف ليس نسخة احتياطية لنظام تحليل ترحيل المتأخرات.')).toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      // الاستعادة: فحص ثم تأكيد
+      await user.upload(fileInput, new File([backupText], 'backup.json', { type: 'application/json' }));
+      const restore = await screen.findByRole('dialog', { name: 'تأكيد دمج البيانات' });
+      expect(text(restore)).toContain('محتوى الملف: 5 أشهر، قائمتا عملاء، لا مقارنات محفوظة');
+      expect(await listSnapshots()).toEqual([]);
+      await user.click(within(restore).getByRole('button', { name: 'دمج مع البيانات الحالية' }));
+      await waitFor(async () => expect(await listSnapshots()).toHaveLength(5));
+      expect((await getClientList('2026-10|فرع أسيوط'))?.clients).toHaveLength(6);
+      await waitFor(() => expect(screen.queryByText('هذا الملف ليس نسخة احتياطية لنظام تحليل ترحيل المتأخرات.')).not.toBeInTheDocument());
+    } finally {
+      downloads.restore();
+    }
+  });
+
+  it('وضع الاستبدال يحذف ما ليس في الملف بعد تأكيد صريح', async () => {
+    await seedMinya();
+    const user = userEvent.setup();
+    await openPage('#/data');
+    await screen.findByTestId('dq-data-stats');
+    const file = {
+      app: BACKUP_APP_ID,
+      formatVersion: 1,
+      exportedAt: '2026-11-01T08:00:00.000Z',
+      organization: '',
+      data: { months: [(await listSnapshots())[2]], clientLists: [], comparisons: [] },
+    };
+    await user.selectOptions(byId('dq-restore-mode'), 'replace');
+    await user.upload(byId<HTMLInputElement>('dq-restore-file'), new File([JSON.stringify(file)], 'one-month.json', { type: 'application/json' }));
+    const dialog = await screen.findByRole('dialog', { name: 'تأكيد استبدال البيانات' });
+    expect(text(dialog)).toContain('سيُحذف كل ما هو مخزَّن حاليًا');
+    await user.click(within(dialog).getByRole('button', { name: 'استبدال البيانات الحالية' }));
+    await waitFor(async () => expect((await listSnapshots()).map((row) => row.id)).toEqual(['2026-10|فرع المنيا']));
+  });
+
+  it('اسم الجهة يُحفظ ويظهر في رأس الصفحة ويبقى بعد إعادة الفتح', async () => {
+    const user = userEvent.setup();
+    await openPage('#/data');
+    await screen.findByTestId('dq-data-stats');
+    const save = screen.getByRole('button', { name: 'حفظ الاسم' });
+    expect(save).toBeDisabled();
+    await user.type(byId('dq-organization'), 'إدارة المخاطر — قطاع الصعيد');
+    await user.click(save);
+    expect(await screen.findByText('تم حفظ اسم الجهة.')).toBeInTheDocument();
+    const brand = () => text(screen.getByRole('link', { name: /الصفحة الرئيسية/ }));
+    expect(brand()).toContain('إدارة المخاطر — قطاع الصعيد');
+
+    cleanup();
+    await openPage('#/');
+    expect(brand()).toContain('إدارة المخاطر — قطاع الصعيد');
+  });
+});
+
+describe('حالات اللوحة الخاصة', () => {
   it('شهر واحد فقط: يطلب إدخال شهر آخر', async () => {
     await saveSnapshot(toInput('', 2026, 9, SEP));
-    await openPage('#/delinquency');
+    await openPage('#/');
     expect(await screen.findByText('يوجد شهر واحد فقط لـ الفرع الرئيسي')).toBeInTheDocument();
     expect(screen.queryByTestId('dq-dashboard')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'حفظ المقارنة' })).toBeDisabled();
@@ -146,7 +281,7 @@ describe('التنقل والحالة الفارغة', () => {
 describe('إدخال البيانات الشهرية', () => {
   it('خمس شرائح، لكل شريحة حقلان فقط، والإجمالي يتحدث أثناء الكتابة', async () => {
     const user = userEvent.setup();
-    await openPage('#/delinquency/entry');
+    await openPage('#/entry');
     await waitFor(() => expect(byId('dq-clients-d1_30')).toBeInTheDocument());
 
     const table = document.querySelector('.dq-entry-table') as HTMLElement;
@@ -170,7 +305,7 @@ describe('إدخال البيانات الشهرية', () => {
 
   it('يحفظ الشهر ويظهر في جدول الشهور ثم يجهّز الشهر التالي لنفس الفرع', async () => {
     const user = userEvent.setup();
-    await openPage('#/delinquency/entry');
+    await openPage('#/entry');
     await waitFor(() => expect(byId('dq-month')).toBeInTheDocument());
 
     await user.selectOptions(byId('dq-month'), '9');
@@ -204,7 +339,7 @@ describe('إدخال البيانات الشهرية', () => {
 
   it('يرفض القيم غير الصالحة ويعرض الخطأ بجوار الحقل دون حفظ', async () => {
     const user = userEvent.setup();
-    await openPage('#/delinquency/entry');
+    await openPage('#/entry');
     await waitFor(() => expect(byId('dq-clients-d1_30')).toBeInTheDocument());
     await fill(user, 'dq-clients-d1_30', '-3');
     await fill(user, 'dq-amount-d31_60', 'abc');
@@ -220,7 +355,7 @@ describe('إدخال البيانات الشهرية', () => {
   it('لا يكتب فوق شهر محفوظ: يعرض تنبيهًا ويحمّل السجل للتعديل', async () => {
     await saveSnapshot(toInput('', 2026, 9, SEP));
     const user = userEvent.setup();
-    await openPage('#/delinquency/entry');
+    await openPage('#/entry');
     await waitFor(() => expect(byId('dq-month')).toBeInTheDocument());
     await user.selectOptions(byId('dq-month'), '9');
     await fill(user, 'dq-year', '2026');
@@ -243,7 +378,7 @@ describe('إدخال البيانات الشهرية', () => {
 
   it('قائمة العملاء الاختيارية: أخطاؤها تمنع الحفظ، وتعبئة الشرائح منها تعمل', async () => {
     const user = userEvent.setup();
-    await openPage('#/delinquency/entry');
+    await openPage('#/entry');
     await waitFor(() => expect(byId('dq-month')).toBeInTheDocument());
     await user.selectOptions(byId('dq-month'), '9');
     await fill(user, 'dq-year', '2026');
@@ -280,7 +415,7 @@ describe('إدخال البيانات الشهرية', () => {
     await saveSnapshot(toInput('', 2026, 9, SEP));
     await saveSnapshot(toInput('', 2026, 10, OCT));
     const user = userEvent.setup();
-    await openPage('#/delinquency/entry');
+    await openPage('#/entry');
     await user.click(await screen.findByRole('button', { name: 'حذف سبتمبر 2026 — الفرع الرئيسي' }));
     const dialog = await screen.findByRole('dialog');
     expect(text(dialog)).toContain('المقارنات المحفوظة سابقًا لا تتأثر');
@@ -293,7 +428,7 @@ describe('إدخال البيانات الشهرية', () => {
 describe('لوحة المقارنة', () => {
   it('تقارن آخر شهرين تلقائيًا وتعرض المؤشرات والجدول وأداء الفرع', async () => {
     await seedMinya();
-    await openPage('#/delinquency');
+    await openPage('#/');
     await screen.findByTestId('dq-dashboard');
 
     expect(byId<HTMLSelectElement>('dq-select-a').value).toBe('2026-09|فرع المنيا');
@@ -343,7 +478,7 @@ describe('لوحة المقارنة', () => {
 
   it('لا تدّعي تحصيلًا ولا تختلق ترحيلًا من البيانات الإجمالية', async () => {
     await seedMinya();
-    await openPage('#/delinquency');
+    await openPage('#/');
     const dashboard = await screen.findByTestId('dq-dashboard');
 
     expect(screen.queryByTestId('dq-matrix-actual')).not.toBeInTheDocument();
@@ -367,7 +502,7 @@ describe('لوحة المقارنة', () => {
   it('تغيير الشهرين والتبديل بينهما يعيد الحساب', async () => {
     await seedMinya();
     const user = userEvent.setup();
-    await openPage('#/delinquency');
+    await openPage('#/');
     await screen.findByTestId('dq-dashboard');
 
     await user.selectOptions(byId('dq-select-a'), '2026-08|فرع المنيا');
@@ -388,7 +523,7 @@ describe('لوحة المقارنة', () => {
 
   it('مع قوائم العملاء تظهر مصفوفة الترحيل الفعلية', async () => {
     await seedAsyutWithLists();
-    await openPage('#/delinquency');
+    await openPage('#/');
     await screen.findByTestId('dq-dashboard');
 
     expect(screen.queryByTestId('dq-matrix-aggregate')).not.toBeInTheDocument();
@@ -424,7 +559,7 @@ describe('لوحة المقارنة', () => {
     await seedMinya();
     await seedAsyutWithLists();
     const user = userEvent.setup();
-    await openPage('#/delinquency');
+    await openPage('#/');
     await screen.findByTestId('dq-dashboard');
 
     const branchSelect = byId<HTMLSelectElement>('dq-select-branch');
@@ -448,7 +583,7 @@ describe('لوحة المقارنة', () => {
   it('أساس صفري: تظهر «جديد» بدل نسبة غير معرّفة', async () => {
     await saveSnapshot(toInput('', 2026, 1, [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]]));
     await saveSnapshot(toInput('', 2026, 2, [[5, 1000], [0, 0], [0, 0], [0, 0], [2, 500]]));
-    await openPage('#/delinquency');
+    await openPage('#/');
     const dashboard = await screen.findByTestId('dq-dashboard');
     expect(text(screen.getByTestId('dq-total-row'))).toContain('+1,500.00');
     expect(text(screen.getByTestId('dq-total-row'))).toContain('جديد');
@@ -462,7 +597,7 @@ describe('تصدير Excel من الواجهة', () => {
     const downloads = captureDownloads();
     try {
       const user = userEvent.setup();
-      await openPage('#/delinquency');
+      await openPage('#/');
       await screen.findByTestId('dq-dashboard');
       await user.click(screen.getByRole('button', { name: 'تصدير Excel' }));
       expect(await screen.findByText('تم تنزيل ملف Excel بكل الحسابات.')).toBeInTheDocument();
@@ -487,7 +622,7 @@ describe('حفظ المقارنات والرجوع إليها', () => {
   it('يحفظ المقارنة ويفتحها لاحقًا كنسخة مجمّدة حتى بعد تعديل بيانات الشهر', async () => {
     await seedMinya();
     const user = userEvent.setup();
-    await openPage('#/delinquency');
+    await openPage('#/');
     await screen.findByTestId('dq-dashboard');
 
     await user.click(screen.getByRole('button', { name: 'حفظ المقارنة' }));
@@ -512,7 +647,7 @@ describe('حفظ المقارنات والرجوع إليها', () => {
 
     await user.click(within(saved).getByRole('button', { name: 'فتح' }));
     await screen.findByTestId('dq-dashboard');
-    expect(window.location.hash).toMatch(/^#\/delinquency\/saved\/.+/);
+    expect(window.location.hash).toMatch(/^#\/saved\/.+/);
     expect(screen.getByRole('heading', { level: 2, name: 'مراجعة أكتوبر' })).toBeInTheDocument();
     expect(text(screen.getByTestId('dq-total-row'))).toContain('+168,250.60');
     expect(text(screen.getByTestId('dq-kpi-amount'))).toContain('2,218,251.35');
@@ -521,7 +656,7 @@ describe('حفظ المقارنات والرجوع إليها', () => {
   it('يعرض تنبيهًا عند اختلاف البيانات الحالية عن النسخة المحفوظة ويتيح حذفها', async () => {
     await seedMinya();
     const user = userEvent.setup();
-    await openPage('#/delinquency');
+    await openPage('#/');
     await screen.findByTestId('dq-dashboard');
     await user.click(screen.getByRole('button', { name: 'حفظ المقارنة' }));
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'حفظ' }));
@@ -530,27 +665,27 @@ describe('حفظ المقارنات والرجوع إليها', () => {
     await saveSnapshot(toInput('فرع المنيا', 2026, 10, SEP));
     cleanup();
 
-    await openPage(`#/delinquency/saved/${saved.id}`);
+    await openPage(`#/saved/${saved.id}`);
     await screen.findByTestId('dq-dashboard');
     expect(screen.getByText(/عُدّلت بعد حفظ هذه المقارنة/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'عرض البيانات الحالية' }));
-    await waitFor(() => expect(window.location.hash).toBe('#/delinquency'));
+    await waitFor(() => expect(window.location.hash).toBe('#/'));
     await waitFor(() => expect(text(screen.getByTestId('dq-total-row'))).toContain('0.00'));
     expect(text(screen.getByTestId('dq-kpi-status'))).toContain('لا تغير');
 
-    window.location.hash = `#/delinquency/saved/${saved.id}`;
+    window.location.hash = `#/saved/${saved.id}`;
     await user.click(await screen.findByRole('button', { name: 'حذف المقارنة' }));
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'حذف' }));
     await waitFor(async () => expect(await listSavedComparisons()).toEqual([]));
-    await waitFor(() => expect(window.location.hash).toBe('#/delinquency/saved'));
+    await waitFor(() => expect(window.location.hash).toBe('#/saved'));
     expect(await screen.findByText('لا توجد مقارنات محفوظة')).toBeInTheDocument();
     // بيانات الشهور لم تُمس
     expect(await listSnapshots()).toHaveLength(3);
   });
 
   it('رابط مقارنة محذوفة يعرض رسالة واضحة', async () => {
-    await openPage('#/delinquency/saved/dqc_missing');
+    await openPage('#/saved/dqc_missing');
     expect(await screen.findByText('لم يتم العثور على هذه المقارنة')).toBeInTheDocument();
   });
 });

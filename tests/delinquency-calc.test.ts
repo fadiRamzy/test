@@ -24,8 +24,8 @@ import {
   snapshotTotals,
   sortSnapshots,
   validateSnapshotInput,
-} from '../src/lib/delinquency';
-import { buildExecutiveSummary, CAVEAT_COLLECTIONS, CAVEAT_MIGRATION, CAVEAT_NET_CHANGE } from '../src/lib/delinquencySummary';
+} from '../src/delinquency/lib/delinquency';
+import { buildExecutiveSummary, CAVEAT_COLLECTIONS, CAVEAT_MIGRATION, CAVEAT_NET_CHANGE } from '../src/delinquency/lib/delinquencySummary';
 import { OCT, SEP, ZERO, makeSnapshot, oct, sep, toInput } from './delinquency-helpers';
 
 describe('شرائح التأخير', () => {

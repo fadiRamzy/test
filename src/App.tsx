@@ -10,7 +10,6 @@ import { VisitTimingsPage } from './pages/VisitTimings';
 import { UnifiedLeavesPage } from './pages/UnifiedLeaves';
 import { NotesPage } from './pages/Notes';
 import { AttendanceDelaysPage } from './pages/AttendanceDelays';
-import { DelinquencyPage } from './pages/Delinquency';
 
 export function App() {
   const { fatalError, toasts, dismissToast } = useApp();
@@ -57,7 +56,6 @@ function Router({ route }: { route: ReturnType<typeof useRoute> }) {
   if (first === 'attendance-delays') return <AttendanceDelaysPage />;
   if (first === 'minutes') return <MinutesPage />;
   if (first === 'reports') return <ReportsPage />;
-  if (first === 'delinquency') return <DelinquencyPage section={second} itemId={route.segments[2]} />;
 
   return <EmployeesPage />;
 }
