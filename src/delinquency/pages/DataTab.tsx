@@ -5,7 +5,7 @@
 import { useRef, useState } from 'react';
 import { Button, Modal } from '../ui/kit';
 import type { Notify } from '../ui/toast';
-import { requestPersistentStorage, restoreDelinquencyData } from '../db/delinquencyDb';
+import { restoreDelinquencyData } from '../db/delinquencyDb';
 import { backupFileName, createBackupFile, parseBackupFile, type ParsedBackup } from '../lib/backupFile';
 import { errorMessage } from '../lib/errors';
 import { comparisonsNoun, downloadBlob, monthsNoun, readTextFile } from '../lib/utils';
@@ -63,7 +63,6 @@ export function DataTab({
     run(async () => {
       const counts = await restoreDelinquencyData(backup.data, 'restore');
       if (backup.organization) onOrganizationChange(backup.organization);
-      void requestPersistentStorage();
       setPending(null);
       await reload();
       notify(`تمت الاستعادة: ${monthsNoun(counts.months)}، ${comparisonsNoun(counts.comparisons)}.`, 'success');

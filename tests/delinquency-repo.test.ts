@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DELINQUENCY_DB_NAME,
+  LEGACY_ORGANIZATION_KEY,
   clearDelinquencyData,
-  closeDelinquencyDatabase,
   delinquencyCounts,
   deleteSavedComparison,
   deleteSnapshot,
@@ -12,11 +13,12 @@ import {
   listClientLists,
   listSavedComparisons,
   listSnapshots,
+  removeStoredData,
   restoreDelinquencyData,
   saveClientList,
   saveComparison,
   saveSnapshot,
-  useDelinquencyDatabase,
+  saveSnapshotsBatch,
   validateDelinquencyBackup,
 } from '../src/delinquency/db/delinquencyDb';
 import { BACKUP_APP_ID, backupFileName, createBackupFile, parseBackupFile } from '../src/delinquency/lib/backupFile';
@@ -24,9 +26,9 @@ import { compareSnapshots } from '../src/delinquency/lib/delinquency';
 import { LIST_A, LIST_B, OCT, SEP, ZERO, clientsOf, toInput } from './delinquency-helpers';
 
 beforeEach(async () => {
-  const suffix = Math.random().toString(36).slice(2);
-  await useDelinquencyDatabase(`test-dq-${suffix}`);
   await clearDelinquencyData();
+  window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 const errorsOf = async (promise: Promise<unknown>): Promise<Record<string, string>> => {
@@ -337,8 +339,8 @@ describe('الاستعادة من نسخة احتياطية (زر «رفع نس�
     expect(parsed.organization).toBe('إدارة المخاطر');
     expect(parsed.data).toEqual(before);
 
-    // متصفح جديد = قاعدة بيانات فارغة
-    await useDelinquencyDatabase(`test-dq-fresh-${Math.random().toString(36).slice(2)}`);
+    // صفحة جديدة = بيانات فارغة
+    await clearDelinquencyData();
     expect(await delinquencyCounts()).toEqual({ months: 0, clientLists: 0, comparisons: 0 });
 
     expect(await restoreDelinquencyData(parsed.data, 'restore')).toEqual({ months: 3, clientLists: 2, comparisons: 1 });
@@ -424,19 +426,87 @@ describe('الاستعادة من نسخة احتياطية (زر «رفع نس�
   });
 });
 
-describe('بقاء البيانات', () => {
-  it('البيانات تبقى بعد إغلاق قاعدة البيانات وإعادة فتحها', async () => {
-    const name = `test-dq-persist-${Math.random().toString(36).slice(2)}`;
-    await useDelinquencyDatabase(name);
+/** أسماء قواعد IndexedDB الموجودة في «المتصفح» */
+const databaseNames = async (): Promise<string[]> => (await indexedDB.databases()).map((db) => db.name ?? '');
+
+/** ينشئ قاعدة بالاسم الذي كانت الإصدارات السابقة تحفظ فيه وبها سجل واحد */
+const createLegacyDatabase = (): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const request = indexedDB.open(DELINQUENCY_DB_NAME, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('months', { keyPath: 'id' });
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction('months', 'readwrite');
+      tx.objectStore('months').put({ id: '2026-09|فرع المنيا', branch: 'فرع المنيا', year: 2026, month: 9 });
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
+    };
+  });
+
+describe('البيانات في ذاكرة الصفحة فقط', () => {
+  it('لا يُكتب أي شيء في IndexedDB أو localStorage أو sessionStorage مهما كانت العملية', async () => {
+    const openSpy = vi.spyOn(indexedDB, 'open');
+    const localSet = vi.spyOn(Storage.prototype, 'setItem');
+
     const a = await saveSnapshot(toInput('فرع المنيا', 2026, 9, SEP));
     const b = await saveSnapshot(toInput('فرع المنيا', 2026, 10, OCT));
+    await saveSnapshotsBatch([toInput('فرع أسيوط', 2026, 10, OCT)]);
+    await saveClientList(a.id, clientsOf(LIST_A));
     await saveComparison({ title: 'محفوظة', a, b });
-    const before = await exportDelinquencyData();
+    await saveSnapshot(toInput('فرع المنيا', 2026, 11, OCT), { editingId: b.id, overwrite: true });
+    const backup = JSON.parse(JSON.stringify(await createBackupFile('إدارة المخاطر')));
+    await restoreDelinquencyData(backup.data, 'restore');
+    await restoreDelinquencyData(backup.data, 'merge');
+    await restoreDelinquencyData(backup.data, 'replace');
+    await deleteSnapshot(a.id);
+    expect(await delinquencyCounts()).toEqual({ months: 2, clientLists: 0, comparisons: 1 });
 
-    await closeDelinquencyDatabase();
-    await useDelinquencyDatabase(name);
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(localSet).not.toHaveBeenCalled();
+    expect(await databaseNames()).toEqual([]);
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+  });
 
-    expect(await exportDelinquencyData()).toEqual(before);
-    expect((await listSnapshots()).map((row) => row.id)).toEqual([a.id, b.id]);
+  it('تحديث الصفحة (إعادة تحميل الوحدة) يبدأ ببيانات فارغة تمامًا', async () => {
+    const a = await saveSnapshot(toInput('فرع المنيا', 2026, 9, SEP));
+    const b = await saveSnapshot(toInput('فرع المنيا', 2026, 10, OCT));
+    await saveClientList(a.id, clientsOf(LIST_A));
+    await saveComparison({ title: 'محفوظة', a, b });
+    expect(await delinquencyCounts()).toEqual({ months: 2, clientLists: 1, comparisons: 1 });
+
+    vi.resetModules();
+    const reloaded = await import('../src/delinquency/db/delinquencyDb');
+    expect(await reloaded.delinquencyCounts()).toEqual({ months: 0, clientLists: 0, comparisons: 0 });
+    expect(await reloaded.listSnapshots()).toEqual([]);
+    expect(await reloaded.listClientLists()).toEqual([]);
+    expect(await reloaded.listSavedComparisons()).toEqual([]);
+    expect(await reloaded.exportDelinquencyData()).toEqual({ months: [], clientLists: [], comparisons: [] });
+  });
+
+  it('ما يُقرأ من الذاكرة نسخة مستقلة: تعديله لا يغيّر البيانات', async () => {
+    const saved = await saveSnapshot(toInput('فرع المنيا', 2026, 9, SEP));
+    saved.buckets.d1_30.clients = 999;
+    const read = await getSnapshot(saved.id);
+    expect(read?.buckets.d1_30.clients).toBe(SEP[0][0]);
+    read!.buckets.d1_30.clients = 777;
+    (await listSnapshots())[0].notes = 'تغيير خارجي';
+    expect((await getSnapshot(saved.id))?.buckets.d1_30.clients).toBe(SEP[0][0]);
+    expect((await getSnapshot(saved.id))?.notes).toBe('');
+  });
+
+  it('فتح الصفحة يحذف ما حفظته الإصدارات السابقة على الجهاز', async () => {
+    await createLegacyDatabase();
+    window.localStorage.setItem(LEGACY_ORGANIZATION_KEY, 'إدارة المخاطر');
+    expect(await databaseNames()).toEqual([DELINQUENCY_DB_NAME]);
+
+    removeStoredData();
+    await vi.waitFor(async () => expect(await databaseNames()).toEqual([]));
+    expect(window.localStorage.getItem(LEGACY_ORGANIZATION_KEY)).toBeNull();
+    expect(window.localStorage.length).toBe(0);
   });
 });

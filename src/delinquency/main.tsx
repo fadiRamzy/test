@@ -11,9 +11,13 @@ import '@fontsource/ibm-plex-sans-arabic/700.css';
 import './styles/app.css';
 import './styles/delinquency.css';
 import { App } from './App';
+import { removeStoredData } from './db/delinquencyDb';
 
 document.documentElement.lang = 'ar';
 document.documentElement.dir = 'rtl';
+
+// البيانات في ذاكرة الصفحة فقط — يُحذف ما حفظته الإصدارات السابقة على الجهاز
+removeStoredData();
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

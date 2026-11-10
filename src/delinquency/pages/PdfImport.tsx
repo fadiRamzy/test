@@ -7,7 +7,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Badge, Button, Callout, Field, Icon, Input, Modal, Select, type Tone } from '../ui/kit';
 import type { Notify } from '../ui/toast';
 import { Panel } from '../components/Dashboard';
-import { ExistingSnapshotsError, requestPersistentStorage, saveSnapshotsBatch } from '../db/delinquencyDb';
+import { ExistingSnapshotsError, saveSnapshotsBatch } from '../db/delinquencyDb';
 import {
   BUCKETS,
   BUCKET_IDS,
@@ -186,7 +186,6 @@ export function PdfImport({
         notes: `مستورد من PDF: ${state.fileName}${edited.has(input.branch as OfficeName) ? ' (مع تعديل يدوي)' : ''}`.slice(0, 300),
       }));
       const saved = await saveSnapshotsBatch(inputs, { overwrite });
-      void requestPersistentStorage();
       await reload();
       setConfirming(false);
       setState(null);

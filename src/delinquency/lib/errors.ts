@@ -10,21 +10,6 @@ export class ValidationError extends Error {
   }
 }
 
-export class StorageUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'StorageUnavailableError';
-  }
-}
-
-export function isIndexedDbAvailable(): boolean {
-  try {
-    return typeof indexedDB !== 'undefined' && indexedDB !== null;
-  } catch {
-    return false;
-  }
-}
-
 /** أول رسالة مفهومة من أي خطأ */
 export function errorMessage(cause: unknown): string {
   if (cause && typeof cause === 'object' && 'errors' in cause) {

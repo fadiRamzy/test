@@ -5,7 +5,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { DelinquencyPage } from './pages/Delinquency';
 import { useRoute } from './router';
-import { loadOrganization, saveOrganization } from './settings';
 import { ToastProvider } from './ui/toast';
 
 export const APP_TITLE = 'نظام تحليل ترحيل المتأخرات الشهري';
@@ -24,10 +23,9 @@ function BrandMark() {
 
 export function App() {
   const route = useRoute();
-  const [organization, setOrganization] = useState(() => loadOrganization());
+  const [organization, setOrganization] = useState('');
 
   const changeOrganization = useCallback((name: string) => {
-    saveOrganization(name);
     setOrganization(name.trim());
   }, []);
 
