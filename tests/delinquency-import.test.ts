@@ -11,7 +11,6 @@ import {
   saveClientList,
   saveSnapshot,
   saveSnapshotsBatch,
-  useDelinquencyDatabase,
 } from '../src/delinquency/db/delinquencyDb';
 import { BUCKET_IDS, snapshotId, sortSnapshots } from '../src/delinquency/lib/delinquency';
 import { REPORT_HEADERS, SHEET_REPORT, buildDelinquencyReport, buildDelinquencyXlsx } from '../src/delinquency/lib/delinquencyExcel';
@@ -24,7 +23,6 @@ import { LIST_A, OCT, SEP, clientsOf, makeSnapshot, openWorkbook, toInput } from
 import { PAR_TITLE, amountOf, buildFixtureItems, findCells, fixtureOffices, fmtAmount, fmtCount } from './par-fixture';
 
 beforeEach(async () => {
-  await useDelinquencyDatabase(`test-dq-import-${Math.random().toString(36).slice(2)}`);
   await clearDelinquencyData();
 });
 

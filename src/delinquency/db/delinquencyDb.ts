@@ -1,12 +1,11 @@
 /**
- * تخزين بيانات «تحليل ترحيل المتأخرات» في قاعدة IndexedDB مستقلة.
+ * بيانات «تحليل ترحيل المتأخرات» في ذاكرة الصفحة فقط.
  *
- * القاعدة منفصلة عمدًا عن قاعدة النظام الرئيسية (risk-officer-suite) حتى لا تتغير
- * بنية أو إصدار قاعدة البيانات القائمة ولا تتأثر أي سجلات موجودة.
- * كل البيانات محلية في متصفح المستخدم فقط.
+ * لا يُكتب أي شيء على الجهاز (لا IndexedDB ولا localStorage ولا sessionStorage):
+ * تحديث الصفحة أو إغلاقها يبدأ ببيانات فارغة.
  */
 
-import { isIndexedDbAvailable, StorageUnavailableError, ValidationError } from '../lib/errors';
+import { ValidationError } from '../lib/errors';
 import { nowIso, uid } from '../lib/utils';
 import {
   branchLabel,
@@ -21,8 +20,10 @@ import {
   type SnapshotInput,
 } from '../lib/delinquency';
 
+/** اسم قاعدة IndexedDB التي كانت الإصدارات السابقة تحفظ فيها — تُحذف عند فتح الصفحة */
 export const DELINQUENCY_DB_NAME = 'risk-delinquency-analysis';
-export const DELINQUENCY_DB_VERSION = 1;
+/** مفتاح localStorage الذي كانت الإصدارات السابقة تحفظ فيه اسم الجهة */
+export const LEGACY_ORGANIZATION_KEY = 'dq.organization';
 
 export const DELINQUENCY_STORES = ['months', 'clientLists', 'comparisons'] as const;
 export type DelinquencyStore = (typeof DELINQUENCY_STORES)[number];
@@ -60,139 +61,72 @@ export interface SavedComparison {
   updatedAt: string;
 }
 
-/* ------------------------------- الاتصال ---------------------------------- */
+/* ------------------------------- الذاكرة ---------------------------------- */
 
-let dbPromise: Promise<IDBDatabase> | null = null;
-let currentName = DELINQUENCY_DB_NAME;
+type Row = { id: string };
+type Stores = Record<DelinquencyStore, Map<string, Row>>;
 
-function req<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error('فشلت عملية على قاعدة بيانات المتأخرات'));
-  });
-}
+const emptyStores = (): Stores => ({ months: new Map(), clientLists: new Map(), comparisons: new Map() });
+
+let memory: Stores = emptyStores();
 
 /**
- * معاملة كتابة «صارمة»: لا تُعلَن مكتملة إلا بعد كتابة البيانات على القرص،
- * حتى لا تضيع آخر عملية حفظ إذا أُغلق المتصفح أو انقطع التيار مباشرة بعدها.
+ * نسخة مستقلة من سجل حتى لا يتشارك المخزن ومن يقرأ منه الكائن نفسه.
+ * السجلات بيانات بسيطة فقط؛ ما لا يمكن نسخه (دالة مثلًا) يُرفض ولا يُخزَّن.
  */
-function writeTx(db: IDBDatabase, stores: DelinquencyStore | DelinquencyStore[]): IDBTransaction {
-  try {
-    return db.transaction(stores, 'readwrite', { durability: 'strict' });
-  } catch {
-    return db.transaction(stores, 'readwrite');
+function copy<T>(value: T): T {
+  if (typeof value === 'function' || typeof value === 'symbol') throw new Error('سجل لا يمكن حفظه.');
+  if (Array.isArray(value)) return value.map((item) => copy(item)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) out[key] = copy(item);
+    return out as T;
   }
+  return value;
 }
 
-function done(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error ?? new Error('فشلت الكتابة'));
-    tx.onabort = () => reject(tx.error ?? new Error('أُلغيت الكتابة'));
-  });
-}
-
-function open(name = currentName): Promise<IDBDatabase> {
-  if (!isIndexedDbAvailable()) {
-    return Promise.reject(new StorageUnavailableError('التخزين المحلي (IndexedDB) غير متاح في هذا المتصفح.'));
-  }
-  if (dbPromise && name === currentName) return dbPromise;
-  currentName = name;
-  dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(name, DELINQUENCY_DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      for (const store of DELINQUENCY_STORES) {
-        if (!db.objectStoreNames.contains(store)) db.createObjectStore(store, { keyPath: 'id' });
-      }
-    };
-    request.onsuccess = () => {
-      const db = request.result;
-      // إغلاق مهذّب إذا طلب تبويب آخر ترقية القاعدة
-      db.onversionchange = () => {
-        db.close();
-        dbPromise = null;
-      };
-      resolve(db);
-    };
-    request.onerror = () => {
-      dbPromise = null;
-      reject(request.error ?? new Error('تعذّر فتح قاعدة بيانات المتأخرات'));
-    };
-    request.onblocked = () => reject(new Error('قاعدة بيانات المتأخرات مفتوحة في تبويب آخر — أغلق التبويبات الأخرى.'));
-  });
-  return dbPromise;
-}
-
-const getDb = (): Promise<IDBDatabase> => dbPromise ?? open();
-
-/** استخدام قاعدة بيانات مخصصة (للاختبارات) */
-export async function useDelinquencyDatabase(name: string): Promise<void> {
-  const existing = await dbPromise?.catch(() => null);
-  existing?.close();
-  dbPromise = null;
-  await open(name);
-}
-
-export async function closeDelinquencyDatabase(): Promise<void> {
-  const db = await dbPromise?.catch(() => null);
-  db?.close();
-  dbPromise = null;
-}
+/** كل سجلات قسم مرتبة بالمعرّف */
+const rowsOf = <T>(map: Map<string, Row>): T[] =>
+  Array.from(map.keys())
+    .sort()
+    .map((id) => copy(map.get(id)) as unknown as T);
 
 async function getAll<T>(store: DelinquencyStore): Promise<T[]> {
-  const db = await getDb();
-  return req(db.transaction(store, 'readonly').objectStore(store).getAll() as IDBRequest<T[]>);
+  return rowsOf<T>(memory[store]);
 }
 
 async function getOne<T>(store: DelinquencyStore, id: string): Promise<T | undefined> {
-  const db = await getDb();
-  return req(db.transaction(store, 'readonly').objectStore(store).get(id) as IDBRequest<T | undefined>);
+  const row = memory[store].get(id);
+  return row ? (copy(row) as unknown as T) : undefined;
 }
 
 async function put<T extends { id: string }>(store: DelinquencyStore, record: T): Promise<T> {
-  const db = await getDb();
-  const tx = writeTx(db, store);
-  tx.objectStore(store).put(record);
-  await done(tx);
+  memory[store].set(record.id, copy(record));
   return record;
 }
 
 async function remove(store: DelinquencyStore, id: string): Promise<void> {
-  const db = await getDb();
-  const tx = writeTx(db, store);
-  tx.objectStore(store).delete(id);
-  await done(tx);
-}
-
-async function replaceAll<T extends { id: string }>(store: DelinquencyStore, records: T[]): Promise<void> {
-  const db = await getDb();
-  const tx = writeTx(db, store);
-  const objectStore = tx.objectStore(store);
-  objectStore.clear();
-  records.forEach((record) => objectStore.put(record));
-  await done(tx);
+  memory[store].delete(id);
 }
 
 export async function clearDelinquencyData(): Promise<void> {
-  for (const store of DELINQUENCY_STORES) await replaceAll(store, []);
+  memory = emptyStores();
 }
 
 /**
- * يطلب من المتصفح اعتبار تخزين الموقع «دائمًا» حتى لا يُحذف تلقائيًا عند امتلاء القرص.
- * الطلب صامت في أغلب المتصفحات، وفشله لا يؤثر على الحفظ العادي في IndexedDB.
+ * يحذف ما حفظته الإصدارات السابقة على الجهاز (قاعدة IndexedDB واسم الجهة في localStorage).
+ * يُستدعى مرة عند فتح الصفحة؛ فشله لا يؤثر على عمل النظام.
  */
-let persistRequested = false;
-export async function requestPersistentStorage(): Promise<boolean> {
-  if (persistRequested) return true;
+export function removeStoredData(): void {
   try {
-    const storage = typeof navigator !== 'undefined' ? navigator.storage : undefined;
-    if (!storage?.persist) return false;
-    persistRequested = true;
-    if (storage.persisted && (await storage.persisted())) return true;
-    return await storage.persist();
+    if (typeof indexedDB !== 'undefined' && indexedDB) indexedDB.deleteDatabase(DELINQUENCY_DB_NAME);
   } catch {
-    return false;
+    /* IndexedDB غير متاح */
+  }
+  try {
+    window.localStorage.removeItem(LEGACY_ORGANIZATION_KEY);
+  } catch {
+    /* localStorage غير متاح */
   }
 }
 
@@ -288,7 +222,7 @@ export class ExistingSnapshotsError extends ValidationError {
 }
 
 /**
- * يحفظ عدة سجلات شهرية (مثل مكاتب شهر واحد مستوردة من PDF) في معاملة واحدة:
+ * يحفظ عدة سجلات شهرية (مثل مكاتب شهر واحد مستوردة من PDF) دفعة واحدة:
  * إما أن تُحفظ كلها أو لا يتغير شيء. لا يستبدل سجلًا محفوظًا إلا مع overwrite = true.
  * قوائم العملاء المحفوظة للسجلات المستبدلة لا تُمس.
  */
@@ -304,42 +238,22 @@ export async function saveSnapshotsBatch(inputs: SnapshotInput[], options: SaveB
   const repeated = values.find((_, index) => ids.indexOf(ids[index]) !== index);
   if (repeated) throw new ValidationError({ branch: `الفرع «${branchLabel(repeated.branch)}» مكرر في البيانات المطلوب حفظها.` });
 
-  const db = await getDb();
-  const tx = writeTx(db, 'months');
-  const finished = done(tx);
-  const records: MonthlySnapshot[] = [];
-  try {
-    const store = tx.objectStore('months');
-    const stored = await req(store.getAll() as IDBRequest<MonthlySnapshot[]>);
-    const current = new Map(stored.map((row) => [row.id, row]));
-    const existing = ids.map((id) => current.get(id)).filter((row): row is MonthlySnapshot => Boolean(row));
-    if (existing.length && !options.overwrite) throw new ExistingSnapshotsError(existing.map(hydrateSnapshot));
+  const current = memory.months as Map<string, MonthlySnapshot>;
+  const existing = ids.map((id) => current.get(id)).filter((row): row is MonthlySnapshot => Boolean(row));
+  if (existing.length && !options.overwrite) throw new ExistingSnapshotsError(existing.map((row) => hydrateSnapshot(copy(row))));
 
-    const now = nowIso();
-    values.forEach((value, index) => {
-      const record: MonthlySnapshot = {
-        id: ids[index],
-        branch: value.branch,
-        year: value.year,
-        month: value.month,
-        buckets: value.buckets,
-        notes: value.notes,
-        createdAt: current.get(ids[index])?.createdAt ?? now,
-        updatedAt: now,
-      };
-      store.put(record);
-      records.push(record);
-    });
-  } catch (cause) {
-    finished.catch(() => undefined);
-    try {
-      tx.abort();
-    } catch {
-      /* المعاملة أُلغيت بالفعل */
-    }
-    throw cause;
-  }
-  await finished;
+  const now = nowIso();
+  const records = values.map((value, index): MonthlySnapshot => ({
+    id: ids[index],
+    branch: value.branch,
+    year: value.year,
+    month: value.month,
+    buckets: value.buckets,
+    notes: value.notes,
+    createdAt: current.get(ids[index])?.createdAt ?? now,
+    updatedAt: now,
+  }));
+  records.forEach((record) => current.set(record.id, copy(record)));
   return records;
 }
 
@@ -486,7 +400,7 @@ export function validateDelinquencyBackup(raw: unknown): string[] {
  * - replace: يستبدل بيانات المتأخرات كلها بما في النسخة.
  * - merge: يضيف الجديد ويحدّث ما له تاريخ تعديل أحدث.
  *
- * الأقسام الثلاثة تُكتب في معاملة واحدة: إما أن تنجح الاستعادة كلها أو لا يتغير شيء.
+ * الأقسام الثلاثة تُعتمد معًا: إما أن تنجح الاستعادة كلها أو لا يتغير شيء.
  * يعيد عدد السجلات التي كُتبت من كل قسم.
  */
 export async function restoreDelinquencyData(
@@ -496,45 +410,29 @@ export async function restoreDelinquencyData(
   const errors = validateDelinquencyBackup(backup);
   if (errors.length) throw new Error(errors[0]);
 
-  type Row = { id: string; updatedAt?: string };
+  type Dated = Row & { updatedAt?: string };
   const imported = { months: 0, clientLists: 0, comparisons: 0 } as Record<DelinquencyStore, number>;
-  const db = await getDb();
-  const tx = writeTx(db, [...DELINQUENCY_STORES]);
-  const finished = done(tx);
+  // تُجهَّز الأقسام الثلاثة في نسخة جانبية ثم تُعتمد معًا
+  const next = emptyStores();
 
-  try {
-    for (const store of DELINQUENCY_STORES) {
-      const incoming = ((backup[store] as Row[] | undefined) ?? []).slice();
-      const objectStore = tx.objectStore(store);
-      if (mode === 'replace') {
-        objectStore.clear();
-        incoming.forEach((row) => objectStore.put(row));
-        imported[store] = incoming.length;
-      } else if (mode === 'restore') {
-        incoming.forEach((row) => objectStore.put(row));
-        imported[store] = incoming.length;
-      } else {
-        const existing = await req(objectStore.getAll() as IDBRequest<Row[]>);
-        const current = new Map(existing.map((row) => [row.id, row]));
-        for (const row of incoming) {
-          const found = current.get(row.id);
-          if (!found || (row.updatedAt ?? '') > (found.updatedAt ?? '')) {
-            objectStore.put(row);
-            imported[store] += 1;
-          }
+  for (const store of DELINQUENCY_STORES) {
+    const incoming = ((backup[store] as Dated[] | undefined) ?? []).slice();
+    const target = mode === 'replace' ? next[store] : new Map(memory[store]);
+    next[store] = target;
+    if (mode === 'merge') {
+      for (const row of incoming) {
+        const found = target.get(row.id) as Dated | undefined;
+        if (!found || (row.updatedAt ?? '') > (found.updatedAt ?? '')) {
+          target.set(row.id, copy(row));
+          imported[store] += 1;
         }
       }
+    } else {
+      incoming.forEach((row) => target.set(row.id, copy(row)));
+      imported[store] = incoming.length;
     }
-  } catch (cause) {
-    finished.catch(() => undefined);
-    try {
-      tx.abort();
-    } catch {
-      /* المعاملة أُلغيت بالفعل */
-    }
-    throw cause;
   }
-  await finished;
+  memory = next;
   return imported;
 }
 

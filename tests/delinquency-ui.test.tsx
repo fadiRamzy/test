@@ -4,7 +4,6 @@ import userEvent from '@testing-library/user-event';
 import { APP_TITLE, App } from '../src/delinquency/App';
 import {
   clearDelinquencyData,
-  closeDelinquencyDatabase,
   exportDelinquencyData,
   getClientList,
   listSavedComparisons,
@@ -12,20 +11,16 @@ import {
   saveClientList,
   saveComparison,
   saveSnapshot,
-  useDelinquencyDatabase,
 } from '../src/delinquency/db/delinquencyDb';
 import { BACKUP_APP_ID } from '../src/delinquency/lib/backupFile';
 import { REPORT_HEADERS, SHEET_REPORT } from '../src/delinquency/lib/delinquencyExcel';
 import { colName } from '../src/delinquency/lib/xlsx';
 import { LIST_A, LIST_B, OCT, SEP, clientsOf, openWorkbook, toInput, type BucketPairs } from './delinquency-helpers';
 
-let dbName = '';
-
 beforeEach(async () => {
-  dbName = `test-dq-ui-${Math.random().toString(36).slice(2)}`;
-  await useDelinquencyDatabase(dbName);
   await clearDelinquencyData();
   window.localStorage.clear();
+  window.sessionStorage.clear();
   window.location.hash = '#/';
 });
 
@@ -228,9 +223,9 @@ describe('صفحة النسخ الاحتياطي — ثلاثة أزرار فق�
       expect(backup.counts).toEqual({ months: 5, clientLists: 2, comparisons: 1 });
       expect(backup.data).toEqual(before);
 
-      // «متصفح جديد»: قاعدة بيانات فارغة تمامًا
+      // «صفحة جديدة»: بيانات فارغة تمامًا
       cleanup();
-      await useDelinquencyDatabase(`${dbName}-fresh`);
+      await clearDelinquencyData();
       expect(await listSnapshots()).toEqual([]);
       await openPage('#/data');
       const fresh = await backupSection();
@@ -332,8 +327,12 @@ describe('صفحة النسخ الاحتياطي — ثلاثة أزرار فق�
   });
 });
 
-describe('بقاء البيانات بعد التحديث وإعادة فتح المتصفح', () => {
-  it('ما يُدخل من الواجهة يبقى بعد إغلاق التطبيق وقاعدة البيانات وإعادة فتحهما', async () => {
+describe('البيانات مؤقتة: تحديث الصفحة يمسح كل ما أُدخل', () => {
+  const databaseNames = async (): Promise<string[]> => (await indexedDB.databases()).map((db) => db.name ?? '');
+
+  it('ما يُدخل من الواجهة يعمل داخل الصفحة، لا يُكتب على الجهاز، ويختفي بعد تحديثها', async () => {
+    const openSpy = vi.spyOn(indexedDB, 'open');
+    const storageSet = vi.spyOn(Storage.prototype, 'setItem');
     const user = userEvent.setup();
     await openPage('#/entry');
     await waitFor(() => expect(byId('dq-month')).toBeInTheDocument());
@@ -353,24 +352,59 @@ describe('بقاء البيانات بعد التحديث وإعادة فتح ا
     expect(await screen.findByText('تم حفظ بيانات سبتمبر 2026 — فرع المنيا.')).toBeInTheDocument();
     await enter('10', OCT);
     expect(await screen.findByText('تم حفظ بيانات أكتوبر 2026 — فرع المنيا.')).toBeInTheDocument();
-    const before = await exportDelinquencyData();
-    expect(before.months).toHaveLength(2);
+    expect((await exportDelinquencyData()).months).toHaveLength(2);
 
-    // تحديث الصفحة: التطبيق يُزال ويُعاد تحميله
-    cleanup();
-    await openPage('#/');
+    // داخل الصفحة نفسها: التنقل بين التبويبات يحتفظ بالبيانات والحسابات كما هي
+    await user.click(within(tabsNav()).getByRole('link', { name: 'لوحة المقارنة' }));
     await screen.findByTestId('dq-dashboard');
     expect(text(screen.getByTestId('dq-total-row'))).toContain('+168,250.60');
-
-    // إغلاق المتصفح: يُغلق الاتصال بقاعدة البيانات ثم يُفتح من جديد
-    cleanup();
-    await closeDelinquencyDatabase();
-    await useDelinquencyDatabase(dbName);
-    expect(await exportDelinquencyData()).toEqual(before);
-    await openPage('#/');
-    await screen.findByTestId('dq-dashboard');
     expect(text(screen.getByTestId('dq-kpi-amount'))).toContain('2,218,251.35');
     expect(text(screen.getByTestId('dq-kpi-clients'))).toContain('356');
+
+    // لا شيء كُتب على الجهاز
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(storageSet).not.toHaveBeenCalled();
+    expect(await databaseNames()).toEqual([]);
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+
+    // تحديث الصفحة: كل الوحدات تُحمَّل من جديد
+    cleanup();
+    vi.resetModules();
+    const fresh = await import('@testing-library/react');
+    const { App: FreshApp } = await import('../src/delinquency/App');
+    const freshDb = await import('../src/delinquency/db/delinquencyDb');
+    try {
+      window.location.hash = '#/';
+      fresh.render(<FreshApp />);
+      expect(await fresh.screen.findByText('لا توجد بيانات شهرية بعد')).toBeInTheDocument();
+      expect(fresh.screen.queryByTestId('dq-dashboard')).not.toBeInTheDocument();
+      expect(await freshDb.exportDelinquencyData()).toEqual({ months: [], clientLists: [], comparisons: [] });
+      expect(await databaseNames()).toEqual([]);
+    } finally {
+      fresh.cleanup();
+    }
+  });
+
+  it('اسم الجهة المستورد من نسخة احتياطية يظهر في الصفحة ولا يُحفظ على الجهاز', async () => {
+    const user = userEvent.setup();
+    await saveSnapshot(toInput('فرع المنيا', 2026, 9, SEP));
+    const data = await exportDelinquencyData();
+    await clearDelinquencyData();
+    const file = { app: BACKUP_APP_ID, formatVersion: 1, exportedAt: '2026-10-01T00:00:00.000Z', organization: 'إدارة المخاطر', counts: { months: 1, clientLists: 0, comparisons: 0 }, data };
+
+    await openPage('#/data');
+    await user.upload(byId<HTMLInputElement>('dq-restore-file'), new File([JSON.stringify(file)], 'backup.json', { type: 'application/json' }));
+    expect(await screen.findByText('تمت الاستعادة: شهر واحد، لا مقارنات محفوظة.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /الصفحة الرئيسية/ })).toHaveTextContent('إدارة المخاطر');
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+
+    // إعادة تحميل التطبيق: الاسم لا يعود
+    cleanup();
+    await clearDelinquencyData();
+    await openPage('#/');
+    expect(screen.getByRole('link', { name: /الصفحة الرئيسية/ })).not.toHaveTextContent('إدارة المخاطر');
   });
 });
 

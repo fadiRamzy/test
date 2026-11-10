@@ -9,7 +9,6 @@ import {
   listClientLists,
   listSavedComparisons,
   listSnapshots,
-  requestPersistentStorage,
   saveComparison,
   saveSnapshot,
   type ClientListRecord,
@@ -489,7 +488,6 @@ function EntryTab({
         { branch: draft.branch, year: draft.year, month: draft.month, buckets: draft.values, notes: draft.notes },
         { editingId: draft.editingId ?? undefined, overwrite: Boolean(draft.editingId) },
       );
-      void requestPersistentStorage();
       await reload();
       notify(`تم حفظ بيانات ${periodLabel(record)} — ${branchLabel(record.branch)}.`, 'success');
       const nextMonth = record.month === 12 ? 1 : record.month + 1;

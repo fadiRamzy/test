@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { APP_TITLE, App } from '../src/delinquency/App';
-import { clearDelinquencyData, listSnapshots, saveSnapshot, useDelinquencyDatabase } from '../src/delinquency/db/delinquencyDb';
+import { clearDelinquencyData, listSnapshots, saveSnapshot } from '../src/delinquency/db/delinquencyDb';
 import { BUCKET_IDS } from '../src/delinquency/lib/delinquency';
 import { REPORT_HEADERS, SHEET_REPORT } from '../src/delinquency/lib/delinquencyExcel';
 import { OFFICES } from '../src/delinquency/lib/offices';
@@ -24,7 +24,6 @@ vi.mock('../src/delinquency/lib/pdfText', async (importOriginal) => {
 const truth = fixtureOffices();
 
 beforeEach(async () => {
-  await useDelinquencyDatabase(`test-dq-pdf-ui-${Math.random().toString(36).slice(2)}`);
   await clearDelinquencyData();
   window.localStorage.clear();
   window.location.hash = '#/entry';
