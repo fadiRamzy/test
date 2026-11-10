@@ -1,6 +1,12 @@
 import { clearStore, countRecords, getAll, putMany, readSettings, writeSettings, writeMeta } from './database';
 import { nowIso } from '../lib/utils';
 import {
+  exportDelinquencyData,
+  restoreDelinquencyData,
+  validateDelinquencyBackup,
+  type DelinquencyBackup,
+} from './delinquencyDb';
+import {
   ENTITY_LABELS,
   type AnnualNote,
   type AttendanceRecord,
@@ -55,6 +61,11 @@ export interface BackupPayload {
   counts: Record<EntityName, number>;
   settings: AppSettings;
   data: BackupData;
+  /**
+   * بيانات «تحليل ترحيل المتأخرات» (قاعدة مستقلة). اختياري للتوافق مع النسخ الأقدم:
+   * إذا غاب القسم عند الاستعادة تبقى بيانات المتأخرات الحالية كما هي دون أي تغيير.
+   */
+  delinquency?: DelinquencyBackup;
 }
 
 export async function createBackup(): Promise<BackupPayload> {
@@ -74,7 +85,8 @@ export async function createBackup(): Promise<BackupPayload> {
   };
   const counts = {} as Record<EntityName, number>;
   for (const entity of ENTITIES) counts[entity] = data[entity].length;
-  return { app: BACKUP_APP, formatVersion: BACKUP_FORMAT, exportedAt: nowIso(), counts, settings, data };
+  const delinquency = await exportDelinquencyData();
+  return { app: BACKUP_APP, formatVersion: BACKUP_FORMAT, exportedAt: nowIso(), counts, settings, data, delinquency };
 }
 
 export interface ValidationResult {
@@ -124,6 +136,11 @@ export function validateBackup(raw: unknown): ValidationResult {
       if (ids.has(row.id)) errors.push(`${ENTITY_LABELS[entity]}: معرّف مكرر (${row.id}).`);
       ids.add(row.id);
     });
+  }
+
+  // قسم تحليل المتأخرات اختياري (غير موجود في النسخ الأقدم)
+  if (raw.delinquency !== undefined && raw.delinquency !== null) {
+    errors.push(...validateDelinquencyBackup(raw.delinquency));
   }
 
   if (!errors.length) {
@@ -181,6 +198,14 @@ export async function restoreBackup(payload: BackupPayload, mode: 'replace' | 'm
     await clearStore(entity);
     await putMany(entity, Array.from(map.values()) as never[]);
     imported[entity] = changed;
+  }
+
+  // بيانات المتأخرات تُستعاد فقط إذا كانت موجودة في النسخة؛ وإلا تبقى الحالية دون مساس
+  if (payload.delinquency) {
+    const restored = await restoreDelinquencyData(payload.delinquency, mode);
+    imported.delinquencyMonths = restored.months;
+    imported.delinquencyClientLists = restored.clientLists;
+    imported.delinquencyComparisons = restored.comparisons;
   }
 
   if (payload.settings) await writeSettings(payload.settings);

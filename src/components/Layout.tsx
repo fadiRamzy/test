@@ -39,6 +39,10 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    label: 'تحليل المحفظة',
+    items: [{ path: '/delinquency', label: 'ترحيل المتأخرات الشهري', icon: 'chart' }],
+  },
+  {
     label: 'الإدارة',
     items: [{ path: '/reports', label: 'التقارير والنسخ الاحتياطي', icon: 'reports' }],
   },
@@ -51,12 +55,29 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const broadcast = (collapsed: boolean) => setCollapse((prev) => ({ version: prev.version + 1, collapsed }));
-  const isActive = (path: string) => path === '/employees' ? route.path === '/' || route.path === path || route.path.startsWith(`${path}/`) : route.path === path;
+  const isActive = (path: string) =>
+    path === '/employees'
+      ? route.path === '/' || route.path === path || route.path.startsWith(`${path}/`)
+      : path === '/delinquency'
+        ? route.path === path || route.path.startsWith(`${path}/`)
+        : route.path === path;
 
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
     setSidebarOpen(false);
+  }, [route.path]);
+
+  // شريط التنقل السفلي على الهاتف قابل للتمرير أفقيًا: أظهر الرابط النشط داخله.
+  useEffect(() => {
+    const active = document.querySelector<HTMLElement>('.sidebar__nav .sidebar__link.is-active');
+    const nav = active?.closest<HTMLElement>('.sidebar__nav');
+    if (!active || !nav || nav.scrollWidth <= nav.clientWidth) return;
+    const navBox = nav.getBoundingClientRect();
+    const box = active.getBoundingClientRect();
+    if (box.left < navBox.left || box.right > navBox.right) {
+      nav.scrollLeft += box.left < navBox.left ? box.left - navBox.left - 8 : box.right - navBox.right + 8;
+    }
   }, [route.path]);
 
   useEffect(() => {

@@ -63,6 +63,19 @@ export function downloadFile(filename: string, content: string, type = 'applicat
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** تنزيل ملف ثنائي (مثل ‎.xlsx) */
+export function downloadBlob(filename: string, data: Uint8Array | Blob, type = 'application/octet-stream'): void {
+  const blob = data instanceof Blob ? data : new Blob([data as BlobPart], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export function readTextFile(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

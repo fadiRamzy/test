@@ -497,7 +497,8 @@ describe('التنقل الرئيسي', () => {
     const links = within(nav).getAllByRole('link');
     expect(links.map((link) => link.textContent?.trim())).toEqual([
       'الموظفون', 'الملاحظات والمتابعة', 'توقيت الزيارات', 'المحاضر اليومية',
-      'الإجازات والأذونات', 'تأخيرات الحضور والانصراف', 'التقارير والنسخ الاحتياطي',
+      'الإجازات والأذونات', 'تأخيرات الحضور والانصراف', 'ترحيل المتأخرات الشهري',
+      'التقارير والنسخ الاحتياطي',
     ]);
     expect(document.querySelector('.topnav')).not.toBeInTheDocument();
     expect(document.querySelector('.app-sidebar')).toBeInTheDocument();
