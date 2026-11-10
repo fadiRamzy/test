@@ -22,6 +22,7 @@ import {
   snapshotTotals,
   type MonthlySnapshot,
 } from './delinquency';
+import { compareBranchNames } from './offices';
 import { buildXlsx, cellRef, colName, type XlsxCell, type XlsxCellInput, type XlsxSheet, type XlsxStyle } from './xlsx';
 
 export interface ReportPeriod {
@@ -36,6 +37,11 @@ export interface DelinquencyReportInput {
   current: ReportPeriod;
   /** الشهر السابق؛ بدونه يُصدَّر الشهر الحالي وحده */
   previous?: ReportPeriod | null;
+  /**
+   * فروع تظهر في التقرير دائمًا حتى لو لم تكن لها بيانات (تظهر خاناتها «—»)،
+   * مثل المكاتب التسعة عشر عند تصدير بيانات مستوردة من PDF.
+   */
+  branches?: readonly string[];
   organization?: string;
   exportedAt?: Date;
 }
@@ -154,10 +160,15 @@ export function buildDelinquencyReport(input: DelinquencyReportInput): Delinquen
     byBranch.set(branch, entry);
   }
   if (!byBranch.size) throw new Error('لا توجد بيانات للتصدير.');
+  for (const name of input.branches ?? []) {
+    const branch = normalizeBranch(name);
+    if (!byBranch.has(branch)) byBranch.set(branch, {});
+  }
 
+  // المكاتب المعتمدة أولًا بترتيبها الثابت، ثم باقي الفروع أبجديًا
   const ordered = Array.from(byBranch.entries())
     .map(([branch, entry]) => ({ label: branchLabel(branch), entry }))
-    .sort((x, y) => x.label.localeCompare(y.label, 'ar'));
+    .sort((x, y) => compareBranchNames(x.label, y.label));
 
   const labelCurrent = periodLabel(input.current);
   const labelPrevious = previous ? periodLabel(previous) : '';

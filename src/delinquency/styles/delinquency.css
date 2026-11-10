@@ -153,3 +153,38 @@
   .dq-backup { flex-direction: column; padding: 16px 14px; }
   .dq-backup .dq-btn { width: 100%; }
 }
+
+/* ------------------------------- استيراد PDF ------------------------------ */
+.dq-mode { display: inline-flex; gap: 4px; padding: 4px; background: var(--dq-surface); border: 1px solid var(--dq-line); border-radius: 12px; justify-self: start; max-width: 100%; }
+.dq-mode__btn { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 18px; border: 0; border-radius: 9px; background: transparent; color: var(--dq-muted); font: inherit; font-weight: 700; font-size: 14px; cursor: pointer; white-space: nowrap; }
+.dq-mode__btn:hover { background: var(--dq-soft); color: var(--dq-navy); }
+.dq-mode__btn.is-active { background: var(--dq-navy-2); color: #fff; }
+.dq-pdf__file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.dq-pdf__pick { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 6px 0; }
+.dq-pdf__pick .dq-btn { min-height: 46px; padding-inline: 22px; }
+.dq-pdf__period { grid-template-columns: minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 2.2fr); }
+.dq-pdf__source { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; align-self: end; min-height: 44px; padding: 8px 12px; border: 1px solid var(--dq-line); border-radius: 10px; background: var(--dq-soft); color: var(--dq-muted); font-size: 13px; line-height: 1.7; }
+.dq-pdf__source strong { color: var(--dq-navy); }
+.dq-pdf__checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; line-height: 1.7; }
+.dq-pdf__checks li { display: flex; align-items: flex-start; gap: 8px; }
+.dq-pdf__checks .dq-ic { flex: none; margin-top: 5px; }
+.dq-pdf__checks .is-ok { color: var(--dq-down); }
+.dq-pdf__checks .is-ok span { color: var(--dq-ink); }
+.dq-pdf__checks .is-warn { color: var(--dq-warn); font-weight: 600; }
+.dq-pdf__checks small { font-weight: 400; font-size: 12.5px; color: var(--dq-muted); }
+.dq-pdf-table { font-size: 12.5px; }
+.dq-pdf-table th, .dq-pdf-table td { padding: 5px 4px; }
+.dq-pdf-table .dq-table__bucket { padding-inline: 10px; }
+.dq-pdf-table thead th { font-size: 12px; }
+.dq .dq-pdf-input { min-height: 32px; height: 32px; padding: 2px 5px; font-size: 12.5px; border-radius: 7px; max-width: none; }
+.dq .dq-pdf-input--clients { width: 54px; }
+.dq .dq-pdf-input--amount { width: 104px; }
+.dq .dq-pdf-input--edited { border-color: var(--dq-blue); background: var(--dq-info-soft); }
+.dq-pdf__confirm { display: grid; gap: 10px; }
+.dq-pdf__confirm p { margin: 0; }
+@media (max-width: 640px) {
+  .dq-mode { display: flex; }
+  .dq-mode__btn { flex: 1 1 0; justify-content: center; padding-inline: 10px; }
+  .dq-pdf__period { grid-template-columns: 1fr 1fr; }
+  .dq-pdf__pick .dq-btn { width: 100%; }
+}
