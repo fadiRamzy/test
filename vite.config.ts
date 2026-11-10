@@ -16,7 +16,7 @@ function serviceWorkerPlugin(): Plugin {
       const files = Object.keys(bundle).filter(
         (f) => !f.endsWith('.map') && f !== 'sw.js' && !f.endsWith('.txt'),
       );
-      files.push('index.html', 'employees.html', 'favicon.svg', 'favicon-delinquency.svg', 'manifest.webmanifest', '.nojekyll');
+      files.push('index.html', 'favicon-delinquency.svg', 'manifest.webmanifest', '.nojekyll');
       const list = Array.from(new Set(files)).sort();
       const version = createHash('sha256').update(list.join('|')).digest('hex').slice(0, 12);
 
@@ -123,12 +123,9 @@ export default defineConfig({
     sourcemap: false,
     chunkSizeWarningLimit: 900,
     rollupOptions: {
-      // صفحتان مستقلتان:
-      //   index.html      ← التطبيق الافتراضي: نظام تحليل ترحيل المتأخرات الشهري
-      //   employees.html  ← النظام السابق (إدارة مسؤولي المخاطر) كما هو دون تعديل
+      // صفحة واحدة: index.html ← نظام تحليل ترحيل المتأخرات الشهري
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
-        employees: fileURLToPath(new URL('./employees.html', import.meta.url)),
       },
     },
   },
