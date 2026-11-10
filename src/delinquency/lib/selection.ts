@@ -5,8 +5,20 @@ import type { Notify } from '../ui/toast';
 import { snapshotPeriod, type MonthlySnapshot } from './delinquency';
 import { buildDelinquencyXlsx, delinquencyFileName } from './delinquencyExcel';
 import { errorMessage } from './errors';
+import { compareBranchNames, officeRank } from './offices';
 import { downloadBlob } from './utils';
 import { XLSX_MIME } from './xlsx';
+
+/**
+ * الفرع الافتراضي: من أحدث شهر مُدخل — أول المكاتب المعتمدة بترتيبها إن وُجدت، وإلا آخر فرع أبجديًا.
+ */
+function defaultBranch(snapshots: MonthlySnapshot[]): string {
+  if (!snapshots.length) return '';
+  const last = snapshots[snapshots.length - 1];
+  const latest = snapshotPeriod(last);
+  const office = snapshots.find((snapshot) => snapshotPeriod(snapshot) === latest && officeRank(snapshot.branch) !== -1);
+  return (office ?? last).branch;
+}
 
 export interface Selection {
   branch: string | null;
@@ -19,13 +31,11 @@ export interface Selection {
  * وآخر شهرين له (الأقدم = الشهر السابق).
  */
 export function resolveSelection(snapshots: MonthlySnapshot[], selection: Selection) {
-  const branches = Array.from(new Set(snapshots.map((snapshot) => snapshot.branch))).sort((x, y) => x.localeCompare(y, 'ar'));
+  const branches = Array.from(new Set(snapshots.map((snapshot) => snapshot.branch))).sort(compareBranchNames);
   const branch =
     selection.branch !== null && branches.includes(selection.branch)
       ? selection.branch
-      : snapshots.length
-        ? snapshots[snapshots.length - 1].branch
-        : '';
+      : defaultBranch(snapshots);
   const months = snapshots.filter((snapshot) => snapshot.branch === branch);
   const b = months.find((month) => month.id === selection.bId) ?? months[months.length - 1] ?? null;
   const a = months.find((month) => month.id === selection.aId) ?? (b ? [...months].reverse().find((month) => month.id !== b.id) ?? null : null);
@@ -49,13 +59,15 @@ export function reportPeriods(snapshots: MonthlySnapshot[], selection: Selection
 /** ينزّل تقرير Excel (كل الفروع) للشهرين المحددين */
 export function exportReport(
   snapshots: MonthlySnapshot[],
-  current: MonthlySnapshot,
-  previous: MonthlySnapshot | null,
+  current: Pick<MonthlySnapshot, 'year' | 'month'>,
+  previous: Pick<MonthlySnapshot, 'year' | 'month'> | null,
   organization: string,
   notify: Notify,
+  /** فروع تظهر دائمًا في التقرير حتى لو لم تكن لها بيانات */
+  branches?: readonly string[],
 ): void {
   try {
-    const bytes = buildDelinquencyXlsx({ snapshots, current, previous, organization });
+    const bytes = buildDelinquencyXlsx({ snapshots, current, previous, organization, branches });
     downloadBlob(delinquencyFileName(current, previous), bytes, XLSX_MIME);
     notify('تم تنزيل ملف Excel.', 'success');
   } catch (cause) {

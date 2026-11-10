@@ -8,6 +8,8 @@
  *  4) صافي انخفاض المتأخرات لا يُصنَّف «تحصيلًا مؤكدًا» دون سجلات تحصيل فعلية.
  */
 
+import { compareBranchNames } from './offices';
+
 /* --------------------------------- الشرائح -------------------------------- */
 
 export const BUCKETS = [
@@ -112,13 +114,13 @@ export const snapshotId = (branch: string, year: number, month: number): string 
 export const periodLabel = (snapshot: Pick<MonthlySnapshot, 'year' | 'month'>): string =>
   `${MONTH_NAMES_AR[snapshot.month - 1] ?? '—'} ${snapshot.year}`;
 
-/** ترتيب زمني تصاعدي ثم بحسب الفرع */
+/** ترتيب زمني تصاعدي ثم بحسب الفرع (المكاتب المعتمدة بترتيبها الثابت، ثم الباقي أبجديًا) */
 export function sortSnapshots<T extends Pick<MonthlySnapshot, 'year' | 'month' | 'branch'>>(rows: T[]): T[] {
   return [...rows].sort((a, b) => {
     const pa = snapshotPeriod(a);
     const pb = snapshotPeriod(b);
     if (pa !== pb) return pa < pb ? -1 : 1;
-    return normalizeBranch(a.branch).localeCompare(normalizeBranch(b.branch), 'ar');
+    return compareBranchNames(normalizeBranch(a.branch), normalizeBranch(b.branch));
   });
 }
 
@@ -158,16 +160,35 @@ export function round2(value: number): number {
   return value < 0 && rounded !== 0 ? -rounded : rounded;
 }
 
-const toCents = (value: number): number => Math.round(round2(value) * 100);
+/**
+ * دقة المبالغ: ثلاث خانات عشرية (مليم) — تقارير المحفظة تعرض المبالغ بثلاث خانات
+ * ويجب حفظها كما هي دون تقريب. المبالغ ذات الخانتين لا تتأثر.
+ */
+export const MONEY_DECIMALS = 3;
+const MONEY_UNITS = 10 ** MONEY_DECIMALS;
 
-/** فرق مالي دقيق (ب − أ) بالقروش ثم يعاد إلى خانتين */
+/** تقريب مالي إلى ثلاث خانات عشرية (نصف للأعلى، متماثل للسالب) دون أخطاء الفاصلة العائمة */
+export function roundMoney(value: number): number {
+  if (!Number.isFinite(value)) return value;
+  const abs = Math.abs(value);
+  if (abs >= 1e15) return value;
+  const text = String(abs);
+  const rounded = text.includes('e')
+    ? Math.round(abs * MONEY_UNITS) / MONEY_UNITS
+    : Number(`${Math.round(Number(`${text}e${MONEY_DECIMALS}`))}e-${MONEY_DECIMALS}`);
+  return value < 0 && rounded !== 0 ? -rounded : rounded;
+}
+
+const toUnits = (value: number): number => Math.round(roundMoney(value) * MONEY_UNITS);
+
+/** فرق مالي دقيق (ب − أ) بالمليم ثم يعاد إلى ثلاث خانات */
 export const moneyDiff = (a: number, b: number): number => {
-  const diff = (toCents(b) - toCents(a)) / 100;
+  const diff = (toUnits(b) - toUnits(a)) / MONEY_UNITS;
   return Object.is(diff, -0) ? 0 : diff;
 };
 
 /** مجموع مالي دقيق */
-export const moneySum = (values: number[]): number => values.reduce((sum, value) => sum + toCents(value), 0) / 100;
+export const moneySum = (values: number[]): number => values.reduce((sum, value) => sum + toUnits(value), 0) / MONEY_UNITS;
 
 /**
  * نسبة التغير المئوية من أ إلى ب.
@@ -211,7 +232,7 @@ export interface SnapshotValidation {
   value: { branch: string; year: number; month: number; buckets: BucketValues; notes: string };
 }
 
-/** يتحقق من مدخلات شهر واحد وينظّفها (أعداد صحيحة غير سالبة، مبالغ غير سالبة بخانتين) */
+/** يتحقق من مدخلات شهر واحد وينظّفها (أعداد صحيحة غير سالبة، مبالغ غير سالبة حتى ثلاث خانات عشرية) */
 export function validateSnapshotInput(input: SnapshotInput): SnapshotValidation {
   const errors: Record<string, string> = {};
   const warnings: string[] = [];
@@ -239,7 +260,7 @@ export function validateSnapshotInput(input: SnapshotInput): SnapshotValidation 
     else if (Number.isNaN(amount)) errors[`${bucket.id}.amount`] = 'المبلغ يجب أن يكون رقمًا.';
     else if (amount < 0) errors[`${bucket.id}.amount`] = 'المبلغ لا يمكن أن يكون سالبًا.';
     else if (amount > MAX_AMOUNT) errors[`${bucket.id}.amount`] = 'المبلغ أكبر من الحد المسموح.';
-    else buckets[bucket.id].amount = round2(amount);
+    else buckets[bucket.id].amount = roundMoney(amount);
   }
 
   if (!Object.keys(errors).length) warnings.push(...bucketQualityWarnings(buckets));
@@ -281,7 +302,7 @@ export function sanitizeBuckets(input: unknown): BucketValues {
     const amount = Number(source[id]?.amount);
     buckets[id] = {
       clients: Number.isFinite(clients) && clients > 0 ? Math.round(clients) : 0,
-      amount: Number.isFinite(amount) && amount > 0 ? round2(amount) : 0,
+      amount: Number.isFinite(amount) && amount > 0 ? roundMoney(amount) : 0,
     };
   }
   return buckets;
@@ -583,7 +604,7 @@ export function compareBranches(snapshots: MonthlySnapshot[], periodA: string, p
 
 const LOCALE = 'ar-EG-u-nu-latn';
 const intFmt = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0 });
-const moneyFmt = new Intl.NumberFormat(LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const moneyFmt = new Intl.NumberFormat(LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: MONEY_DECIMALS });
 const pctFmt = new Intl.NumberFormat(LOCALE, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const compactFmt = new Intl.NumberFormat(LOCALE, { notation: 'compact', maximumFractionDigits: 1 });
 

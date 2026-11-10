@@ -49,10 +49,10 @@ interface StyleDef {
 
 const NUM_FORMATS: Array<{ id: number; code: string }> = [
   { id: 164, code: '#,##0' },
-  { id: 165, code: '#,##0.00' },
+  { id: 165, code: '#,##0.00#' },
   { id: 166, code: '0.0%' },
   { id: 167, code: '[Red]+#,##0;[Color10]-#,##0;0' },
-  { id: 168, code: '[Red]+#,##0.00;[Color10]-#,##0.00;0.00' },
+  { id: 168, code: '[Red]+#,##0.00#;[Color10]-#,##0.00#;0.00' },
   { id: 169, code: '[Red]+0.0%;[Color10]-0.0%;0.0%' },
   { id: 170, code: '[Red]+0.0;[Color10]-0.0;0.0' },
 ];

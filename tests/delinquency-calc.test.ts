@@ -19,6 +19,8 @@ import {
   pctChange,
   periodLabel,
   round2,
+  roundMoney,
+  MONEY_DECIMALS,
   sharePct,
   snapshotId,
   snapshotTotals,
@@ -68,6 +70,21 @@ describe('الأدوات الرقمية', () => {
     expect(round2(0.1 + 0.2)).toBe(0.3);
     expect(Object.is(round2(-0.001), 0)).toBe(true);
     expect(round2(1e21)).toBe(1e21);
+  });
+
+  it('المبالغ تُحفظ بثلاث خانات عشرية كما في تقارير المحفظة', () => {
+    expect(MONEY_DECIMALS).toBe(3);
+    expect(roundMoney(41207.563)).toBe(41207.563);
+    expect(roundMoney(88310.27)).toBe(88310.27);
+    expect(roundMoney(163500)).toBe(163500);
+    expect(roundMoney(1.0005)).toBe(1.001);
+    expect(roundMoney(-1.0005)).toBe(-1.001);
+    expect(roundMoney(0.1 + 0.2)).toBe(0.3);
+    expect(Object.is(roundMoney(-0.0001), 0)).toBe(true);
+    expect(moneySum([41207.563, 88310.27, 120045.119, 37911.008, 512660.341])).toBe(800134.301);
+    expect(moneyDiff(800134.301, 615022.79)).toBe(-185111.511);
+    const result = validateSnapshotInput({ year: 2031, month: 9, buckets: { d1_30: { clients: 3, amount: '41,207.563' } } });
+    expect(result.value.buckets.d1_30).toEqual({ clients: 3, amount: 41207.563 });
   });
 
   it('جمع وطرح المبالغ بالقروش', () => {
@@ -155,7 +172,7 @@ describe('التحقق من الإدخال الشهري', () => {
       month: '9',
       notes: '  ملاحظة ',
       buckets: {
-        d1_30: { clients: '١٢٠', amount: '450,000.505' },
+        d1_30: { clients: '١٢٠', amount: '450,000.5055' },
         d31_60: { clients: '', amount: '' },
         npl: { clients: 60, amount: 720000 },
       },
@@ -166,7 +183,7 @@ describe('التحقق من الإدخال الشهري', () => {
     expect(result.value.year).toBe(2026);
     expect(result.value.month).toBe(9);
     expect(result.value.notes).toBe('ملاحظة');
-    expect(result.value.buckets.d1_30).toEqual({ clients: 120, amount: 450000.51 });
+    expect(result.value.buckets.d1_30).toEqual({ clients: 120, amount: 450000.506 });
     expect(result.value.buckets.d31_60).toEqual({ clients: 0, amount: 0 });
     expect(result.value.buckets.d61_90).toEqual({ clients: 0, amount: 0 });
     expect(result.value.buckets.npl).toEqual({ clients: 60, amount: 720000 });
@@ -431,11 +448,11 @@ describe('حالات حدّية في المقارنة', () => {
   });
 
   it('بيانات مخزنة تالفة تُعامل كأصفار ولا تُسقط الحساب', () => {
-    const broken = { ...sep(), buckets: { d1_30: { clients: 'x', amount: -5 }, npl: { clients: 3.6, amount: '12.345' } } } as never;
+    const broken = { ...sep(), buckets: { d1_30: { clients: 'x', amount: -5 }, npl: { clients: 3.6, amount: '12.3456' } } } as never;
     const comparison = compareSnapshots(broken, oct());
     expect(comparison.a.buckets.d1_30).toEqual({ clients: 0, amount: 0 });
     expect(comparison.a.buckets.d31_60).toEqual({ clients: 0, amount: 0 });
-    expect(comparison.a.buckets.npl).toEqual({ clients: 4, amount: 12.35 });
+    expect(comparison.a.buckets.npl).toEqual({ clients: 4, amount: 12.346 });
     expect(Number.isFinite(comparison.totals.amountDelta)).toBe(true);
   });
 

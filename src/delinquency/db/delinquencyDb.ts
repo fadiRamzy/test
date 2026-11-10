@@ -270,6 +270,79 @@ export async function saveSnapshot(input: SnapshotInput, options: SaveSnapshotOp
   return record;
 }
 
+export interface SaveBatchOptions {
+  /** السماح باستبدال سجلات محفوظة لنفس الشهر والفرع (افتراضي: لا — يُرفض الحفظ كله) */
+  overwrite?: boolean;
+}
+
+/** يُرمى عندما يتعارض حفظ مجموعة مع سجلات محفوظة ولم يؤكد المستخدم الاستبدال */
+export class ExistingSnapshotsError extends ValidationError {
+  existing: MonthlySnapshot[];
+  constructor(existing: MonthlySnapshot[]) {
+    super({
+      month: `توجد بيانات محفوظة بالفعل لـ ${existing.map((row) => `${branchLabel(row.branch)} (${periodLabel(row)})`).join('، ')}. أكّد الاستبدال أولًا.`,
+    });
+    this.name = 'ExistingSnapshotsError';
+    this.existing = existing;
+  }
+}
+
+/**
+ * يحفظ عدة سجلات شهرية (مثل مكاتب شهر واحد مستوردة من PDF) في معاملة واحدة:
+ * إما أن تُحفظ كلها أو لا يتغير شيء. لا يستبدل سجلًا محفوظًا إلا مع overwrite = true.
+ * قوائم العملاء المحفوظة للسجلات المستبدلة لا تُمس.
+ */
+export async function saveSnapshotsBatch(inputs: SnapshotInput[], options: SaveBatchOptions = {}): Promise<MonthlySnapshot[]> {
+  if (!inputs.length) throw new ValidationError({ month: 'لا توجد بيانات للحفظ.' });
+
+  const values = inputs.map((input) => {
+    const validation = validateSnapshotInput(input);
+    if (!validation.ok) throw new ValidationError(validation.errors);
+    return validation.value;
+  });
+  const ids = values.map((value) => snapshotId(value.branch, value.year, value.month));
+  const repeated = values.find((_, index) => ids.indexOf(ids[index]) !== index);
+  if (repeated) throw new ValidationError({ branch: `الفرع «${branchLabel(repeated.branch)}» مكرر في البيانات المطلوب حفظها.` });
+
+  const db = await getDb();
+  const tx = writeTx(db, 'months');
+  const finished = done(tx);
+  const records: MonthlySnapshot[] = [];
+  try {
+    const store = tx.objectStore('months');
+    const stored = await req(store.getAll() as IDBRequest<MonthlySnapshot[]>);
+    const current = new Map(stored.map((row) => [row.id, row]));
+    const existing = ids.map((id) => current.get(id)).filter((row): row is MonthlySnapshot => Boolean(row));
+    if (existing.length && !options.overwrite) throw new ExistingSnapshotsError(existing.map(hydrateSnapshot));
+
+    const now = nowIso();
+    values.forEach((value, index) => {
+      const record: MonthlySnapshot = {
+        id: ids[index],
+        branch: value.branch,
+        year: value.year,
+        month: value.month,
+        buckets: value.buckets,
+        notes: value.notes,
+        createdAt: current.get(ids[index])?.createdAt ?? now,
+        updatedAt: now,
+      };
+      store.put(record);
+      records.push(record);
+    });
+  } catch (cause) {
+    finished.catch(() => undefined);
+    try {
+      tx.abort();
+    } catch {
+      /* المعاملة أُلغيت بالفعل */
+    }
+    throw cause;
+  }
+  await finished;
+  return records;
+}
+
 /** يحذف بيانات الشهر وقائمة عملائه. المقارنات المحفوظة لا تتأثر (نسخ مجمّدة). */
 export async function deleteSnapshot(id: string): Promise<void> {
   await remove('months', id);

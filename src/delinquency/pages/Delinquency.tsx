@@ -38,10 +38,12 @@ import {
   type BucketId,
   type MonthlySnapshot,
 } from '../lib/delinquency';
+import { compareBranchNames } from '../lib/offices';
 import { exportReport, resolveSelection, type Selection } from '../lib/selection';
 import { fmtDateTime } from '../lib/utils';
 import { errorMessage } from '../lib/errors';
 import { DataTab } from './DataTab';
+import { PdfImport, type PdfImportState } from './PdfImport';
 import '../styles/delinquency.css';
 
 /* --------------------------------- البيانات ------------------------------- */
@@ -127,6 +129,8 @@ const isDraftPristine = (draft: EntryDraft): boolean =>
   !draft.notes.trim() &&
   BUCKET_IDS.every((id) => !draft.values[id].clients.trim() && !draft.values[id].amount.trim());
 
+type EntryMode = 'manual' | 'pdf';
+
 /* ---------------------------------- الصفحة -------------------------------- */
 
 const TABS: Array<{ id: Section; path: string; label: string; icon: IconName }> = [
@@ -154,9 +158,13 @@ export function DelinquencyPage({
 
   const [selection, setSelection] = useState<Selection>({ branch: null, aId: null, bId: null });
   const [draft, setDraft] = useState<EntryDraft>(() => newDraft());
+  // طريقة الإدخال وحالة مراجعة PDF تبقيان عند التنقل بين التبويبات
+  const [entryMode, setEntryMode] = useState<EntryMode>('manual');
+  const [pdfImport, setPdfImport] = useState<PdfImportState | null>(null);
 
   const editSnapshot = useCallback((snapshot: MonthlySnapshot) => {
     setDraft(draftFromSnapshot(snapshot));
+    setEntryMode('manual');
     navigate('/entry');
   }, []);
 
@@ -176,7 +184,19 @@ export function DelinquencyPage({
       {loading ? (
         <div className="dq-loading">جارٍ التحميل…</div>
       ) : active === 'entry' ? (
-        <EntryTab data={data} draft={draft} setDraft={setDraft} reload={reload} notify={notify} onEdit={editSnapshot} />
+        <EntryTab
+          data={data}
+          draft={draft}
+          setDraft={setDraft}
+          mode={entryMode}
+          setMode={setEntryMode}
+          pdfImport={pdfImport}
+          setPdfImport={setPdfImport}
+          organization={organization}
+          reload={reload}
+          notify={notify}
+          onEdit={editSnapshot}
+        />
       ) : active === 'saved' ? (
         itemId ? (
           <SavedView
@@ -389,6 +409,11 @@ function EntryTab({
   data,
   draft,
   setDraft,
+  mode,
+  setMode,
+  pdfImport,
+  setPdfImport,
+  organization,
   reload,
   notify,
   onEdit,
@@ -396,6 +421,11 @@ function EntryTab({
   data: DelinquencyData;
   draft: EntryDraft;
   setDraft: (next: EntryDraft | ((prev: EntryDraft) => EntryDraft)) => void;
+  mode: EntryMode;
+  setMode: (mode: EntryMode) => void;
+  pdfImport: PdfImportState | null;
+  setPdfImport: (next: PdfImportState | null | ((prev: PdfImportState | null) => PdfImportState | null)) => void;
+  organization: string;
   reload: () => Promise<void>;
   notify: Notify;
   onEdit: (snapshot: MonthlySnapshot) => void;
@@ -407,9 +437,7 @@ function EntryTab({
 
   const branchOptions = useMemo(
     () =>
-      Array.from(new Set(snapshots.map((snapshot) => normalizeBranch(snapshot.branch)).filter(Boolean))).sort((x, y) =>
-        x.localeCompare(y, 'ar'),
-      ),
+      Array.from(new Set(snapshots.map((snapshot) => normalizeBranch(snapshot.branch)).filter(Boolean))).sort(compareBranchNames),
     [snapshots],
   );
 
@@ -491,10 +519,28 @@ function EntryTab({
   };
 
   const editing = draft.editingId ? snapshots.find((snapshot) => snapshot.id === draft.editingId) ?? null : null;
-  const rows = useMemo(() => [...snapshots].reverse(), [snapshots]);
+  // الأحدث أولًا، وداخل الشهر الواحد يبقى ترتيب الفروع (المكاتب المعتمدة بترتيبها)
+  const rows = useMemo(() => {
+    const periods = Array.from(new Set(snapshots.map(snapshotPeriod))).reverse();
+    return periods.flatMap((period) => snapshots.filter((snapshot) => snapshotPeriod(snapshot) === period));
+  }, [snapshots]);
 
   return (
     <>
+      <div className="dq-mode dq-print-hide" role="group" aria-label="طريقة الإدخال">
+        <button type="button" className={`dq-mode__btn${mode === 'manual' ? ' is-active' : ''}`} aria-pressed={mode === 'manual'} onClick={() => setMode('manual')}>
+          <Icon name="edit" size={15} />
+          <span>إدخال يدوي</span>
+        </button>
+        <button type="button" className={`dq-mode__btn${mode === 'pdf' ? ' is-active' : ''}`} aria-pressed={mode === 'pdf'} onClick={() => setMode('pdf')}>
+          <Icon name="upload" size={15} />
+          <span>رفع PDF</span>
+        </button>
+      </div>
+
+      {mode === 'pdf' ? (
+        <PdfImport state={pdfImport} setState={setPdfImport} snapshots={snapshots} organization={organization} reload={reload} notify={notify} />
+      ) : (
       <Panel
         title={editing ? `تعديل بيانات ${periodLabel(editing)} — ${branchLabel(editing.branch)}` : 'إدخال بيانات شهر'}
         id="dq-entry"
@@ -618,6 +664,7 @@ function EntryTab({
           {editing ? <Button onClick={reset}>إلغاء التعديل</Button> : null}
         </div>
       </Panel>
+      )}
 
       <Panel title="الشهور المحفوظة" id="dq-months">
         {rows.length ? (

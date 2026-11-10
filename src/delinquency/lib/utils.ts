@@ -42,6 +42,16 @@ export function readTextFile(file: File): Promise<string> {
   });
 }
 
+/** يقرأ ملفًا ثنائيًا كبايتات داخل المتصفح */
+export function readBinaryFile(file: File): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+    reader.onerror = () => reject(reader.error ?? new Error('فشل قراءة الملف'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 const LOCALE = 'ar-EG-u-nu-latn';
 
 const dateTimeFmt = new Intl.DateTimeFormat(LOCALE, {

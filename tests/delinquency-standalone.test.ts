@@ -68,14 +68,14 @@ describe('استقلال النظام الجديد عن النظام الساب�
     expect(outside).toEqual([]);
   });
 
-  it('يعتمد فقط على React وخط الواجهة من الحزم الخارجية', () => {
+  it('يعتمد فقط على React وخط الواجهة وقارئ PDF من الحزم الخارجية', () => {
     const packages = new Set<string>();
     for (const file of appFiles) {
       for (const specifier of importsOf(readFileSync(file, 'utf-8'))) {
         if (!specifier.startsWith('.')) packages.add(specifier.startsWith('@') ? specifier.split('/').slice(0, 2).join('/') : specifier.split('/')[0]);
       }
     }
-    expect(Array.from(packages).sort()).toEqual(['@fontsource/ibm-plex-sans-arabic', 'react', 'react-dom']);
+    expect(Array.from(packages).sort()).toEqual(['@fontsource/ibm-plex-sans-arabic', 'pdfjs-dist', 'react', 'react-dom']);
   });
 
   it('نظام الموظفين السابق لا يستورد شيئًا من النظام الجديد', () => {
