@@ -124,7 +124,7 @@ describe('التطبيق الافتراضي: نظام تحليل ترحيل ال
     expect(within(screen.getByTestId('dq-welcome')).getAllByRole('listitem')).toHaveLength(4);
     await user.click(screen.getByRole('button', { name: 'إدخال بيانات شهر' }));
     await waitFor(() => expect(window.location.hash).toBe('#/entry'));
-    expect(byId('dq-clients-d1_30')).toBeInTheDocument();
+    await waitFor(() => expect(byId('dq-clients-d1_30')).toBeInTheDocument());
   });
 
   it('أربعة تبويبات: المقارنة، الإدخال، المحفوظات، البيانات', async () => {
@@ -145,7 +145,7 @@ describe('التطبيق الافتراضي: نظام تحليل ترحيل ال
 
   it('الروابط القديمة (#/delinquency/…) ومسارات نظام الموظفين تفتح النظام الجديد', async () => {
     await openPage('#/delinquency/entry'); // رابط قديم
-    expect(byId('dq-clients-d1_30')).toBeInTheDocument();
+    await waitFor(() => expect(byId('dq-clients-d1_30')).toBeInTheDocument());
     cleanup();
 
     await openPage('#/employees'); // مسار من النظام السابق
