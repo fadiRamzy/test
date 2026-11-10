@@ -10,9 +10,6 @@ import { ToastProvider } from './ui/toast';
 
 export const APP_TITLE = 'نظام تحليل ترحيل المتأخرات الشهري';
 
-/** رابط النظام السابق (إدارة مسؤولي المخاطر) — ما زال متاحًا ببياناته في صفحة مستقلة */
-const LEGACY_URL = './employees.html';
-
 function BrandMark() {
   return (
     <svg className="dq-brand__mark" viewBox="0 0 40 40" width="34" height="34" aria-hidden="true" focusable="false">
@@ -58,12 +55,6 @@ export function App() {
         <main className="dq-main" id="dq-main">
           <DelinquencyPage section={route.section} itemId={route.itemId} organization={organization} onOrganizationChange={changeOrganization} />
         </main>
-
-        <footer className="dq-footer dq-print-hide">
-          <a href={LEGACY_URL} className="dq-footer__link">
-            نظام إدارة مسؤولي المخاطر (النظام السابق)
-          </a>
-        </footer>
       </ToastProvider>
     </div>
   );

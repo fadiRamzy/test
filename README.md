@@ -58,8 +58,6 @@ Monthly Delinquency Migration Analysis System — the default application of thi
   - `lib/` المحرك الحسابي، مولّد Excel، النسخ الاحتياطي، وقراءة PDF (`pdfText.ts` قراءة النص، `parReport.ts` تحليل التقرير، `pdfImport.ts` نموذج المراجعة)
   - `db/` قاعدة IndexedDB مستقلة باسم `risk-delinquency-analysis`
   - `pages/`, `components/`, `ui/`, `styles/` الواجهة
-- `employees.html` → `src/main.tsx` — النظام السابق (إدارة مسؤولي المخاطر) محفوظ كما هو ببياناته،
-  ويُفتح من <https://fadiramzy.github.io/test/employees.html>.
 
 ## التشغيل
 
@@ -68,7 +66,7 @@ npm ci
 npm run dev        # خادم التطوير
 npm run typecheck
 npm test
-npm run build      # ينتج dist/ (index.html + employees.html)
+npm run build      # ينتج dist/
 ```
 
 اختبارات قراءة PDF تستخدم تقريرًا اصطناعيًا بأرقام مختلَقة يُولَّد داخل الاختبار (`tests/par-fixture.ts`)؛ لا يُحفظ أي تقرير حقيقي في المستودع.

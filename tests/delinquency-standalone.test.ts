@@ -1,6 +1,6 @@
 /**
  * يضمن أن «نظام تحليل ترحيل المتأخرات الشهري» هو التطبيق الافتراضي للموقع،
- * وأنه مستقل تمامًا عن نظام الموظفين السابق (الذي يبقى كما هو في صفحة مستقلة).
+ * وأنه النظام الوحيد في الموقع (نظام الموظفين السابق أُزيل بالكامل).
  */
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -32,18 +32,20 @@ describe('نقطة دخول الموقع', () => {
     expect(html).toContain('lang="ar" dir="rtl"');
   });
 
-  it('نظام الموظفين السابق محفوظ في صفحة مستقلة employees.html', () => {
-    const html = read('employees.html');
-    expect(html).toContain('src="/src/main.tsx"');
-    expect(html).not.toContain('delinquency');
-    expect(existsSync(join(ROOT, 'src/main.tsx'))).toBe(true);
-    expect(existsSync(join(ROOT, 'src/App.tsx'))).toBe(true);
+  it('نظام الموظفين السابق أُزيل: لا صفحة employees.html ولا ملفات مصدر خارج مجلد النظام', () => {
+    expect(existsSync(join(ROOT, 'employees.html'))).toBe(false);
+    expect(readdirSync(join(ROOT, 'src'))).toEqual(['delinquency']);
+    expect(walk(join(ROOT, 'public')).map((file) => relative(join(ROOT, 'public'), file)).sort()).toEqual([
+      '404.html',
+      'favicon-delinquency.svg',
+      'manifest.webmanifest',
+    ]);
   });
 
-  it('البناء ينتج الصفحتين، والتطبيق المثبَّت (manifest) هو النظام الجديد', () => {
+  it('البناء ينتج صفحة واحدة، والتطبيق المثبَّت (manifest) هو النظام الجديد', () => {
     const config = read('vite.config.ts');
     expect(config).toMatch(/main:\s*fileURLToPath\(new URL\('\.\/index\.html'/);
-    expect(config).toMatch(/employees:\s*fileURLToPath\(new URL\('\.\/employees\.html'/);
+    expect(config).not.toMatch(/employees/);
     const manifest = JSON.parse(read('public/manifest.webmanifest'));
     expect(manifest.name).toBe('نظام تحليل ترحيل المتأخرات الشهري');
     expect(manifest.start_url).toBe('./');
@@ -51,7 +53,7 @@ describe('نقطة دخول الموقع', () => {
   });
 });
 
-describe('استقلال النظام الجديد عن النظام السابق', () => {
+describe('استقلال النظام', () => {
   const appDir = join(ROOT, 'src/delinquency');
   const appFiles = walk(appDir).filter((file) => /\.(ts|tsx|css)$/.test(file));
 
@@ -78,10 +80,9 @@ describe('استقلال النظام الجديد عن النظام الساب�
     expect(Array.from(packages).sort()).toEqual(['@fontsource/ibm-plex-sans-arabic', 'pdfjs-dist', 'react', 'react-dom']);
   });
 
-  it('نظام الموظفين السابق لا يستورد شيئًا من النظام الجديد', () => {
-    const legacyFiles = walk(join(ROOT, 'src')).filter((file) => !file.startsWith(appDir) && /\.(ts|tsx)$/.test(file));
-    expect(legacyFiles.length).toBeGreaterThan(20);
-    const offenders = legacyFiles.filter((file) => importsOf(readFileSync(file, 'utf-8')).some((specifier) => /delinquency/i.test(specifier)));
+  it('لا رابط ولا إشارة إلى صفحة النظام السابق في أي ملف من ملفات الموقع', () => {
+    const siteFiles = [...appFiles, join(ROOT, 'index.html'), ...walk(join(ROOT, 'public'))];
+    const offenders = siteFiles.filter((file) => /employees\.html|النظام السابق|مسؤولي المخاطر/.test(readFileSync(file, 'utf-8')));
     expect(offenders.map((file) => relative(ROOT, file))).toEqual([]);
   });
 });

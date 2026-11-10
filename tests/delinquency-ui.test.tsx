@@ -126,7 +126,9 @@ describe('التطبيق الافتراضي', () => {
     for (const oldLabel of ['الموظفون', 'المحاضر اليومية', 'توقيت الزيارات', 'الإجازات والأذونات']) {
       expect(screen.queryByRole('link', { name: oldLabel })).not.toBeInTheDocument();
     }
-    expect(screen.getByRole('link', { name: /النظام السابق/ })).toHaveAttribute('href', './employees.html');
+    expect(screen.queryByRole('link', { name: /النظام السابق|مسؤولي المخاطر/ })).not.toBeInTheDocument();
+    expect(document.querySelector('a[href*="employees"]')).not.toBeInTheDocument();
+    expect(document.querySelector('footer')).not.toBeInTheDocument();
 
     // حالة فارغة بسيطة: عنوان وزر واحد، بلا شروحات أو بيانات تجريبية
     expect(await screen.findByText('لا توجد بيانات شهرية بعد')).toBeInTheDocument();
