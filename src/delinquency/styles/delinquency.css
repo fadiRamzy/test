@@ -30,11 +30,6 @@
 }
 
 .dq > * { min-width: 0; }
-.dq .pagehead { margin-bottom: 0; }
-.dq .callout { display: block; margin: 0; line-height: 1.8; }
-.dq .callout > strong:first-child { margin-inline-end: 4px; }
-.dq .callout ul { margin: 4px 0 0; padding-inline-start: 18px; }
-.dq .field { min-width: 0; }
 
 .dq-num { font-variant-numeric: tabular-nums; unicode-bidi: isolate; white-space: nowrap; }
 .dq-muted { color: var(--dq-faint); }
@@ -76,8 +71,8 @@
 
 /* ----------------------------- شريط اختيار الشهرين ------------------------ */
 .dq-selector { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; padding: 14px 18px; background: var(--dq-surface); border: 1px solid var(--dq-line); border-radius: var(--dq-radius); box-shadow: var(--dq-shadow); }
-.dq-selector .field { flex: 1 1 170px; max-width: 260px; }
-.dq-selector .select { width: 100%; }
+.dq-selector .dq-field { flex: 1 1 170px; max-width: 260px; }
+.dq-selector .dq-select { width: 100%; }
 .dq-selector__actions { display: flex; gap: 8px; flex-wrap: wrap; margin-inline-start: auto; }
 .dq-swap { width: 40px; height: 40px; flex: none; border-radius: 10px; border: 1px solid var(--dq-line-strong); background: var(--dq-surface); color: var(--dq-navy-2); font-size: 18px; line-height: 1; cursor: pointer; transition: background 0.15s ease; }
 .dq-swap:hover:not(:disabled) { background: var(--dq-info-soft); }
@@ -109,7 +104,7 @@
 .dq-headline--success { background: var(--dq-down-soft); border-color: #c5e9d6; color: #0e5a3b; }
 .dq-observations { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .dq-observation { display: flex; align-items: flex-start; gap: 11px; padding: 12px 14px; border: 1px solid var(--dq-line); border-inline-start-width: 3px; border-radius: 11px; background: var(--dq-surface); min-width: 0; }
-.dq-observation > .badge { flex: none; margin-top: 2px; }
+.dq-observation > .dq-badge { flex: none; margin-top: 2px; }
 .dq-observation > div { min-width: 0; }
 .dq-observation strong { display: block; color: var(--dq-navy); font-size: 13.5px; line-height: 1.6; }
 .dq-observation p { margin: 2px 0 0; color: #3a4a61; font-size: 13px; line-height: 1.85; }
@@ -240,7 +235,7 @@
 /* ---------------------------------- الإدخال ------------------------------- */
 .dq-entry__period { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 1.6fr); gap: 12px; }
 .dq-entry__period { align-items: start; }
-.dq-entry__period .select, .dq-entry__period .input { width: 100%; height: 44px; min-height: 44px; margin: 0; }
+.dq-entry__period .dq-select, .dq-entry__period .dq-input { width: 100%; height: 44px; min-height: 44px; margin: 0; }
 .dq-entry-table th, .dq-entry-table td { white-space: normal; }
 .dq-entry-table td { width: 36%; }
 .dq-entry-table label { cursor: pointer; }
@@ -280,10 +275,10 @@
   .dq-panel__head { padding: 12px 14px; }
   .dq-panel__body { padding: 14px; }
   .dq-selector { padding: 12px 14px; }
-  .dq-selector .field { flex: 1 1 100%; max-width: none; }
+  .dq-selector .dq-field { flex: 1 1 100%; max-width: none; }
   .dq-swap { margin-inline: auto; }
   .dq-selector__actions { width: 100%; margin-inline-start: 0; }
-  .dq-selector__actions .btn { flex: 1 1 auto; justify-content: center; }
+  .dq-selector__actions .dq-btn { flex: 1 1 auto; justify-content: center; }
   .dq-entry__period { grid-template-columns: 1fr 1fr; }
   .dq-entry__period > :last-child { grid-column: 1 / -1; }
   .dq-flowstats { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -4,8 +4,7 @@
  */
 
 import { useMemo, type ReactNode } from 'react';
-import { Badge, Callout, type Tone } from '../ui';
-import { Icon, type IconName } from '../Icon';
+import { Badge, Callout, Icon, type IconName, type Tone } from '../ui/kit';
 import {
   BUCKETS,
   BUCKET_IDS,
@@ -27,8 +26,8 @@ import {
   type Comparison,
   type MonthlySnapshot,
   type Trend,
-} from '../../lib/delinquency';
-import { TONE_LABELS, type ExecutiveSummary, type ObservationTone } from '../../lib/delinquencySummary';
+} from '../lib/delinquency';
+import { TONE_LABELS, type ExecutiveSummary, type ObservationTone } from '../lib/delinquencySummary';
 import {
   EXIT_STATE_LABEL,
   FROM_STATES,
@@ -37,7 +36,7 @@ import {
   buildNetChangeFrame,
   type MigrationResult,
   type Reconciliation,
-} from '../../lib/delinquencyMigration';
+} from '../lib/delinquencyMigration';
 import {
   BUCKET_COLORS,
   ChangeBars,
@@ -115,7 +114,7 @@ export function Panel({
             {subtitle ? <p>{subtitle}</p> : null}
           </div>
         </div>
-        {actions ? <div className="dq-panel__actions print-hide">{actions}</div> : null}
+        {actions ? <div className="dq-panel__actions dq-print-hide">{actions}</div> : null}
       </header>
       <div className="dq-panel__body">{children}</div>
     </section>

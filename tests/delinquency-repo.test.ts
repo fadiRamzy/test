@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createBackup, restoreBackup, validateBackup } from '../src/db/backup';
-import { clearStore, useDatabase } from '../src/db/database';
 import {
   clearDelinquencyData,
   delinquencyCounts,
@@ -19,17 +17,24 @@ import {
   saveSnapshot,
   useDelinquencyDatabase,
   validateDelinquencyBackup,
-} from '../src/db/delinquencyDb';
-import { listEmployees, nextEmployeeNo, saveEmployee } from '../src/db/repo';
-import { STORE_NAMES } from '../src/db/schema';
-import { compareSnapshots } from '../src/lib/delinquency';
-import { computeMigration, parseClientList } from '../src/lib/delinquencyMigration';
+} from '../src/delinquency/db/delinquencyDb';
+import { BACKUP_APP_ID, backupFileName, createBackupFile, parseBackupFile } from '../src/delinquency/lib/backupFile';
+import { compareSnapshots } from '../src/delinquency/lib/delinquency';
+import { aggregateClientList, computeMigration, parseClientList } from '../src/delinquency/lib/delinquencyMigration';
+import {
+  SAMPLE_BRANCH_A,
+  SAMPLE_BRANCH_B,
+  SAMPLE_NOTE,
+  buildSampleClientLists,
+  isSampleSnapshot,
+  loadSampleData,
+  removeSampleData,
+  samplePeriods,
+} from '../src/delinquency/lib/sampleData';
 import { LIST_A, LIST_B, OCT, SEP, ZERO, toInput } from './delinquency-helpers';
 
 beforeEach(async () => {
   const suffix = Math.random().toString(36).slice(2);
-  await useDatabase(`test-dq-main-${suffix}`);
-  for (const store of STORE_NAMES) await clearStore(store);
   await useDelinquencyDatabase(`test-dq-${suffix}`);
   await clearDelinquencyData();
 });
@@ -219,44 +224,61 @@ describe('النسخ الاحتياطي لبيانات المتأخرات', () =
     expect(data.comparisons[0].title).toBe('مقارنة محفوظة');
   });
 
-  it('النسخة الاحتياطية العامة تتضمن قسم المتأخرات وتستعيده كاملًا', async () => {
+  it('ملف النسخة الاحتياطية للنظام يحمل كل البيانات ويُستعاد كاملًا', async () => {
     await seedAll();
-    await saveEmployee({
-      employeeNo: await nextEmployeeNo(),
-      name: 'منى حسن',
-      code: 'RO-D1',
-      sector: 'قطاع الصعيد',
-      governorate: 'المنيا',
-      jobTitle: 'ضابط مخاطر',
-      employmentDate: '2025-01-01',
-      branches: '',
-      status: 'active',
-      notes: '',
-    });
-    const backup = JSON.parse(JSON.stringify(await createBackup()));
-    expect(validateBackup(backup).ok).toBe(true);
-    expect(backup.delinquency.months).toHaveLength(2);
+    const file = await createBackupFile('إدارة المخاطر');
+    expect(file.app).toBe(BACKUP_APP_ID);
+    expect(file.formatVersion).toBe(1);
+    expect(file.organization).toBe('إدارة المخاطر');
+    expect(file.counts).toEqual({ months: 2, clientLists: 1, comparisons: 1 });
+    expect(backupFileName(new Date(2026, 10, 10, 9, 5))).toBe('نسخة-احتياطية-تحليل-المتأخرات_2026-11-10_0905.json');
+
+    const parsed = parseBackupFile(JSON.stringify(file));
+    if (!parsed.ok) throw new Error(parsed.errors.join(' | '));
+    expect(parsed.organization).toBe('إدارة المخاطر');
+    expect(parsed.exportedAt).toBe(file.exportedAt);
 
     await clearDelinquencyData();
-    for (const store of STORE_NAMES) await clearStore(store);
     expect(await delinquencyCounts()).toEqual({ months: 0, clientLists: 0, comparisons: 0 });
 
-    const result = await restoreBackup(backup, 'replace');
-    expect(result.imported.delinquencyMonths).toBe(2);
-    expect(result.imported.delinquencyClientLists).toBe(1);
-    expect(result.imported.delinquencyComparisons).toBe(1);
-    expect(await delinquencyCounts()).toEqual({ months: 2, clientLists: 1, comparisons: 1 });
+    expect(await restoreDelinquencyData(parsed.data, 'replace')).toEqual({ months: 2, clientLists: 1, comparisons: 1 });
     expect((await getSnapshot('2026-10|فرع المنيا'))?.buckets.npl).toEqual({ clients: 71, amount: 845250.1 });
-    expect((await listEmployees()).map((employee) => employee.name)).toEqual(['منى حسن']);
+    expect((await listSavedComparisons())[0].title).toBe('مقارنة محفوظة');
   });
 
-  it('نسخة قديمة بلا قسم المتأخرات تُستعاد دون المساس ببيانات المتأخرات', async () => {
-    const legacy = JSON.parse(JSON.stringify(await createBackup()));
-    delete legacy.delinquency;
-    expect(validateBackup(legacy).ok).toBe(true);
-
+  it('يقبل النسخة الشاملة السابقة التي كانت تحمل قسم delinquency', async () => {
     await seedAll();
-    await restoreBackup(legacy, 'replace');
+    const section = await exportDelinquencyData();
+    const parsed = parseBackupFile(JSON.stringify({ app: 'risk-officer-management-system', employees: [], delinquency: section }));
+    if (!parsed.ok) throw new Error(parsed.errors.join(' | '));
+    expect(parsed.data.months).toHaveLength(2);
+    expect(parsed.data.clientLists).toHaveLength(1);
+    expect(parsed.exportedAt).toBeNull();
+  });
+
+  it('يرفض الملفات الغريبة أو التالفة برسالة واضحة ودون أي كتابة', async () => {
+    await seedAll();
+    const errorsOfFile = (text: string) => {
+      const parsed = parseBackupFile(text);
+      return parsed.ok ? [] : parsed.errors;
+    };
+    expect(errorsOfFile('ليس JSON')[0]).toContain('JSON');
+    expect(errorsOfFile('[1,2]')[0]).toContain('غير صالح');
+    expect(errorsOfFile(JSON.stringify({ employees: [] }))[0]).toContain('ليس نسخة احتياطية لنظام تحليل ترحيل المتأخرات');
+    expect(errorsOfFile(JSON.stringify({ app: BACKUP_APP_ID, formatVersion: 99, data: {} }))[0]).toContain('إصدار أحدث');
+    expect(errorsOfFile(JSON.stringify({ app: BACKUP_APP_ID, formatVersion: 1, data: { months: [{ id: '' }] } }))).toHaveLength(1);
+
+    // شهر بمعرّف صحيح لكن بيانات شرائحه ناقصة أو سالبة
+    const file = JSON.parse(JSON.stringify(await createBackupFile()));
+    delete file.data.months[0].buckets.npl;
+    expect(errorsOfFile(JSON.stringify(file))[0]).toContain('إحدى الشرائح');
+    const negative = JSON.parse(JSON.stringify(await createBackupFile()));
+    negative.data.months[1].buckets.d1_30.clients = -3;
+    expect(errorsOfFile(JSON.stringify(negative))[0]).toContain('إحدى الشرائح');
+    const noPeriod = JSON.parse(JSON.stringify(await createBackupFile()));
+    noPeriod.data.months[0].month = 13;
+    expect(errorsOfFile(JSON.stringify(noPeriod))[0]).toContain('شهر أو سنة');
+
     expect(await delinquencyCounts()).toEqual({ months: 2, clientLists: 1, comparisons: 1 });
   });
 
@@ -295,10 +317,59 @@ describe('النسخ الاحتياطي لبيانات المتأخرات', () =
     expect(validateDelinquencyBackup({ months: [{ nope: 1 }] })).toHaveLength(1);
     expect(validateDelinquencyBackup({})).toEqual([]);
 
-    const backup = JSON.parse(JSON.stringify(await createBackup()));
-    backup.delinquency.months = [{ id: '' }];
-    expect(validateBackup(backup).ok).toBe(false);
-    await expect(restoreBackup(backup, 'replace')).rejects.toThrow();
+    await expect(restoreDelinquencyData({ months: [{ id: '' }] } as never, 'replace')).rejects.toThrow();
     expect(await delinquencyCounts()).toEqual({ months: 2, clientLists: 1, comparisons: 1 });
+  });
+});
+
+describe('البيانات التجريبية', () => {
+  it('تُحمَّل لآخر ثلاثة أشهر مكتملة، مميّزة بملاحظة، وقوائمها تطابق الإجماليات', async () => {
+    expect(samplePeriods(new Date(2026, 10, 10))).toEqual([
+      { year: 2026, month: 8 },
+      { year: 2026, month: 9 },
+      { year: 2026, month: 10 },
+    ]);
+    expect(samplePeriods(new Date(2027, 0, 15)).map((period) => `${period.year}-${period.month}`)).toEqual(['2026-10', '2026-11', '2026-12']);
+
+    expect(await loadSampleData(new Date(2026, 10, 10))).toEqual({ months: 5, clientLists: 2 });
+    const months = await listSnapshots();
+    expect(months.map((row) => row.id)).toEqual([
+      `2026-08|${SAMPLE_BRANCH_A}`,
+      `2026-09|${SAMPLE_BRANCH_A}`,
+      `2026-09|${SAMPLE_BRANCH_B}`,
+      `2026-10|${SAMPLE_BRANCH_A}`,
+      `2026-10|${SAMPLE_BRANCH_B}`,
+    ]);
+    expect(months.every(isSampleSnapshot)).toBe(true);
+    expect(months.every((row) => row.notes === SAMPLE_NOTE)).toBe(true);
+
+    for (const id of [`2026-09|${SAMPLE_BRANCH_B}`, `2026-10|${SAMPLE_BRANCH_B}`]) {
+      const snapshot = await getSnapshot(id);
+      const list = await getClientList(id);
+      expect(aggregateClientList(list!.clients)).toEqual(snapshot!.buckets);
+    }
+
+    // القائمتان تنتجان ترحيلًا فعليًا متنوعًا: تراجع، تحسّن، بقاء، خروج، دخول
+    const lists = buildSampleClientLists();
+    const migration = computeMigration(lists.previous, lists.current);
+    expect(migration.forward).toBeGreaterThan(0);
+    expect(migration.backward).toBeGreaterThan(0);
+    expect(migration.stayed).toBeGreaterThan(0);
+    expect(migration.exited).toBeGreaterThan(0);
+    expect(migration.entered).toBe(6);
+    expect(new Set(lists.previous.map((client) => client.id)).size).toBe(40);
+  });
+
+  it('لا تستبدل شهرًا أدخله المستخدم، وحذفها لا يمس البيانات الفعلية', async () => {
+    await saveSnapshot(toInput(SAMPLE_BRANCH_A, 2026, 9, SEP));
+    await expect(loadSampleData(new Date(2026, 10, 10))).rejects.toThrow();
+    expect((await getSnapshot(`2026-09|${SAMPLE_BRANCH_A}`))?.notes).not.toBe(SAMPLE_NOTE);
+
+    await clearDelinquencyData();
+    await saveSnapshot(toInput('فرع المنيا', 2026, 9, SEP));
+    await loadSampleData(new Date(2026, 10, 10));
+    expect(await removeSampleData()).toBe(5);
+    expect((await listSnapshots()).map((row) => row.id)).toEqual(['2026-09|فرع المنيا']);
+    expect(await delinquencyCounts()).toEqual({ months: 1, clientLists: 0, comparisons: 0 });
   });
 });

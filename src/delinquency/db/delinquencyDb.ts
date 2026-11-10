@@ -6,8 +6,7 @@
  * كل البيانات محلية في متصفح المستخدم فقط.
  */
 
-import { isIndexedDbAvailable, StorageUnavailableError } from './database';
-import { ValidationError } from './repo';
+import { isIndexedDbAvailable, StorageUnavailableError, ValidationError } from '../lib/errors';
 import { nowIso, uid } from '../lib/utils';
 import {
   branchLabel,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUCKET_IDS, bucketLabel, compareBranches, compareSnapshots, type Comparison } from '../src/lib/delinquency';
+import { BUCKET_IDS, bucketLabel, compareBranches, compareSnapshots, type Comparison } from '../src/delinquency/lib/delinquency';
 import {
   SHEET_BRANCHES,
   SHEET_COMPARISON,
@@ -9,10 +9,10 @@ import {
   SHEET_SUMMARY,
   buildDelinquencyXlsx,
   delinquencyFileName,
-} from '../src/lib/delinquencyExcel';
-import { FROM_STATES, TO_STATES, computeMigration, parseClientList, type MigrationResult } from '../src/lib/delinquencyMigration';
-import { buildExecutiveSummary } from '../src/lib/delinquencySummary';
-import { buildXlsx, crc32, zipStored } from '../src/lib/xlsx';
+} from '../src/delinquency/lib/delinquencyExcel';
+import { FROM_STATES, TO_STATES, computeMigration, parseClientList, type MigrationResult } from '../src/delinquency/lib/delinquencyMigration';
+import { buildExecutiveSummary } from '../src/delinquency/lib/delinquencySummary';
+import { buildXlsx, crc32, zipStored } from '../src/delinquency/lib/xlsx';
 import {
   LIST_A,
   LIST_B,

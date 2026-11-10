@@ -12,7 +12,7 @@ import {
   type Comparison,
 } from './delinquency';
 import type { MigrationResult } from './delinquencyMigration';
-import { countNoun } from './format';
+import { countNoun } from './utils';
 
 const CLIENT_NOUN = { one: 'عميل واحد', two: 'عميلان', few: 'عملاء', many: 'عميلًا' };
 

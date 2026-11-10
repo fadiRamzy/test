@@ -1,4 +1,4 @@
-import { BUCKET_IDS, emptyBuckets, snapshotId, type MonthlySnapshot } from '../src/lib/delinquency';
+import { BUCKET_IDS, emptyBuckets, snapshotId, type MonthlySnapshot } from '../src/delinquency/lib/delinquency';
 
 /** [عدد العملاء، المبلغ] لكل شريحة بالترتيب: 1–30، 31–60، 61–90، 91–120، NPL */
 export type BucketPairs = [number, number][];

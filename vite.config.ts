@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 /**
  * يولّد ملف عامل الخدمة (Service Worker) بعد البناء مع قائمة أصول مُهشّرة،
@@ -15,7 +16,7 @@ function serviceWorkerPlugin(): Plugin {
       const files = Object.keys(bundle).filter(
         (f) => !f.endsWith('.map') && f !== 'sw.js' && !f.endsWith('.txt'),
       );
-      files.push('index.html', 'favicon.svg', 'manifest.webmanifest', '.nojekyll');
+      files.push('index.html', 'employees.html', 'favicon.svg', 'favicon-delinquency.svg', 'manifest.webmanifest', '.nojekyll');
       const list = Array.from(new Set(files)).sort();
       const version = createHash('sha256').update(list.join('|')).digest('hex').slice(0, 12);
 
@@ -121,6 +122,15 @@ export default defineConfig({
     assetsInlineLimit: 0,
     sourcemap: false,
     chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      // صفحتان مستقلتان:
+      //   index.html      ← التطبيق الافتراضي: نظام تحليل ترحيل المتأخرات الشهري
+      //   employees.html  ← النظام السابق (إدارة مسؤولي المخاطر) كما هو دون تعديل
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        employees: fileURLToPath(new URL('./employees.html', import.meta.url)),
+      },
+    },
   },
   server: {
     host: '0.0.0.0',
