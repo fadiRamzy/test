@@ -16,10 +16,10 @@ import {
   snapshotId,
   sortSnapshots,
   validateSnapshotInput,
+  type BucketId,
   type MonthlySnapshot,
   type SnapshotInput,
 } from '../lib/delinquency';
-import type { ClientRecord, MigrationResult } from '../lib/delinquencyMigration';
 
 export const DELINQUENCY_DB_NAME = 'risk-delinquency-analysis';
 export const DELINQUENCY_DB_VERSION = 1;
@@ -27,7 +27,18 @@ export const DELINQUENCY_DB_VERSION = 1;
 export const DELINQUENCY_STORES = ['months', 'clientLists', 'comparisons'] as const;
 export type DelinquencyStore = (typeof DELINQUENCY_STORES)[number];
 
-/** قائمة العملاء الاختيارية لشهر واحد (لحساب الترحيل الفعلي) — المعرّف = معرّف السجل الشهري */
+/** عميل واحد داخل قائمة عملاء محفوظة سابقًا */
+export interface ClientRecord {
+  id: string;
+  bucket: BucketId;
+  days: number | null;
+  amount: number | null;
+}
+
+/**
+ * قائمة عملاء شهر واحد — المعرّف = معرّف السجل الشهري.
+ * لم تعد الواجهة تعرضها أو تعدّلها، لكنها تبقى محفوظة كما هي وتدخل في النسخ الاحتياطي والاستعادة.
+ */
 export interface ClientListRecord {
   id: string;
   clients: ClientRecord[];
@@ -43,8 +54,8 @@ export interface SavedComparison {
   branch: string;
   a: MonthlySnapshot;
   b: MonthlySnapshot;
-  /** نتيجة الترحيل الفعلي وقت الحفظ (إن توفرت قوائم العملاء) */
-  migration: MigrationResult | null;
+  /** حقل من إصدار سابق — يُحفظ كما هو إن وُجد ولا يُعرض */
+  migration: unknown;
   createdAt: string;
   updatedAt: string;
 }
@@ -59,6 +70,18 @@ function req<T>(request: IDBRequest<T>): Promise<T> {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error('فشلت عملية على قاعدة بيانات المتأخرات'));
   });
+}
+
+/**
+ * معاملة كتابة «صارمة»: لا تُعلَن مكتملة إلا بعد كتابة البيانات على القرص،
+ * حتى لا تضيع آخر عملية حفظ إذا أُغلق المتصفح أو انقطع التيار مباشرة بعدها.
+ */
+function writeTx(db: IDBDatabase, stores: DelinquencyStore | DelinquencyStore[]): IDBTransaction {
+  try {
+    return db.transaction(stores, 'readwrite', { durability: 'strict' });
+  } catch {
+    return db.transaction(stores, 'readwrite');
+  }
 }
 
 function done(tx: IDBTransaction): Promise<void> {
@@ -129,7 +152,7 @@ async function getOne<T>(store: DelinquencyStore, id: string): Promise<T | undef
 
 async function put<T extends { id: string }>(store: DelinquencyStore, record: T): Promise<T> {
   const db = await getDb();
-  const tx = db.transaction(store, 'readwrite');
+  const tx = writeTx(db, store);
   tx.objectStore(store).put(record);
   await done(tx);
   return record;
@@ -137,14 +160,14 @@ async function put<T extends { id: string }>(store: DelinquencyStore, record: T)
 
 async function remove(store: DelinquencyStore, id: string): Promise<void> {
   const db = await getDb();
-  const tx = db.transaction(store, 'readwrite');
+  const tx = writeTx(db, store);
   tx.objectStore(store).delete(id);
   await done(tx);
 }
 
 async function replaceAll<T extends { id: string }>(store: DelinquencyStore, records: T[]): Promise<void> {
   const db = await getDb();
-  const tx = db.transaction(store, 'readwrite');
+  const tx = writeTx(db, store);
   const objectStore = tx.objectStore(store);
   objectStore.clear();
   records.forEach((record) => objectStore.put(record));
@@ -153,6 +176,24 @@ async function replaceAll<T extends { id: string }>(store: DelinquencyStore, rec
 
 export async function clearDelinquencyData(): Promise<void> {
   for (const store of DELINQUENCY_STORES) await replaceAll(store, []);
+}
+
+/**
+ * يطلب من المتصفح اعتبار تخزين الموقع «دائمًا» حتى لا يُحذف تلقائيًا عند امتلاء القرص.
+ * الطلب صامت في أغلب المتصفحات، وفشله لا يؤثر على الحفظ العادي في IndexedDB.
+ */
+let persistRequested = false;
+export async function requestPersistentStorage(): Promise<boolean> {
+  if (persistRequested) return true;
+  try {
+    const storage = typeof navigator !== 'undefined' ? navigator.storage : undefined;
+    if (!storage?.persist) return false;
+    persistRequested = true;
+    if (storage.persisted && (await storage.persisted())) return true;
+    return await storage.persist();
+  } catch {
+    return false;
+  }
 }
 
 /* ---------------------------- السجلات الشهرية ----------------------------- */
@@ -288,7 +329,6 @@ export interface SaveComparisonInput {
   note?: string;
   a: MonthlySnapshot;
   b: MonthlySnapshot;
-  migration?: MigrationResult | null;
 }
 
 /** يحفظ مقارنة بين شهرين كنسخة مجمّدة يمكن الرجوع إليها لاحقًا */
@@ -307,7 +347,7 @@ export async function saveComparison(input: SaveComparisonInput): Promise<SavedC
     branch: normalizeBranch(input.a.branch),
     a: hydrateSnapshot(JSON.parse(JSON.stringify(input.a)) as MonthlySnapshot),
     b: hydrateSnapshot(JSON.parse(JSON.stringify(input.b)) as MonthlySnapshot),
-    migration: input.migration ? (JSON.parse(JSON.stringify(input.migration)) as MigrationResult) : null,
+    migration: existing?.migration ?? null,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
@@ -368,37 +408,60 @@ export function validateDelinquencyBackup(raw: unknown): string[] {
 
 /**
  * يستعيد بيانات المتأخرات من نسخة احتياطية.
+ * - restore (الافتراضي في الواجهة): كل سجل في النسخة يُكتب كما هو؛ السجل الموجود بنفس المعرّف
+ *   يُستبدل بنسخة الملف، وما ليس في الملف يبقى دون مساس — فلا يُفقد أي سجل.
  * - replace: يستبدل بيانات المتأخرات كلها بما في النسخة.
  * - merge: يضيف الجديد ويحدّث ما له تاريخ تعديل أحدث.
+ *
+ * الأقسام الثلاثة تُكتب في معاملة واحدة: إما أن تنجح الاستعادة كلها أو لا يتغير شيء.
+ * يعيد عدد السجلات التي كُتبت من كل قسم.
  */
 export async function restoreDelinquencyData(
   backup: Partial<DelinquencyBackup>,
-  mode: 'replace' | 'merge',
+  mode: 'restore' | 'replace' | 'merge' = 'restore',
 ): Promise<Record<DelinquencyStore, number>> {
   const errors = validateDelinquencyBackup(backup);
   if (errors.length) throw new Error(errors[0]);
 
+  type Row = { id: string; updatedAt?: string };
   const imported = { months: 0, clientLists: 0, comparisons: 0 } as Record<DelinquencyStore, number>;
-  for (const store of DELINQUENCY_STORES) {
-    const incoming = ((backup[store] as Array<{ id: string; updatedAt?: string }> | undefined) ?? []).slice();
-    if (mode === 'replace') {
-      await replaceAll(store, incoming);
-      imported[store] = incoming.length;
-      continue;
-    }
-    const existing = await getAll<{ id: string; updatedAt?: string }>(store);
-    const map = new Map(existing.map((row) => [row.id, row]));
-    let changed = 0;
-    for (const row of incoming) {
-      const current = map.get(row.id);
-      if (!current || (row.updatedAt ?? '') > (current.updatedAt ?? '')) {
-        map.set(row.id, row);
-        changed += 1;
+  const db = await getDb();
+  const tx = writeTx(db, [...DELINQUENCY_STORES]);
+  const finished = done(tx);
+
+  try {
+    for (const store of DELINQUENCY_STORES) {
+      const incoming = ((backup[store] as Row[] | undefined) ?? []).slice();
+      const objectStore = tx.objectStore(store);
+      if (mode === 'replace') {
+        objectStore.clear();
+        incoming.forEach((row) => objectStore.put(row));
+        imported[store] = incoming.length;
+      } else if (mode === 'restore') {
+        incoming.forEach((row) => objectStore.put(row));
+        imported[store] = incoming.length;
+      } else {
+        const existing = await req(objectStore.getAll() as IDBRequest<Row[]>);
+        const current = new Map(existing.map((row) => [row.id, row]));
+        for (const row of incoming) {
+          const found = current.get(row.id);
+          if (!found || (row.updatedAt ?? '') > (found.updatedAt ?? '')) {
+            objectStore.put(row);
+            imported[store] += 1;
+          }
+        }
       }
     }
-    await replaceAll(store, Array.from(map.values()));
-    imported[store] = changed;
+  } catch (cause) {
+    finished.catch(() => undefined);
+    try {
+      tx.abort();
+    } catch {
+      /* المعاملة أُلغيت بالفعل */
+    }
+    throw cause;
   }
+  await finished;
   return imported;
 }
 

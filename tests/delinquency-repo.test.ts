@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   clearDelinquencyData,
+  closeDelinquencyDatabase,
   delinquencyCounts,
   deleteSavedComparison,
   deleteSnapshot,
@@ -20,18 +21,7 @@ import {
 } from '../src/delinquency/db/delinquencyDb';
 import { BACKUP_APP_ID, backupFileName, createBackupFile, parseBackupFile } from '../src/delinquency/lib/backupFile';
 import { compareSnapshots } from '../src/delinquency/lib/delinquency';
-import { aggregateClientList, computeMigration, parseClientList } from '../src/delinquency/lib/delinquencyMigration';
-import {
-  SAMPLE_BRANCH_A,
-  SAMPLE_BRANCH_B,
-  SAMPLE_NOTE,
-  buildSampleClientLists,
-  isSampleSnapshot,
-  loadSampleData,
-  removeSampleData,
-  samplePeriods,
-} from '../src/delinquency/lib/sampleData';
-import { LIST_A, LIST_B, OCT, SEP, ZERO, toInput } from './delinquency-helpers';
+import { LIST_A, LIST_B, OCT, SEP, ZERO, clientsOf, toInput } from './delinquency-helpers';
 
 beforeEach(async () => {
   const suffix = Math.random().toString(36).slice(2);
@@ -95,7 +85,7 @@ describe('حفظ البيانات الشهرية', () => {
 
   it('تعديل الشهر أو الفرع ينقل السجل وقائمة عملائه', async () => {
     const original = await saveSnapshot(toInput('فرع أ', 2026, 9, SEP));
-    await saveClientList(original.id, parseClientList(LIST_A).clients);
+    await saveClientList(original.id, clientsOf(LIST_A));
 
     const moved = await saveSnapshot(toInput('فرع أ', 2026, 8, SEP), { editingId: original.id });
     expect(moved.id).toBe('2026-08|فرع أ');
@@ -126,8 +116,8 @@ describe('حفظ البيانات الشهرية', () => {
   it('حذف الشهر يحذف قائمة عملائه فقط', async () => {
     const sep = await saveSnapshot(toInput('', 2026, 9, SEP));
     const oct = await saveSnapshot(toInput('', 2026, 10, OCT));
-    await saveClientList(sep.id, parseClientList(LIST_A).clients);
-    await saveClientList(oct.id, parseClientList(LIST_B).clients);
+    await saveClientList(sep.id, clientsOf(LIST_A));
+    await saveClientList(oct.id, clientsOf(LIST_B));
     await deleteSnapshot(sep.id);
     expect((await listSnapshots()).map((row) => row.id)).toEqual([oct.id]);
     expect((await listClientLists()).map((row) => row.id)).toEqual([oct.id]);
@@ -137,10 +127,10 @@ describe('حفظ البيانات الشهرية', () => {
 describe('قوائم العملاء', () => {
   it('تحفظ القائمة وتستبدلها، والقائمة الفارغة تحذفها', async () => {
     const sep = await saveSnapshot(toInput('', 2026, 9, SEP));
-    await saveClientList(sep.id, parseClientList(LIST_A).clients);
+    await saveClientList(sep.id, clientsOf(LIST_A));
     expect((await getClientList(sep.id))?.clients[0]).toEqual({ id: 'C1', bucket: 'd1_30', days: 10, amount: 1000 });
 
-    await saveClientList(sep.id, parseClientList(LIST_B).clients);
+    await saveClientList(sep.id, clientsOf(LIST_B));
     expect((await getClientList(sep.id))?.clients.map((client) => client.id)).toEqual(['C1', 'C2', 'C3', 'C4', 'C7', 'C8']);
     expect(await listClientLists()).toHaveLength(1);
 
@@ -158,8 +148,7 @@ describe('المقارنات المحفوظة', () => {
 
   it('تحفظ نسخة مجمّدة لا تتغير بتعديل أو حذف بيانات الشهر', async () => {
     const { a, b } = await seedPair();
-    const migration = computeMigration(parseClientList(LIST_A).clients, parseClientList(LIST_B).clients);
-    const saved = await saveComparison({ title: '  مقارنة الربع ', note: ' للعرض ', a, b, migration });
+    const saved = await saveComparison({ title: '  مقارنة الربع ', note: ' للعرض ', a, b });
     expect(saved.title).toBe('مقارنة الربع');
     expect(saved.note).toBe('للعرض');
     expect(saved.branch).toBe('فرع المنيا');
@@ -170,7 +159,7 @@ describe('المقارنات المحفوظة', () => {
     const reopened = await getSavedComparison(saved.id);
     expect(reopened?.a.buckets).toEqual(a.buckets);
     expect(reopened?.b.buckets).toEqual(b.buckets);
-    expect(reopened?.migration?.forward).toBe(2);
+    expect(reopened?.migration).toBeNull();
     const comparison = compareSnapshots(reopened!.a, reopened!.b);
     expect(comparison.totals.amountDelta).toBe(168250.6);
   });
@@ -210,7 +199,7 @@ describe('النسخ الاحتياطي لبيانات المتأخرات', () =
   async function seedAll() {
     const a = await saveSnapshot(toInput('فرع المنيا', 2026, 9, SEP));
     const b = await saveSnapshot(toInput('فرع المنيا', 2026, 10, OCT));
-    await saveClientList(a.id, parseClientList(LIST_A).clients);
+    await saveClientList(a.id, clientsOf(LIST_A));
     await saveComparison({ title: 'مقارنة محفوظة', a, b });
     return { a, b };
   }
@@ -322,54 +311,132 @@ describe('النسخ الاحتياطي لبيانات المتأخرات', () =
   });
 });
 
-describe('البيانات التجريبية', () => {
-  it('تُحمَّل لآخر ثلاثة أشهر مكتملة، مميّزة بملاحظة، وقوائمها تطابق الإجماليات', async () => {
-    expect(samplePeriods(new Date(2026, 10, 10))).toEqual([
-      { year: 2026, month: 8 },
-      { year: 2026, month: 9 },
-      { year: 2026, month: 10 },
-    ]);
-    expect(samplePeriods(new Date(2027, 0, 15)).map((period) => `${period.year}-${period.month}`)).toEqual(['2026-10', '2026-11', '2026-12']);
+describe('الاستعادة من نسخة احتياطية (زر «رفع نسخة احتياطية»)', () => {
+  async function seed() {
+    const a = await saveSnapshot({ ...toInput('فرع المنيا', 2026, 9, SEP), notes: 'إقفال سبتمبر' });
+    const b = await saveSnapshot(toInput('فرع المنيا', 2026, 10, OCT));
+    const c = await saveSnapshot(toInput('فرع بني سويف', 2026, 10, SEP));
+    await saveClientList(a.id, clientsOf(LIST_A));
+    await saveClientList(b.id, clientsOf(LIST_B));
+    await saveComparison({ title: 'سبتمبر مقابل أكتوبر', note: 'للجنة المخاطر', a, b });
+    return { a, b, c };
+  }
 
-    expect(await loadSampleData(new Date(2026, 10, 10))).toEqual({ months: 5, clientLists: 2 });
-    const months = await listSnapshots();
-    expect(months.map((row) => row.id)).toEqual([
-      `2026-08|${SAMPLE_BRANCH_A}`,
-      `2026-09|${SAMPLE_BRANCH_A}`,
-      `2026-09|${SAMPLE_BRANCH_B}`,
-      `2026-10|${SAMPLE_BRANCH_A}`,
-      `2026-10|${SAMPLE_BRANCH_B}`,
-    ]);
-    expect(months.every(isSampleSnapshot)).toBe(true);
-    expect(months.every((row) => row.notes === SAMPLE_NOTE)).toBe(true);
+  /** ما يمر به الملف فعليًا: JSON نصي ثم قراءة وفحص */
+  async function backupRoundTrip() {
+    const text = JSON.stringify(await createBackupFile('إدارة المخاطر'), null, 2);
+    const parsed = parseBackupFile(text);
+    if (!parsed.ok) throw new Error(parsed.errors.join(' | '));
+    return parsed;
+  }
 
-    for (const id of [`2026-09|${SAMPLE_BRANCH_B}`, `2026-10|${SAMPLE_BRANCH_B}`]) {
-      const snapshot = await getSnapshot(id);
-      const list = await getClientList(id);
-      expect(aggregateClientList(list!.clients)).toEqual(snapshot!.buckets);
-    }
+  it('النسخة تحمل كل بيانات النظام، واستعادتها في متصفح فارغ تعيد كل سجل مطابقًا تمامًا', async () => {
+    await seed();
+    const before = await exportDelinquencyData();
+    const parsed = await backupRoundTrip();
+    expect(parsed.organization).toBe('إدارة المخاطر');
+    expect(parsed.data).toEqual(before);
 
-    // القائمتان تنتجان ترحيلًا فعليًا متنوعًا: تراجع، تحسّن، بقاء، خروج، دخول
-    const lists = buildSampleClientLists();
-    const migration = computeMigration(lists.previous, lists.current);
-    expect(migration.forward).toBeGreaterThan(0);
-    expect(migration.backward).toBeGreaterThan(0);
-    expect(migration.stayed).toBeGreaterThan(0);
-    expect(migration.exited).toBeGreaterThan(0);
-    expect(migration.entered).toBe(6);
-    expect(new Set(lists.previous.map((client) => client.id)).size).toBe(40);
+    // متصفح جديد = قاعدة بيانات فارغة
+    await useDelinquencyDatabase(`test-dq-fresh-${Math.random().toString(36).slice(2)}`);
+    expect(await delinquencyCounts()).toEqual({ months: 0, clientLists: 0, comparisons: 0 });
+
+    expect(await restoreDelinquencyData(parsed.data, 'restore')).toEqual({ months: 3, clientLists: 2, comparisons: 1 });
+    const after = await exportDelinquencyData();
+    const byId = <T extends { id: string }>(rows: T[]) => [...rows].sort((x, y) => x.id.localeCompare(y.id));
+    expect(byId(after.months)).toEqual(byId(before.months));
+    expect(byId(after.clientLists)).toEqual(byId(before.clientLists));
+    expect(byId(after.comparisons)).toEqual(byId(before.comparisons));
+
+    // الأرقام نفسها بعد الاستعادة
+    expect((await getSnapshot('2026-09|فرع المنيا'))?.notes).toBe('إقفال سبتمبر');
+    expect((await getSnapshot('2026-10|فرع المنيا'))?.buckets.npl).toEqual({ clients: 71, amount: 845250.1 });
+    expect(compareSnapshots((await getSnapshot('2026-09|فرع المنيا'))!, (await getSnapshot('2026-10|فرع المنيا'))!).totals.amountDelta).toBe(168250.6);
   });
 
-  it('لا تستبدل شهرًا أدخله المستخدم، وحذفها لا يمس البيانات الفعلية', async () => {
-    await saveSnapshot(toInput(SAMPLE_BRANCH_A, 2026, 9, SEP));
-    await expect(loadSampleData(new Date(2026, 10, 10))).rejects.toThrow();
-    expect((await getSnapshot(`2026-09|${SAMPLE_BRANCH_A}`))?.notes).not.toBe(SAMPLE_NOTE);
+  it('نسخة الملف تفوز على السجل الموجود لنفس الشهر والفرع حتى لو كان الموجود أحدث', async () => {
+    const { a } = await seed();
+    const parsed = await backupRoundTrip();
+
+    // بعد أخذ النسخة: تعديل خاطئ على سبتمبر
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await saveSnapshot(toInput('فرع المنيا', 2026, 9, ZERO), { editingId: a.id });
+    expect((await getSnapshot(a.id))?.buckets.d1_30.clients).toBe(0);
+
+    await restoreDelinquencyData(parsed.data, 'restore');
+    expect((await getSnapshot(a.id))?.buckets.d1_30).toEqual({ clients: 120, amount: 450000.5 });
+    expect((await getSnapshot(a.id))?.notes).toBe('إقفال سبتمبر');
+  });
+
+  it('لا يُفقد أي سجل: ما أُدخل بعد النسخة يبقى، والاستعادة مرتين لا تكرر شيئًا', async () => {
+    await seed();
+    const parsed = await backupRoundTrip();
+
+    const later = await saveSnapshot(toInput('فرع المنيا', 2026, 11, OCT));
+    const { a, b } = { a: (await getSnapshot('2026-09|فرع المنيا'))!, b: later };
+    const extra = await saveComparison({ title: 'سبتمبر مقابل نوفمبر', a, b });
+
+    await restoreDelinquencyData(parsed.data, 'restore');
+    await restoreDelinquencyData(parsed.data, 'restore');
+
+    expect((await listSnapshots()).map((row) => row.id)).toEqual([
+      '2026-09|فرع المنيا',
+      '2026-10|فرع المنيا',
+      '2026-10|فرع بني سويف',
+      '2026-11|فرع المنيا',
+    ]);
+    expect((await getSnapshot(later.id))?.buckets).toEqual(later.buckets);
+    expect(await delinquencyCounts()).toEqual({ months: 4, clientLists: 2, comparisons: 2 });
+    expect((await listSavedComparisons()).map((row) => row.id)).toContain(extra.id);
+  });
+
+  it('الاستعادة كلها أو لا شيء: فشل في منتصفها لا يترك بيانات ناقصة', async () => {
+    await seed();
+    const before = await exportDelinquencyData();
+    const parsed = await backupRoundTrip();
+
+    const broken = JSON.parse(JSON.stringify(parsed.data));
+    broken.months[0].buckets.d1_30.clients = 999;
+    // سجل لا يمكن تخزينه (دالة) في القسم الأخير — يفشل بعد كتابة الأشهر
+    broken.comparisons.push({ id: 'dqc_bad', boom: () => 1 });
+
+    await expect(restoreDelinquencyData(broken, 'restore')).rejects.toBeTruthy();
+    expect(await exportDelinquencyData()).toEqual(before);
+  });
+
+  it('قوائم العملاء وحقول الإصدارات السابقة تبقى في النسخة وتُستعاد كما هي', async () => {
+    const { a, b } = await seed();
+    const legacy = JSON.parse(JSON.stringify(await exportDelinquencyData()));
+    legacy.comparisons[0].migration = { forward: 2, backward: 1, stayed: 1, exited: 2, entered: 2 };
 
     await clearDelinquencyData();
-    await saveSnapshot(toInput('فرع المنيا', 2026, 9, SEP));
-    await loadSampleData(new Date(2026, 10, 10));
-    expect(await removeSampleData()).toBe(5);
-    expect((await listSnapshots()).map((row) => row.id)).toEqual(['2026-09|فرع المنيا']);
-    expect(await delinquencyCounts()).toEqual({ months: 1, clientLists: 0, comparisons: 0 });
+    await restoreDelinquencyData(legacy, 'restore');
+    expect((await getClientList(a.id))?.clients).toEqual(clientsOf(LIST_A));
+    expect((await getClientList(b.id))?.clients).toEqual(clientsOf(LIST_B));
+    expect((await listSavedComparisons())[0].migration).toEqual({ forward: 2, backward: 1, stayed: 1, exited: 2, entered: 2 });
+    expect((await createBackupFile()).data.comparisons[0].migration).toEqual({ forward: 2, backward: 1, stayed: 1, exited: 2, entered: 2 });
+  });
+
+  it('تعديل شهر لا يمس قائمة عملائه المحفوظة', async () => {
+    const { a } = await seed();
+    await saveSnapshot(toInput('فرع المنيا', 2026, 9, OCT), { editingId: a.id, overwrite: true });
+    expect((await getClientList(a.id))?.clients).toEqual(clientsOf(LIST_A));
+  });
+});
+
+describe('بقاء البيانات', () => {
+  it('البيانات تبقى بعد إغلاق قاعدة البيانات وإعادة فتحها', async () => {
+    const name = `test-dq-persist-${Math.random().toString(36).slice(2)}`;
+    await useDelinquencyDatabase(name);
+    const a = await saveSnapshot(toInput('فرع المنيا', 2026, 9, SEP));
+    const b = await saveSnapshot(toInput('فرع المنيا', 2026, 10, OCT));
+    await saveComparison({ title: 'محفوظة', a, b });
+    const before = await exportDelinquencyData();
+
+    await closeDelinquencyDatabase();
+    await useDelinquencyDatabase(name);
+
+    expect(await exportDelinquencyData()).toEqual(before);
+    expect((await listSnapshots()).map((row) => row.id)).toEqual([a.id, b.id]);
   });
 });

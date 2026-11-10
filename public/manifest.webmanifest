@@ -1,13 +1,13 @@
 {
   "name": "نظام تحليل ترحيل المتأخرات الشهري",
   "short_name": "ترحيل المتأخرات",
-  "description": "إدخال بيانات المتأخرات الشهرية حسب خمس شرائح، مقارنة شهرين، تحليل الترحيل، أداء الفروع، وتصدير Excel — يعمل محليًا داخل المتصفح",
+  "description": "إدخال بيانات المتأخرات الشهرية لكل فرع حسب خمس شرائح، مقارنة شهرين، وتصدير Excel",
   "lang": "ar",
   "dir": "rtl",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f1f4f8",
+  "background_color": "#ffffff",
   "theme_color": "#0f3357",
   "icons": [
     {

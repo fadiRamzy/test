@@ -146,6 +146,8 @@ export interface XlsxSheet {
   rowHeights?: Record<number, number>;
   /** اتجاه الورقة من اليمين لليسار (افتراضي: نعم) */
   rtl?: boolean;
+  /** عند الطباعة: ضبط عرض الورقة على صفحة واحدة */
+  fitToWidth?: boolean;
 }
 
 /** اسم العمود من فهرسه (0 → A، 26 → AA) */
@@ -255,13 +257,14 @@ function sheetXml(sheet: XlsxSheet, selected: boolean): string {
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    (sheet.fitToWidth ? '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>' : '') +
     view +
     '<sheetFormatPr defaultRowHeight="18"/>' +
     cols +
     `<sheetData>${rows}</sheetData>` +
     merges +
     '<pageMargins left="0.5" right="0.5" top="0.6" bottom="0.6" header="0.3" footer="0.3"/>' +
-    '<pageSetup paperSize="9" orientation="landscape"/>' +
+    `<pageSetup paperSize="9" orientation="landscape"${sheet.fitToWidth ? ' fitToWidth="1" fitToHeight="0"' : ''}/>` +
     '</worksheet>'
   );
 }
