@@ -1,6 +1,8 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { createHash } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -112,10 +114,29 @@ self.addEventListener('fetch', (event) => {
   };
 }
 
+/**
+ * يكتب ملف .nojekyll داخل مجلد البناء (dist) حتى لا تعالج GitHub Pages
+ * المخرجات عبر Jekyll، ويكون الملف موجودًا فعلًا ضمن أصول عامل الخدمة.
+ * لا يُضاف إلى مجلد public كي تبقى قائمة ملفات المصدر كما هي.
+ */
+function noJekyllPlugin(): Plugin {
+  let outDir = 'dist';
+  return {
+    name: 'emit-nojekyll',
+    apply: 'build',
+    configResolved(config) {
+      outDir = config.build.outDir;
+    },
+    closeBundle() {
+      writeFileSync(resolve(outDir, '.nojekyll'), '');
+    },
+  };
+}
+
 export default defineConfig({
   // اسم المستودع على GitHub Pages: https://fadiRamzy.github.io/test/
   base: '/test/',
-  plugins: [react(), serviceWorkerPlugin()],
+  plugins: [react(), noJekyllPlugin(), serviceWorkerPlugin()],
   build: {
     target: 'es2020',
     outDir: 'dist',
