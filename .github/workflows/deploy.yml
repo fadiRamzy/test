@@ -96,23 +96,34 @@ jobs:
           REPO: ${{ github.repository }}
           API: ${{ github.api_url }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           auth=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
 
-          info=$(curl -fsSL "${auth[@]}" "$API/repos/$REPO/pages" || echo '{}')
-          build_type=$(printf '%s' "$info" | jq -r '.build_type // "unknown"')
-          echo "مصدر النشر الحالي: $build_type"
+          get_status=$(curl -sS -o /tmp/pages.json -w '%{http_code}' "${auth[@]}" "$API/repos/$REPO/pages" || true)
+          echo "GET /pages -> $get_status"
+          cat /tmp/pages.json 2>/dev/null || true
+          echo
+          build_type=$(jq -r '.build_type // "unknown"' /tmp/pages.json 2>/dev/null || echo unknown)
+          echo "build_type: $build_type"
 
+          put_status="skipped"
           if [ "$build_type" != "workflow" ]; then
-            echo "جارٍ تحويل مصدر النشر إلى GitHub Actions…"
-            curl -fsSL -X PUT "${auth[@]}" \
+            put_status=$(curl -sS -o /tmp/put.json -w '%{http_code}' -X PUT \
+              -H 'Content-Type: application/json' \
+              "${auth[@]}" \
               -d '{"build_type":"workflow"}' \
-              "$API/repos/$REPO/pages" | jq -r '"build_type: " + (.build_type // "unknown")'
+              "$API/repos/$REPO/pages" || true)
+            echo "PUT /pages -> $put_status"
+            cat /tmp/put.json 2>/dev/null || true
+            echo
+            build_type=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "$API/repos/$REPO/pages" | jq -r '.build_type // "unknown"')
+            echo "build_type after update: $build_type"
           fi
 
-          build_type=$(curl -fsSL "${auth[@]}" "$API/repos/$REPO/pages" | jq -r '.build_type // "unknown"')
           if [ "$build_type" != "workflow" ]; then
-            echo "::error::لا يزال مصدر النشر '$build_type'. اضبطه يدويًا: Settings ← Pages ← Source: GitHub Actions"
+            body=$(tr -d '\n' < /tmp/put.json 2>/dev/null | head -c 300)
+            echo "::error::Pages source is '$build_type' (GET $get_status, PUT $put_status). Set Settings -> Pages -> Source: GitHub Actions. API response: $body"
             exit 1
           fi
           echo "✔ مصدر النشر هو GitHub Actions"
