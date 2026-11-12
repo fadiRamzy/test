@@ -123,10 +123,38 @@ jobs:
 
           if [ "$build_type" != "workflow" ]; then
             body=$(tr -d '\n' < /tmp/put.json 2>/dev/null | head -c 300)
-            echo "::warning::Pages source is '$build_type' (GET $get_status, PUT $put_status). The build artifact is still deployed below; switch Settings -> Pages -> Source to 'GitHub Actions' so branch builds stop overwriting it. API response: $body"
+            echo "::warning::Pages source is '$build_type' (GET $get_status, PUT $put_status). The build artifact is still deployed below; switch Settings -> Pages -> Source to 'GitHub Actions' to remove the legacy build race. API response: $body"
           else
             echo "✔ مصدر النشر هو GitHub Actions"
           fi
+
+      # لا يمكن تعديل إعدادات Pages من الـ workflow (403)، لذلك قد يبدأ
+      # GitHub بناءً من الفرع (legacy) عند كل دفعة وينشر الملفات الخام بعدنا.
+      # ننتظر انتهاءه أولًا حتى تكون نشرتنا (مخرجات البناء) هي الأخيرة دائمًا.
+      - name: انتظار انتهاء بناء الفرع (legacy) قبل النشر
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          API: ${{ github.api_url }}
+        run: |
+          set -uo pipefail
+          auth=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
+          count_legacy() {
+            curl -sS "${auth[@]}" \
+              "$API/repos/$REPO/actions/runs?branch=main&status=$1&per_page=100" \
+              | jq '[.workflow_runs[] | select(.name == "pages build and deployment")] | length'
+          }
+          for attempt in $(seq 1 36); do
+            running=$(count_legacy in_progress || echo 0)
+            queued=$(count_legacy queued || echo 0)
+            if [ "${running:-0}" = "0" ] && [ "${queued:-0}" = "0" ]; then
+              echo "✔ لا يوجد بناء فرع قيد التنفيذ — النشر الآن"
+              exit 0
+            fi
+            echo "البناء القديم قيد التنفيذ (in_progress=$running, queued=$queued) — محاولة $attempt/36"
+            sleep 5
+          done
+          echo "::warning::انتهت مدة الانتظار قبل انتهاء بناء الفرع؛ سيُنشر الآن على أي حال"
 
       - name: النشر إلى GitHub Pages
         id: deployment
