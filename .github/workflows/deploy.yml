@@ -40,6 +40,40 @@ jobs:
       - name: بناء نسخة الإنتاج
         run: npm run build
 
+      # حماية من تكرار المشكلة: لا يُنشر أبدًا أي ملف مصدر خام.
+      # يجب أن يشير dist/index.html إلى أصول مبنية تحت /test/ فقط.
+      - name: التحقق من مخرجات البناء
+        run: |
+          set -euo pipefail
+          test -f dist/index.html || { echo "::error::dist/index.html غير موجود"; exit 1; }
+          test -f dist/.nojekyll || { echo "::error::dist/.nojekyll غير موجود"; exit 1; }
+
+          if grep -q '/src/' dist/index.html; then
+            echo "::error::dist/index.html ما زال يشير إلى ملفات مصدر /src/*.tsx"
+            exit 1
+          fi
+
+          if ! grep -q 'src="/test/assets/' dist/index.html; then
+            echo "::error::dist/index.html لا يشير إلى أصول مبنية تحت /test/assets/"
+            exit 1
+          fi
+
+          # كل أصل مشار إليه في index.html يجب أن يكون موجودًا فعليًا
+          grep -oE '(src|href)="/test/[^"]+"' dist/index.html | sed -E 's/.*="\/test\/([^"]+)"/\1/' | while read -r asset; do
+            test -f "dist/$asset" || { echo "::error::الأصل المفقود في dist: $asset"; exit 1; }
+          done
+
+          stray=$(find dist \( -name '*.tsx' -o -name '*.ts' \) -print -quit)
+          if [ -n "$stray" ]; then
+            echo "::error::تم العثور على ملف مصدر داخل dist: $stray"
+            exit 1
+          fi
+
+          echo "✔ dist جاهز للنشر ويشير إلى أصول مبنية تحت /test/"
+
+      - name: تهيئة GitHub Pages
+        uses: actions/configure-pages@v5
+
       - name: رفع مخرجات البناء
         uses: actions/upload-pages-artifact@v3
         with:
@@ -53,6 +87,36 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # سبب الشاشة البيضاء: كان مصدر النشر «Deploy from a branch» فيخدم المستودع
+      # الخام (index.html يشير إلى /src/*.tsx) ويتجاهل مخرجات البناء.
+      # هذه الخطوة تتأكد أن المصدر هو GitHub Actions (workflow) قبل النشر.
+      - name: التأكد من أن مصدر النشر هو GitHub Actions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          API: ${{ github.api_url }}
+        run: |
+          set -euo pipefail
+          auth=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
+
+          info=$(curl -fsSL "${auth[@]}" "$API/repos/$REPO/pages" || echo '{}')
+          build_type=$(printf '%s' "$info" | jq -r '.build_type // "unknown"')
+          echo "مصدر النشر الحالي: $build_type"
+
+          if [ "$build_type" != "workflow" ]; then
+            echo "جارٍ تحويل مصدر النشر إلى GitHub Actions…"
+            curl -fsSL -X PUT "${auth[@]}" \
+              -d '{"build_type":"workflow"}' \
+              "$API/repos/$REPO/pages" | jq -r '"build_type: " + (.build_type // "unknown")'
+          fi
+
+          build_type=$(curl -fsSL "${auth[@]}" "$API/repos/$REPO/pages" | jq -r '.build_type // "unknown"')
+          if [ "$build_type" != "workflow" ]; then
+            echo "::error::لا يزال مصدر النشر '$build_type'. اضبطه يدويًا: Settings ← Pages ← Source: GitHub Actions"
+            exit 1
+          fi
+          echo "✔ مصدر النشر هو GitHub Actions"
+
       - name: النشر إلى GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
