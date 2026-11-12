@@ -123,10 +123,10 @@ jobs:
 
           if [ "$build_type" != "workflow" ]; then
             body=$(tr -d '\n' < /tmp/put.json 2>/dev/null | head -c 300)
-            echo "::error::Pages source is '$build_type' (GET $get_status, PUT $put_status). Set Settings -> Pages -> Source: GitHub Actions. API response: $body"
-            exit 1
+            echo "::warning::Pages source is '$build_type' (GET $get_status, PUT $put_status). The build artifact is still deployed below; switch Settings -> Pages -> Source to 'GitHub Actions' so branch builds stop overwriting it. API response: $body"
+          else
+            echo "✔ مصدر النشر هو GitHub Actions"
           fi
-          echo "✔ مصدر النشر هو GitHub Actions"
 
       - name: النشر إلى GitHub Pages
         id: deployment
